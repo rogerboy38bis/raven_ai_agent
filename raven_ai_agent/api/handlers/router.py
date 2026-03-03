@@ -4,9 +4,12 @@ Router - Message handling and bot routing
 Contains the @frappe.whitelist() entry points:
 - process_message: API endpoint for processing messages
 - handle_raven_message: Webhook handler for Raven messages with bot routing
+
+Updated 2026-03-03: Added manufacturing, payment, and orchestrator agent routing
 """
 import frappe
 import json
+import re
 from typing import Optional, Dict, List
 
 @frappe.whitelist()
@@ -18,6 +21,72 @@ def process_message(message: str, conversation_history: str = None) -> Dict:
     history = json.loads(conversation_history) if conversation_history else []
     
     return agent.process_query(message, history)
+
+
+def _detect_ai_intent(query: str) -> str:
+    """
+    Detect which agent should handle an @ai command based on keywords/patterns.
+    
+    Returns bot_name: manufacturing_bot, payment_bot, workflow_orchestrator,
+                      sales_order_follow_up, or sales_order_bot (default)
+    """
+    query_lower = query.lower()
+    
+    # Orchestrator: pipeline, full cycle, validate, dry run
+    orch_patterns = [
+        r'pipeline\s+status',
+        r'(?:run|start)\s+full\s+cycle',
+        r'dry\s+run',
+        r'validate\s+SO-',
+        r'run\s+pipeline',
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in orch_patterns):
+        return "workflow_orchestrator"
+    
+    # Manufacturing Agent: work order, WO, manufacture, transfer, MFG-WO-
+    mfg_patterns = [
+        r'MFG-WO-\d+',
+        r'(?:create|make)\s+work\s*order',
+        r'submit\s+MFG',
+        r'transfer\s+material',
+        r'(?:manufacture|finish|produce)\s+MFG',
+        r'(?:list|show)\s+work\s*orders?\s+for',
+        r'(?:create|make)\s+wo\b',
+        r'(?:status|check)\s+MFG-WO',
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in mfg_patterns):
+        return "manufacturing_bot"
+    
+    # Payment Agent: payment, pay, ACC-SINV, ACC-PAY, unpaid, outstanding
+    pay_patterns = [
+        r'ACC-SINV-\d+',
+        r'ACC-PAY-\d+',
+        r'SINV-\d+',
+        r'(?:create|make)\s+payment',
+        r'submit\s+ACC-PAY',
+        r'reconcile\s+ACC-PAY',
+        r'unpaid\s+invoices?',
+        r'outstanding',
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in pay_patterns):
+        return "payment_bot"
+    
+    # Sales-specific patterns (DN, invoice, pending orders, next steps)
+    sales_patterns = [
+        r'(?:create|make)\s+(?:DN|delivery\s*note)',
+        r'(?:create|make)\s+invoice',
+        r'(?:create|make)\s+SO\s+from',
+        r'pending\s+orders?',
+        r'next\s+steps?',
+        r'(?:status|check)\s+SO-',
+        r'inventory\s+SO-',
+        r'track\s+purchase',
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in sales_patterns):
+        return "sales_order_follow_up"
+    
+    # Default
+    return "sales_order_bot"
 
 
 @frappe.whitelist()
@@ -42,16 +111,17 @@ def handle_raven_message(doc, method):
         query = None
         bot_name = None
         
-        # Check for @ai trigger (now on plain text)
+        # Check for @ai trigger — uses intent detection to route to correct agent
         if plain_text.lower().startswith("@ai"):
             query = plain_text[3:].strip()
-            bot_name = "sales_order_bot"  # Default bot
+            bot_name = _detect_ai_intent(query)
+            frappe.logger().info(f"[AI Agent] @ai intent detected: {bot_name}")
         
         # Check for @sales_order_bot mention
         elif "sales_order_bot" in plain_text.lower():
             query = plain_text.replace("@sales_order_bot", "").strip()
             if not query:
-                query = "help"  # Default if only mention
+                query = "help"
             bot_name = "sales_order_bot"
         
         # Check for @sales_order_follow_up bot
@@ -60,6 +130,27 @@ def handle_raven_message(doc, method):
             if not query:
                 query = "help"
             bot_name = "sales_order_follow_up"
+        
+        # Check for @manufacturing or @mfg bot
+        elif "manufacturing" in plain_text.lower() or "@mfg" in plain_text.lower():
+            query = re.sub(r'@(?:manufacturing|mfg)\s*', '', plain_text, flags=re.IGNORECASE).strip()
+            if not query:
+                query = "help"
+            bot_name = "manufacturing_bot"
+        
+        # Check for @payment bot
+        elif "payment" in plain_text.lower() and plain_text.lower().startswith("@"):
+            query = re.sub(r'@payment\s*', '', plain_text, flags=re.IGNORECASE).strip()
+            if not query:
+                query = "help"
+            bot_name = "payment_bot"
+        
+        # Check for @orchestrator or @pipeline bot
+        elif "orchestrator" in plain_text.lower() or "@pipeline" in plain_text.lower():
+            query = re.sub(r'@(?:orchestrator|pipeline)\s*', '', plain_text, flags=re.IGNORECASE).strip()
+            if not query:
+                query = "help"
+            bot_name = "workflow_orchestrator"
         
         # Check for @rnd_bot
         elif "rnd_bot" in plain_text.lower():
@@ -72,7 +163,7 @@ def handle_raven_message(doc, method):
         elif "executive" in plain_text.lower():
             query = plain_text.lower().replace("@executive", "").strip()
             if not query:
-                query = "helicopter"  # Default to helicopter view
+                query = "helicopter"
             bot_name = "executive"
 
         # Check for @iot bot
@@ -93,28 +184,58 @@ def handle_raven_message(doc, method):
         try:
             frappe.flags.ignore_permissions = True
             
-            # Route to specialized agent based on bot_name
-            if bot_name == "sales_order_follow_up":
+            # === Route to specialized agent based on bot_name ===
+            
+            # NEW: Manufacturing Agent
+            if bot_name == "manufacturing_bot":
+                from raven_ai_agent.agents.manufacturing_agent import ManufacturingAgent
+                mfg_agent = ManufacturingAgent()
+                response = mfg_agent.process_command(query)
+                result = {"success": True, "response": response}
+            
+            # NEW: Payment Agent
+            elif bot_name == "payment_bot":
+                from raven_ai_agent.agents.payment_agent import PaymentAgent
+                pay_agent = PaymentAgent()
+                response = pay_agent.process_command(query)
+                result = {"success": True, "response": response}
+            
+            # NEW: Workflow Orchestrator
+            elif bot_name == "workflow_orchestrator":
+                from raven_ai_agent.agents.workflow_orchestrator import WorkflowOrchestrator
+                orch_agent = WorkflowOrchestrator()
+                response = orch_agent.process_command(query)
+                result = {"success": True, "response": response}
+            
+            # EXISTING: Sales Order Follow-up
+            elif bot_name == "sales_order_follow_up":
                 from raven_ai_agent.agents import SalesOrderFollowupAgent
                 so_agent = SalesOrderFollowupAgent(user)
                 response = so_agent.process_command(query)
                 result = {"success": True, "response": response}
+            
+            # EXISTING: R&D Agent
             elif bot_name == "rnd_bot":
                 from raven_ai_agent.agents import RnDAgent
                 rnd_agent = RnDAgent(user)
                 response = rnd_agent.process_command(query)
                 result = {"success": True, "response": response}
+            
+            # EXISTING: Executive Agent
             elif bot_name == "executive":
                 from raven_ai_agent.agents.executive_agent import ExecutiveAgent
                 exec_agent = ExecutiveAgent(user)
                 response = exec_agent.process_command(query)
                 result = {"success": True, "response": response}
+            
+            # EXISTING: IoT Agent
             elif bot_name == "iot":
                 from raven_ai_agent.agents.iot_agent import IoTAgent
                 iot_agent = IoTAgent(user)
                 result = iot_agent.process_command(query)
+            
+            # DEFAULT: SkillRouter → RaymondLucyAgent fallback
             else:
-                # Try SkillRouter first for specialized skills (formulation, etc.)
                 try:
                     from raven_ai_agent.skills.router import SkillRouter
                     router = SkillRouter()
@@ -122,7 +243,6 @@ def handle_raven_message(doc, method):
                     if router_result and router_result.get("handled"):
                         result = {"success": True, "response": router_result.get("response", "Skill executed.")}
                     else:
-                        # Fallback to general agent
                         agent = RaymondLucyAgent(user)
                         result = agent.process_query(query)
                 except ImportError:
@@ -140,7 +260,11 @@ def handle_raven_message(doc, method):
             try:
                 bot = frappe.get_doc("Raven Bot", bot_name)
             except frappe.DoesNotExistError:
-                frappe.logger().warning(f"[AI Agent] Bot {bot_name} not found")
+                frappe.logger().warning(f"[AI Agent] Bot {bot_name} not found, trying sales_order_bot")
+                try:
+                    bot = frappe.get_doc("Raven Bot", "sales_order_bot")
+                except frappe.DoesNotExistError:
+                    frappe.logger().warning("[AI Agent] No bot found, using direct message")
         
         response_text = result.get("response") or result.get("message") or result.get("error") or "No response generated"
         link_doctype = result.get("link_doctype")
@@ -179,7 +303,7 @@ def handle_raven_message(doc, method):
             error_doc = frappe.get_doc({
                 "doctype": "Raven Message",
                 "channel_id": doc.channel_id,
-                "text": f"❌ Error: {str(e)}",
+                "text": f"\u274c Error: {str(e)}",
                 "message_type": "Text",
                 "is_bot_message": 1
             })
