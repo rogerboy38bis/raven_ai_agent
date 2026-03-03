@@ -7,7 +7,7 @@ Registers all agents for the 8-step fulfillment workflow:
   - ManufacturingAgent (NEW — Steps 1, 2, 4, 5)
   - PaymentAgent (NEW — Step 8)
   - WorkflowOrchestrator (NEW — Full pipeline controller)
-  - RndAgent (existing)
+  - RnDAgent (existing)
   - IoTAgent (existing)
 """
 from .bom_creator_agent import BOMCreatorAgent
@@ -15,7 +15,7 @@ from .sales_order_followup_agent import SalesOrderFollowupAgent
 from .manufacturing_agent import ManufacturingAgent
 from .payment_agent import PaymentAgent
 from .workflow_orchestrator import WorkflowOrchestrator
-from .rnd_agent import RndAgent
+from .rnd_agent import RnDAgent
 from .iot_agent import IoTAgent
 
 __all__ = [
@@ -24,6 +24,6 @@ __all__ = [
     "ManufacturingAgent",
     "PaymentAgent",
     "WorkflowOrchestrator",
-    "RndAgent",
+    "RnDAgent",
     "IoTAgent",
 ]
