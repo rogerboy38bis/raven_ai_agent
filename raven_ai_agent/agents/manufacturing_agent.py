@@ -87,47 +87,11 @@ class ManufacturingAgent:
             if bom_doc.docstatus != 1:
                 return {"success": False, "error": f"BOM '{bom}' is not submitted (docstatus={bom_doc.docstatus}). Submit it first."}
 
-            # Get warehouses — smart resolution: BOM > Item Defaults > Warehouse search > hardcoded
-            wip_warehouse = bom_doc.get("wip_warehouse")
-            fg_warehouse = bom_doc.get("fg_warehouse")
-
-            # Try Manufacturing Settings (field names vary by ERPNext version)
-            if not wip_warehouse:
-                for field in ["default_wip_warehouse", "wip_warehouse", "work_in_progress_warehouse"]:
-                    try:
-                        wip_warehouse = frappe.db.get_single_value("Manufacturing Settings", field)
-                        if wip_warehouse:
-                            break
-                    except Exception:
-                        continue
-
-            if not fg_warehouse:
-                for field in ["default_fg_warehouse", "fg_warehouse", "finished_goods_warehouse"]:
-                    try:
-                        fg_warehouse = frappe.db.get_single_value("Manufacturing Settings", field)
-                        if fg_warehouse:
-                            break
-                    except Exception:
-                        continue
-
-            # Try Item Default warehouse
-            if not fg_warehouse:
-                item_defaults = frappe.db.get_value("Item Default",
-                    {"parent": item_code, "company": frappe.db.get_default("company") or "AMB-Wellness"},
-                    "default_warehouse")
-                if item_defaults:
-                    fg_warehouse = item_defaults
-
-            # Last resort: find warehouses by name pattern
-            if not wip_warehouse:
-                wip_warehouse = frappe.db.get_value("Warehouse",
-                    {"warehouse_name": ["like", "%Work In Progress%"], "is_group": 0}, "name")
-            if not fg_warehouse:
-                fg_warehouse = frappe.db.get_value("Warehouse",
-                    {"warehouse_name": ["like", "%Finished%"], "is_group": 0}, "name")
-                if not fg_warehouse:
-                    fg_warehouse = frappe.db.get_value("Warehouse",
-                        {"warehouse_name": ["like", "%FG%"], "is_group": 0}, "name")
+            # Get warehouses — smart resolution based on BOM type and company
+            company = frappe.db.get_default("company") or "AMB-Wellness"
+            wip_warehouse, fg_warehouse, source_warehouse = self._resolve_warehouses(
+                bom, item_code, company
+            )
 
             # Build Work Order doc
             wo_data = {
@@ -138,7 +102,7 @@ class ManufacturingAgent:
                 "wip_warehouse": wip_warehouse,
                 "fg_warehouse": fg_warehouse,
                 "use_multi_level_bom": use_multi_level_bom,
-                "company": frappe.db.get_default("company") or "AMB-Wellness"
+                "company": company
             }
 
             if sales_order:
@@ -148,6 +112,12 @@ class ManufacturingAgent:
 
             wo = frappe.get_doc(wo_data)
             wo.insert(ignore_permissions=True)
+
+            # Set source warehouses on required items (after insert populates them)
+            if source_warehouse:
+                self._set_item_source_warehouses(wo, source_warehouse, company)
+                wo.save(ignore_permissions=True)
+
             frappe.db.commit()
 
             return {
@@ -516,6 +486,163 @@ class ManufacturingAgent:
             return {"success": False, "error": f"Work Order '{wo_name}' not found."}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    # ========== WAREHOUSE RESOLUTION ==========
+
+    # BOM suffix → warehouse mapping for AMB-Wellness manufacturing plants
+    # Learned from existing Work Orders (e.g. MFG-WO-03826 for BOM-0307-005)
+    BOM_WAREHOUSE_MAP = {
+        # Mix Plant BOMs (suffix -005): powder mixing / labeling
+        "-005": {
+            "wip_warehouse": "WIP in Mix - AMB-W",
+            "fg_warehouse": "FG to Sell Warehouse - AMB-W",
+            "source_warehouse": "FG to Sell Warehouse - AMB-W",
+        },
+        # Sales BOMs (suffix -001): sales-level labeling / packaging
+        "-001": {
+            "wip_warehouse": "WIP in Mix - AMB-W",
+            "fg_warehouse": "FG to Sell Warehouse - AMB-W",
+            "source_warehouse": "FG to Sell Warehouse - AMB-W",
+        },
+        # Full/Production BOMs (suffix -006): full BOM explosion
+        "-006": {
+            "wip_warehouse": "WIP in Concentrate - AMB-W",
+            "fg_warehouse": "FG to Sell Warehouse - AMB-W",
+            "source_warehouse": None,  # uses BOM item source warehouses
+        },
+        # Dry Plant BOMs: powder drying
+        "-dry": {
+            "wip_warehouse": "WIP in Dry - AMB-W",
+            "fg_warehouse": "SFG Aloe Vera Powder - AMB-W",
+            "source_warehouse": "Cold Room Warehouse SFG - AMB-W",
+        },
+    }
+
+    def _resolve_warehouses(self, bom_name: str, item_code: str, company: str):
+        """Smart warehouse resolution based on BOM type, existing WOs, and company.
+        
+        Resolution priority:
+        1. BOM suffix mapping (known plant patterns)
+        2. Existing Work Orders for same BOM (learn from history)
+        3. BOM default_source/target_warehouse fields
+        4. Manufacturing Settings defaults (filtered by company)
+        5. Item Default warehouse
+        6. Fallback to safe company defaults
+        
+        Returns:
+            Tuple of (wip_warehouse, fg_warehouse, source_warehouse)
+        """
+        wip_warehouse = None
+        fg_warehouse = None
+        source_warehouse = None
+
+        # --- Step 1: BOM suffix mapping ---
+        for suffix, warehouses in self.BOM_WAREHOUSE_MAP.items():
+            if bom_name.endswith(suffix) or f"{suffix}-" in bom_name:
+                # Verify warehouses exist and belong to the correct company
+                wip_candidate = warehouses["wip_warehouse"]
+                fg_candidate = warehouses["fg_warehouse"]
+                src_candidate = warehouses.get("source_warehouse")
+
+                if wip_candidate and frappe.db.get_value("Warehouse",
+                        {"name": wip_candidate, "company": company}):
+                    wip_warehouse = wip_candidate
+                if fg_candidate and frappe.db.get_value("Warehouse",
+                        {"name": fg_candidate, "company": company}):
+                    fg_warehouse = fg_candidate
+                if src_candidate and frappe.db.get_value("Warehouse",
+                        {"name": src_candidate, "company": company}):
+                    source_warehouse = src_candidate
+                break
+
+        # --- Step 2: Learn from existing Work Orders for same BOM ---
+        if not wip_warehouse or not fg_warehouse:
+            existing_wo = frappe.db.get_value("Work Order",
+                {"bom_no": bom_name, "company": company, "docstatus": ["!=", 2]},
+                ["wip_warehouse", "fg_warehouse", "source_warehouse"],
+                order_by="modified desc", as_dict=True)
+            if existing_wo:
+                if not wip_warehouse and existing_wo.wip_warehouse:
+                    # Validate it belongs to the correct company
+                    wh_company = frappe.db.get_value("Warehouse",
+                        existing_wo.wip_warehouse, "company")
+                    if wh_company == company:
+                        wip_warehouse = existing_wo.wip_warehouse
+                if not fg_warehouse and existing_wo.fg_warehouse:
+                    wh_company = frappe.db.get_value("Warehouse",
+                        existing_wo.fg_warehouse, "company")
+                    if wh_company == company:
+                        fg_warehouse = existing_wo.fg_warehouse
+                if not source_warehouse and existing_wo.source_warehouse:
+                    wh_company = frappe.db.get_value("Warehouse",
+                        existing_wo.source_warehouse, "company")
+                    if wh_company == company:
+                        source_warehouse = existing_wo.source_warehouse
+
+        # --- Step 3: BOM default warehouses ---
+        if not fg_warehouse or not source_warehouse:
+            bom_doc = frappe.get_doc("BOM", bom_name)
+            if not fg_warehouse and bom_doc.get("default_target_warehouse"):
+                fg_warehouse = bom_doc.default_target_warehouse
+            if not source_warehouse and bom_doc.get("default_source_warehouse"):
+                source_warehouse = bom_doc.default_source_warehouse
+
+        # --- Step 4: Manufacturing Settings (with company validation) ---
+        if not wip_warehouse:
+            try:
+                ms_wip = frappe.db.get_single_value("Manufacturing Settings",
+                    "default_wip_warehouse")
+                if ms_wip:
+                    wh_company = frappe.db.get_value("Warehouse", ms_wip, "company")
+                    if wh_company == company:
+                        wip_warehouse = ms_wip
+            except Exception:
+                pass
+
+        if not fg_warehouse:
+            try:
+                ms_fg = frappe.db.get_single_value("Manufacturing Settings",
+                    "default_fg_warehouse")
+                if ms_fg:
+                    wh_company = frappe.db.get_value("Warehouse", ms_fg, "company")
+                    if wh_company == company:
+                        fg_warehouse = ms_fg
+            except Exception:
+                pass
+
+        # --- Step 5: Item Default warehouse ---
+        if not fg_warehouse:
+            item_default_wh = frappe.db.get_value("Item Default",
+                {"parent": item_code, "company": company}, "default_warehouse")
+            if item_default_wh:
+                fg_warehouse = item_default_wh
+
+        # --- Step 6: Company-safe fallback ---
+        if not wip_warehouse:
+            wip_warehouse = frappe.db.get_value("Warehouse",
+                {"name": ["like", "%Work In Progress%"], "company": company,
+                 "is_group": 1}, "name")
+        if not fg_warehouse:
+            fg_warehouse = frappe.db.get_value("Warehouse",
+                {"name": ["like", "%FG to Sell%"], "company": company,
+                 "is_group": 0}, "name")
+
+        return wip_warehouse, fg_warehouse, source_warehouse
+
+    def _set_item_source_warehouses(self, wo, source_warehouse: str, company: str):
+        """Set source warehouses on Work Order required items.
+        
+        If a source_warehouse is determined from BOM mapping, apply it to all
+        items that don't already have one. This ensures materials are pulled
+        from the correct warehouse.
+        """
+        if not source_warehouse:
+            return
+        if not hasattr(wo, 'required_items') or not wo.required_items:
+            return
+        for item in wo.required_items:
+            if not item.source_warehouse:
+                item.source_warehouse = source_warehouse
 
     # ========== MAIN COMMAND HANDLER ==========
 
