@@ -1203,14 +1203,14 @@ def handle_raven_message(doc, method):
             query = plain_text[3:].strip()
             # Detect intent to route to specialized agents
             q_lower = query.lower()
-            mfg_patterns = [r'MFG-WO-\d+', r'(?:create|make)\s+(?:wo|work\s*order)', r'submit\s+(?:wo|MFG)', r'transfer\s+material', r'(?:manufacture|finish|produce)\s+MFG', r'check\s+material']
-            pay_patterns = [r'ACC-SINV-\d+', r'ACC-PAY-\d+', r'SINV-\d+', r'(?:create|make)\s+payment', r'submit\s+ACC-PAY', r'reconcile', r'unpaid\s+invoices?', r'outstanding']
-            orch_patterns = [r'pipeline\s+status', r'(?:run|start)\s+(?:full\s+cycle|pipeline)', r'dry\s+run', r'validate\s+SO-']
-            if any(re.search(p, query, re.IGNORECASE) for p in orch_patterns):
+            mfg_keywords = ["work order", "create wo", "submit wo", "manufacture", "transfer material", "check material", "mfg-wo"]
+            pay_keywords = ["payment", "outstanding", "unpaid", "reconcile", "acc-sinv", "acc-pay", "sinv-"]
+            orch_keywords = ["pipeline status", "run full cycle", "run pipeline", "dry run", "validate so"]
+            if any(kw in q_lower for kw in orch_keywords):
                 bot_name = "workflow_orchestrator"
-            elif any(re.search(p, query, re.IGNORECASE) for p in mfg_patterns):
+            elif any(kw in q_lower for kw in mfg_keywords):
                 bot_name = "manufacturing_bot"
-            elif any(re.search(p, query, re.IGNORECASE) for p in pay_patterns):
+            elif any(kw in q_lower for kw in pay_keywords):
                 bot_name = "payment_bot"
             else:
                 bot_name = "sales_order_bot"  # Default bot
@@ -1252,21 +1252,30 @@ def handle_raven_message(doc, method):
         
         # NEW: Check for @manufacturing or @mfg bot
         elif "manufacturing" in plain_text.lower() or "@mfg" in plain_text.lower():
-            query = re.sub(r'@(?:manufacturing|mfg)\s*', '', plain_text, flags=re.IGNORECASE).strip()
+            query = plain_text
+            for tag in ["@manufacturing", "@Manufacturing", "@mfg", "@MFG"]:
+                query = query.replace(tag, "")
+            query = query.strip()
             if not query:
                 query = "help"
             bot_name = "manufacturing_bot"
         
         # NEW: Check for @payment bot
         elif plain_text.lower().startswith("@payment"):
-            query = re.sub(r'@payment\s*', '', plain_text, flags=re.IGNORECASE).strip()
+            query = plain_text
+            for tag in ["@payment", "@Payment"]:
+                query = query.replace(tag, "")
+            query = query.strip()
             if not query:
                 query = "help"
             bot_name = "payment_bot"
         
         # NEW: Check for @workflow or @orchestrator or @pipeline bot
         elif any(kw in plain_text.lower() for kw in ["@workflow", "@orchestrator", "@pipeline"]):
-            query = re.sub(r'@(?:workflow|orchestrator|pipeline)\s*', '', plain_text, flags=re.IGNORECASE).strip()
+            query = plain_text
+            for tag in ["@workflow", "@Workflow", "@orchestrator", "@Orchestrator", "@pipeline", "@Pipeline"]:
+                query = query.replace(tag, "")
+            query = query.strip()
             if not query:
                 query = "help"
             bot_name = "workflow_orchestrator"
