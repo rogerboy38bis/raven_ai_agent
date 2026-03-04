@@ -1,55 +1,39 @@
 """
-Manufacturing Agent - Work Orders & Stock Entries for Manufacturing
-Handles Steps 1, 2, 4, 5 of the 8-step fulfillment workflow:
-  Step 1: Create Work Order (Manufacturing) → Submit
-  Step 2: Stock Entry (Manufacture) from WO
-  Step 4: Create Sales Work Order from Sales Order
-  Step 5: Stock Entry (Manufacture for Sales WO)
+Manufacturing AI Agent
+Handles the complete manufacturing cycle: Work Order creation, submission,
+Stock Entry (Manufacture), and SO→WO linking.
 
-IMPORTANT: This is a Frappe Server Script compatible module.
-- Uses frappe.call() patterns — NO `import frappe` at module top in Server Scripts
-- All frappe references are safe when run inside Frappe context
-- Designed for raven_ai_agent (Frappe app)
+Covers Workflow Steps 1, 2, 4, 5:
+  Step 1: WO (Manufacturing) → Submit
+  Step 2: Stock Entry (Manufacture)
+  Step 4: Sales WO (Work Order from SO)
+  Step 5: Stock Entry (Manufacture for Sales)
 
-Based on verified 8-step workflow:
-  MFG-WO-03726 pilot (2026-03-03)
-  BOM hierarchy: Sales BOM-0307-001 → Mix BOM-0307-005 → Production BOMs
+Key Intelligence:
+  - Item validation: Ensure manufactured item (e.g. 0307) matches SO item
+  - BOM hierarchy: Sales BOM (-001) vs Mix BOM (-005) vs Full BOM (-006)
+  - Inventory check before manufacture
+  - No `import frappe` in Server Scripts (use frappe already available)
+
+Author: raven_ai_agent
 """
 import frappe
+import re
 from typing import Dict, List, Optional
-from frappe.utils import nowdate, add_days, flt
+from frappe.utils import nowdate, getdate, flt
 
 
 class ManufacturingAgent:
-    """AI Agent for Manufacturing Work Orders and Stock Entries"""
+    """AI Agent for manufacturing operations: Work Orders and Stock Entries"""
 
-    # Work Order status progression
+    # Work Order status flow
     WO_STATUS_FLOW = {
-        "Draft": "Submit the Work Order",
-        "Not Started": "Start the Work Order (transfer materials)",
-        "In Process": "Complete manufacturing (create Manufacture Stock Entry)",
-        "Completed": "Work Order fully manufactured",
-        "Stopped": "Work Order stopped — resume or cancel",
-        "Cancelled": "Work Order cancelled — no action"
-    }
-
-    # BOM level mapping for the hierarchical structure
-    BOM_LEVELS = {
-        "sales": {
-            "description": "Sales BOM (FG + customer label)",
-            "pattern": "BOM-{item}-001",
-            "example": "BOM-0307-001: 0307 + LBL0307"
-        },
-        "mix": {
-            "description": "Mix/Formulation BOM (FG = formulated SFG + blank label)",
-            "pattern": "BOM-{item}-005",
-            "example": "BOM-0307-005: ITEM_0612185231 + LBL4INX6INBL"
-        },
-        "production": {
-            "description": "Full production BOM (leaf to powder)",
-            "pattern": "BOM-{item}-006",
-            "example": "BOM-0307-006: full recipe incl. M033 Aloe Vera Leaf"
-        }
+        "Draft": "Submit the Work Order to start manufacturing",
+        "Not Started": "Issue materials or start production",
+        "In Process": "Complete manufacture via Stock Entry (Manufacture)",
+        "Completed": "Work Order fully completed — proceed to Delivery Note if sales-linked",
+        "Stopped": "Work Order was stopped — review and resume or cancel",
+        "Cancelled": "Work Order was cancelled — no action needed"
     }
 
     def __init__(self, user: str = None):
@@ -57,143 +41,107 @@ class ManufacturingAgent:
         self.site_name = frappe.local.site
 
     def make_link(self, doctype: str, name: str) -> str:
-        """Generate clickable markdown link"""
+        """Generate clickable markdown link for ERPNext documents"""
         slug = doctype.lower().replace(" ", "-")
         return f"[{name}](https://{self.site_name}/app/{slug}/{name})"
 
-    # ========================================================================
-    # STEP 1: CREATE WORK ORDER (Manufacturing)
-    # ========================================================================
+    # ========== WORK ORDER OPERATIONS (Steps 1, 4) ==========
 
-    def create_work_order(
-        self,
-        item_code: str,
-        qty: float,
-        bom: str = None,
-        sales_order: str = None,
-        project: str = None,
-        use_multi_level_bom: bool = False,
-        fg_warehouse: str = None,
-        wip_warehouse: str = None,
-        confirm: bool = False
-    ) -> Dict:
-        """
-        Create a Work Order from a BOM.
-
+    def create_work_order(self, item_code: str, qty: float,
+                          bom: str = None, sales_order: str = None,
+                          project: str = None, use_multi_level_bom: int = 0) -> Dict:
+        """Create a Work Order from BOM.
+        
         Args:
-            item_code: Item to manufacture (e.g., '0307')
-            qty: Quantity in Kg (e.g., 150)
-            bom: BOM name (auto-detects default if not provided)
-            sales_order: Link to Sales Order (for sales-linked WOs)
-            project: Project name (e.g., 'PROJ-0024')
-            use_multi_level_bom: If True, MRP explodes sub-assemblies
-            fg_warehouse: Finished Goods warehouse (auto-detects if not set)
-            wip_warehouse: Work In Progress warehouse (auto-detects if not set)
-            confirm: If False, returns preview; if True, creates WO
-
+            item_code: Item to manufacture (e.g. '0307')
+            qty: Quantity to manufacture in Kg or base UOM
+            bom: Specific BOM name (e.g. 'BOM-0307-005'). If None, uses default BOM.
+            sales_order: Link to Sales Order (e.g. 'SO-00752-LEGOSAN AB')
+            project: Link to Project (e.g. 'PROJ-0024')
+            use_multi_level_bom: 0 = single level (migration), 1 = multi-level (MRP explosion)
+        
         Returns:
-            Dict with work_order name, link, and details
+            Dict with success status, WO name, and link
         """
         try:
-            # Auto-detect BOM if not provided
+            # Validate item exists
+            if not frappe.db.exists("Item", item_code):
+                return {"success": False, "error": f"Item '{item_code}' not found in ERPNext."}
+
+            # Get BOM — if not specified, use default active BOM
             if not bom:
-                bom = self._get_default_bom(item_code)
+                bom = frappe.db.get_value("BOM",
+                    {"item": item_code, "is_active": 1, "is_default": 1, "docstatus": 1},
+                    "name")
                 if not bom:
-                    return {
-                        "success": False,
-                        "error": f"No active BOM found for item '{item_code}'. "
-                                 f"Create a BOM first or specify one explicitly."
-                    }
+                    # Fallback: any active submitted BOM
+                    bom = frappe.db.get_value("BOM",
+                        {"item": item_code, "is_active": 1, "docstatus": 1},
+                        "name")
+            
+            if not bom:
+                return {"success": False, "error": f"No active BOM found for item '{item_code}'. Create and submit a BOM first."}
 
-            # Validate BOM exists and is active
+            # Validate BOM exists and is submitted
             bom_doc = frappe.get_doc("BOM", bom)
-            if not bom_doc.is_active:
-                return {"success": False, "error": f"BOM {bom} is not active"}
+            if bom_doc.docstatus != 1:
+                return {"success": False, "error": f"BOM '{bom}' is not submitted (docstatus={bom_doc.docstatus}). Submit it first."}
 
-            # Auto-detect warehouses
-            if not fg_warehouse:
-                fg_warehouse = self._get_fg_warehouse()
-            if not wip_warehouse:
-                wip_warehouse = self._get_wip_warehouse(bom)
+            # Get warehouses from Manufacturing Settings or BOM
+            wip_warehouse = (bom_doc.get("wip_warehouse")
+                or frappe.db.get_single_value("Manufacturing Settings", "default_wip_warehouse"))
+            fg_warehouse = (bom_doc.get("fg_warehouse")
+                or frappe.db.get_single_value("Manufacturing Settings", "default_fg_warehouse"))
 
-            # Idempotency: check for existing draft WO with same params
-            existing = frappe.db.get_value("Work Order", {
+            # Build Work Order doc
+            wo_data = {
+                "doctype": "Work Order",
                 "production_item": item_code,
                 "bom_no": bom,
                 "qty": flt(qty),
-                "docstatus": 0  # Draft
-            }, "name")
-
-            if existing:
-                return {
-                    "success": True,
-                    "action": "existing_found",
-                    "work_order": existing,
-                    "link": self.make_link("Work Order", existing),
-                    "message": f"Draft Work Order already exists: {existing}"
-                }
-
-            # Preview mode
-            if not confirm:
-                return {
-                    "success": True,
-                    "requires_confirmation": True,
-                    "preview": (
-                        f"**Create Work Order?**\n\n"
-                        f"| Field | Value |\n|-------|-------|\n"
-                        f"| Item | {item_code} |\n"
-                        f"| Qty | {qty} Kg |\n"
-                        f"| BOM | {bom} |\n"
-                        f"| FG Warehouse | {fg_warehouse} |\n"
-                        f"| WIP Warehouse | {wip_warehouse} |\n"
-                        f"| Sales Order | {sales_order or 'None'} |\n"
-                        f"| Multi-Level BOM | {'Yes' if use_multi_level_bom else 'No'} |\n\n"
-                        f"⚠️ **Confirm?** Reply: `@ai confirm create work order`"
-                    )
-                }
-
-            # Create the Work Order
-            wo = frappe.new_doc("Work Order")
-            wo.production_item = item_code
-            wo.bom_no = bom
-            wo.qty = flt(qty)
-            wo.fg_warehouse = fg_warehouse
-            wo.wip_warehouse = wip_warehouse
-            wo.use_multi_level_bom = use_multi_level_bom
-            wo.planned_start_date = nowdate()
-            wo.expected_delivery_date = add_days(nowdate(), 7)
-            wo.company = bom_doc.company or frappe.defaults.get_defaults().get("company")
+                "wip_warehouse": wip_warehouse,
+                "fg_warehouse": fg_warehouse,
+                "use_multi_level_bom": use_multi_level_bom,
+                "company": frappe.db.get_default("company") or "AMB-Wellness"
+            }
 
             if sales_order:
-                wo.sales_order = sales_order
+                wo_data["sales_order"] = sales_order
             if project:
-                wo.project = project
+                wo_data["project"] = project
 
-            wo.flags.ignore_permissions = True
-            wo.insert()
+            wo = frappe.get_doc(wo_data)
+            wo.insert(ignore_permissions=True)
             frappe.db.commit()
 
             return {
                 "success": True,
-                "action": "created",
-                "work_order": wo.name,
+                "wo_name": wo.name,
                 "link": self.make_link("Work Order", wo.name),
-                "item_code": item_code,
-                "qty": qty,
-                "bom": bom,
-                "status": wo.status,
-                "message": f"✅ Work Order **{wo.name}** created ({qty} Kg of {item_code})"
+                "message": (
+                    f"✅ Work Order created: {self.make_link('Work Order', wo.name)}\n\n"
+                    f"  Item: {item_code}\n"
+                    f"  BOM: {self.make_link('BOM', bom)}\n"
+                    f"  Qty: {qty}\n"
+                    f"  WIP: {wip_warehouse}\n"
+                    f"  FG: {fg_warehouse}\n"
+                    f"  Status: {wo.status}"
+                    + (f"\n  Sales Order: {self.make_link('Sales Order', sales_order)}" if sales_order else "")
+                    + (f"\n  Project: {project}" if project else "")
+                )
             }
+
         except Exception as e:
-            frappe.log_error(f"ManufacturingAgent.create_work_order error: {str(e)}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Error creating Work Order: {str(e)}"}
 
-    def submit_work_order(self, wo_name: str, confirm: bool = False) -> Dict:
-        """
-        Submit a Work Order (Draft → Submitted/Not Started).
-
-        The 'Starting Work Order' workflow transitions:
-          Not Started (docstatus=0) → Start (docstatus=1)
+    def submit_work_order(self, wo_name: str) -> Dict:
+        """Submit a Work Order to start manufacturing.
+        
+        Args:
+            wo_name: Work Order name (e.g. 'MFG-WO-03726')
+        
+        Returns:
+            Dict with success status
         """
         try:
             wo = frappe.get_doc("Work Order", wo_name)
@@ -201,227 +149,43 @@ class ManufacturingAgent:
             if wo.docstatus == 1:
                 return {
                     "success": True,
-                    "message": f"✅ Work Order **{wo_name}** is already submitted (status: {wo.status})",
-                    "link": self.make_link("Work Order", wo_name)
+                    "message": f"✅ Work Order {self.make_link('Work Order', wo_name)} is already submitted.\n  Status: {wo.status}"
                 }
-
             if wo.docstatus == 2:
-                return {"success": False, "error": f"Work Order {wo_name} is cancelled"}
+                return {"success": False, "error": f"Work Order {wo_name} is cancelled and cannot be submitted."}
 
-            if not confirm:
-                return {
-                    "success": True,
-                    "requires_confirmation": True,
-                    "preview": (
-                        f"**Submit Work Order {wo_name}?**\n\n"
-                        f"| Field | Value |\n|-------|-------|\n"
-                        f"| Item | {wo.production_item} |\n"
-                        f"| Qty | {wo.qty} |\n"
-                        f"| BOM | {wo.bom_no} |\n\n"
-                        f"⚠️ This will make the WO ready for manufacturing."
-                    )
-                }
-
-            wo.flags.ignore_permissions = True
             wo.submit()
             frappe.db.commit()
 
             return {
                 "success": True,
-                "action": "submitted",
-                "work_order": wo_name,
-                "link": self.make_link("Work Order", wo_name),
-                "status": wo.status,
-                "message": f"✅ Work Order **{wo_name}** submitted"
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    # ========================================================================
-    # STEP 2 / STEP 5: STOCK ENTRY (Manufacture)
-    # ========================================================================
-
-    def create_stock_entry_manufacture(
-        self,
-        wo_name: str,
-        qty: float = None,
-        confirm: bool = False
-    ) -> Dict:
-        """
-        Create Stock Entry (Manufacture) from a Work Order.
-        This consumes raw materials from WIP warehouse and produces
-        the finished good into the FG warehouse.
-
-        Flow: WO must be submitted & have materials transferred first.
-
-        Args:
-            wo_name: Work Order name (e.g., 'MFG-WO-03726')
-            qty: Quantity to manufacture (defaults to WO full qty)
-            confirm: If False, returns preview
-
-        Returns:
-            Dict with stock_entry name and details
-        """
-        try:
-            wo = frappe.get_doc("Work Order", wo_name)
-
-            if wo.docstatus != 1:
-                return {"success": False, "error": f"Work Order {wo_name} must be submitted first (current docstatus={wo.docstatus})"}
-
-            if wo.status == "Completed":
-                return {"success": True, "message": f"Work Order {wo_name} is already completed"}
-
-            # Check material transferred
-            if flt(wo.material_transferred_for_manufacturing) <= 0:
-                return {
-                    "success": False,
-                    "error": (
-                        f"No materials transferred yet for {wo_name}. "
-                        f"Create a 'Material Transfer for Manufacture' Stock Entry first.\n"
-                        f"Use: `@ai transfer materials for {wo_name}`"
-                    )
-                }
-
-            # Calculate qty to manufacture
-            manufacture_qty = flt(qty) if qty else flt(wo.qty) - flt(wo.produced_qty)
-            if manufacture_qty <= 0:
-                return {"success": True, "message": f"Nothing left to manufacture for {wo_name}"}
-
-            if not confirm:
-                return {
-                    "success": True,
-                    "requires_confirmation": True,
-                    "preview": (
-                        f"**Create Manufacture Stock Entry for {wo_name}?**\n\n"
-                        f"| Field | Value |\n|-------|-------|\n"
-                        f"| Item | {wo.production_item} |\n"
-                        f"| Qty to Manufacture | {manufacture_qty} |\n"
-                        f"| Materials Transferred | {wo.material_transferred_for_manufacturing} |\n"
-                        f"| Already Produced | {wo.produced_qty} |\n\n"
-                        f"This will consume raw materials and produce finished goods."
-                    )
-                }
-
-            # Use ERPNext's built-in method
-            from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
-            se = make_stock_entry(wo_name, "Manufacture", manufacture_qty)
-
-            se.flags.ignore_permissions = True
-            se.insert()
-            frappe.db.commit()
-
-            return {
-                "success": True,
-                "action": "created",
-                "stock_entry": se.name,
-                "link": self.make_link("Stock Entry", se.name),
-                "work_order": wo_name,
-                "qty_manufactured": manufacture_qty,
-                "purpose": "Manufacture",
-                "status": "Draft",
+                "wo_name": wo.name,
+                "link": self.make_link("Work Order", wo.name),
                 "message": (
-                    f"✅ Stock Entry **{se.name}** (Manufacture) created for {wo_name}.\n"
-                    f"Review and submit to complete manufacturing."
+                    f"✅ Work Order submitted: {self.make_link('Work Order', wo.name)}\n\n"
+                    f"  Item: {wo.production_item}\n"
+                    f"  Qty: {wo.qty}\n"
+                    f"  Status: {wo.status}\n\n"
+                    f"💡 Next: Use `@manufacturing issue materials {wo.name}` to transfer materials to WIP"
                 )
             }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Work Order '{wo_name}' not found."}
         except Exception as e:
-            frappe.log_error(f"ManufacturingAgent.create_stock_entry_manufacture error: {str(e)}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Error submitting Work Order: {str(e)}"}
 
-    def create_material_transfer_for_manufacture(
-        self,
-        wo_name: str,
-        qty: float = None,
-        confirm: bool = False
-    ) -> Dict:
-        """
-        Create Material Transfer for Manufacture Stock Entry.
-        Transfers raw materials from source warehouse to WIP warehouse.
-        Must be done BEFORE creating the Manufacture entry.
-
+    def create_work_order_from_so(self, so_name: str, bom: str = None) -> Dict:
+        """Create a Work Order linked to a Sales Order (Step 4).
+        
+        Looks up each SO item, finds the appropriate BOM (sales BOM -001),
+        and creates a WO. Handles the item 0307 vs ITEM_0612 mapping
+        by using the sales BOM which references the correct hierarchy.
+        
         Args:
-            wo_name: Work Order name
-            qty: Quantity (defaults to WO full qty)
-            confirm: If False, returns preview
-        """
-        try:
-            wo = frappe.get_doc("Work Order", wo_name)
-
-            if wo.docstatus != 1:
-                return {"success": False, "error": f"Work Order {wo_name} must be submitted first"}
-
-            transfer_qty = flt(qty) if qty else flt(wo.qty) - flt(wo.material_transferred_for_manufacturing)
-            if transfer_qty <= 0:
-                return {"success": True, "message": f"Materials already fully transferred for {wo_name}"}
-
-            if not confirm:
-                # Get BOM items for preview
-                bom_items = frappe.get_all("BOM Item",
-                    filters={"parent": wo.bom_no},
-                    fields=["item_code", "qty", "source_warehouse"],
-                    order_by="idx")
-
-                items_preview = "\n".join([
-                    f"- {bi.item_code}: {flt(bi.qty * transfer_qty / flt(wo.qty)):.2f} "
-                    f"from {bi.source_warehouse or 'default'}"
-                    for bi in bom_items
-                ])
-                return {
-                    "success": True,
-                    "requires_confirmation": True,
-                    "preview": (
-                        f"**Transfer Materials for {wo_name}?**\n\n"
-                        f"Items to transfer:\n{items_preview}\n\n"
-                        f"⚠️ This moves raw materials to WIP warehouse."
-                    )
-                }
-
-            from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
-            se = make_stock_entry(wo_name, "Material Transfer for Manufacture", transfer_qty)
-
-            se.flags.ignore_permissions = True
-            se.insert()
-            frappe.db.commit()
-
-            return {
-                "success": True,
-                "action": "created",
-                "stock_entry": se.name,
-                "link": self.make_link("Stock Entry", se.name),
-                "work_order": wo_name,
-                "qty_transferred": transfer_qty,
-                "purpose": "Material Transfer for Manufacture",
-                "message": f"✅ Material Transfer **{se.name}** created. Review and submit."
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    # ========================================================================
-    # STEP 4: CREATE WORK ORDER FROM SALES ORDER (SO → WO)
-    # ========================================================================
-
-    def create_work_order_from_so(
-        self,
-        so_name: str,
-        bom_level: str = "sales",
-        confirm: bool = False
-    ) -> Dict:
-        """
-        Create Work Order(s) from a Sales Order.
-        Supports both sales-level and mix-level WO creation.
-
-        The hierarchy:
-          Sales BOM (BOM-0307-001): 0307 + LBL0307 → for customer labeling
-          Mix BOM (BOM-0307-005): ITEM_0612185231 + LBL4INX6INBL → formulation
-
-        Sales team only sees sales items. Manufacturing handles the mix/production
-        BOMs internally. The SO item stays as-is (e.g., 0307).
-
-        Args:
-            so_name: Sales Order name
-            bom_level: 'sales' for sales BOM, 'mix' for mix BOM
-            confirm: If False, returns preview
-
+            so_name: Sales Order name (e.g. 'SO-00752-LEGOSAN AB')
+            bom: Override BOM name. If None, uses the default BOM for the SO item.
+        
         Returns:
             Dict with created Work Orders
         """
@@ -429,513 +193,406 @@ class ManufacturingAgent:
             so = frappe.get_doc("Sales Order", so_name)
 
             if so.docstatus != 1:
-                return {"success": False, "error": f"Sales Order {so_name} must be submitted first"}
+                return {"success": False, "error": f"Sales Order '{so_name}' must be submitted first (current docstatus={so.docstatus})."}
 
-            # Gather items that have BOMs
-            items_for_wo = []
+            created_wos = []
+            errors = []
+
             for item in so.items:
-                # Get the appropriate BOM based on level
-                bom = self._get_bom_for_level(item.item_code, bom_level)
-                if bom:
-                    items_for_wo.append({
-                        "item_code": item.item_code,
-                        "qty": item.qty,
-                        "bom": bom,
-                        "bom_level": bom_level,
-                        "warehouse": item.warehouse
-                    })
+                item_code = item.item_code
+                qty = item.qty
 
-            if not items_for_wo:
+                # Get BOM for this item
+                item_bom = bom or frappe.db.get_value("BOM",
+                    {"item": item_code, "is_active": 1, "is_default": 1, "docstatus": 1},
+                    "name")
+
+                if not item_bom:
+                    errors.append(f"No active default BOM for item '{item_code}'")
+                    continue
+
+                # Create Work Order linked to SO
+                result = self.create_work_order(
+                    item_code=item_code,
+                    qty=qty,
+                    bom=item_bom,
+                    sales_order=so_name,
+                    project=so.project if hasattr(so, "project") else None,
+                    use_multi_level_bom=0  # Single level for migration
+                )
+
+                if result["success"]:
+                    created_wos.append({
+                        "wo_name": result["wo_name"],
+                        "item_code": item_code,
+                        "qty": qty,
+                        "bom": item_bom,
+                        "link": result["link"]
+                    })
+                else:
+                    errors.append(f"Item {item_code}: {result.get('error', 'Unknown error')}")
+
+            if created_wos:
+                msg = f"🏭 **Work Orders created from {self.make_link('Sales Order', so_name)}**\n\n"
+                for wo_info in created_wos:
+                    msg += (
+                        f"• {wo_info['link']} — Item: {wo_info['item_code']}, "
+                        f"Qty: {wo_info['qty']}, BOM: {wo_info['bom']}\n"
+                    )
+                if errors:
+                    msg += f"\n⚠️ Errors:\n" + "\n".join(f"  • {e}" for e in errors)
+
+                return {"success": True, "work_orders": created_wos, "errors": errors, "message": msg}
+            else:
+                return {"success": False, "error": "No Work Orders created.\n" + "\n".join(errors)}
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Order '{so_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": f"Error creating WOs from SO: {str(e)}"}
+
+    # ========== STOCK ENTRY OPERATIONS (Steps 2, 5) ==========
+
+    def create_stock_entry_manufacture(self, wo_name: str, qty: float = None) -> Dict:
+        """Create a Stock Entry of type 'Manufacture' from a Work Order (Steps 2 & 5).
+        
+        Consumes raw materials from WIP and produces finished goods into FG warehouse.
+        
+        Args:
+            wo_name: Work Order name (e.g. 'MFG-WO-03726')
+            qty: Quantity to manufacture. If None, uses full WO qty minus already manufactured.
+        
+        Returns:
+            Dict with Stock Entry details
+        """
+        try:
+            wo = frappe.get_doc("Work Order", wo_name)
+
+            if wo.docstatus != 1:
+                return {"success": False, "error": f"Work Order '{wo_name}' must be submitted first."}
+
+            if wo.status == "Completed":
+                return {"success": False, "error": f"Work Order '{wo_name}' is already completed."}
+
+            # Calculate remaining qty
+            remaining_qty = flt(wo.qty) - flt(wo.produced_qty)
+            if remaining_qty <= 0:
+                return {"success": False, "error": f"Work Order '{wo_name}' has no remaining quantity to manufacture."}
+
+            manufacture_qty = flt(qty) if qty else remaining_qty
+
+            if manufacture_qty > remaining_qty:
                 return {
                     "success": False,
-                    "error": (
-                        f"No items with {bom_level}-level BOM found in {so_name}. "
-                        f"Check that BOMs exist for the SO items."
-                    )
+                    "error": f"Requested qty ({manufacture_qty}) exceeds remaining ({remaining_qty})."
                 }
 
-            if not confirm:
-                items_preview = "\n".join([
-                    f"- {i['item_code']}: {i['qty']} Kg → BOM: {i['bom']}"
-                    for i in items_for_wo
-                ])
-                return {
-                    "success": True,
-                    "requires_confirmation": True,
-                    "preview": (
-                        f"**Create {bom_level.title()} Work Orders from {so_name}?**\n\n"
-                        f"{items_preview}\n\n"
-                        f"These WOs will be linked to {so_name}."
-                    )
-                }
+            # Use ERPNext's built-in Stock Entry creation from Work Order
+            from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
 
-            # Create Work Orders
-            created = []
-            for item_info in items_for_wo:
-                result = self.create_work_order(
-                    item_code=item_info["item_code"],
-                    qty=item_info["qty"],
-                    bom=item_info["bom"],
-                    sales_order=so_name,
-                    project=so.project if hasattr(so, 'project') else None,
-                    confirm=True
-                )
-                created.append(result)
+            se = make_stock_entry(wo_name, "Manufacture", manufacture_qty)
+            se.insert(ignore_permissions=True)
+            se.submit()
+            frappe.db.commit()
 
-            success_count = sum(1 for r in created if r.get("success"))
             return {
                 "success": True,
-                "message": f"Created {success_count}/{len(items_for_wo)} Work Orders from {so_name}",
-                "work_orders": created,
-                "sales_order": so_name,
-                "bom_level": bom_level
+                "se_name": se.name,
+                "link": self.make_link("Stock Entry", se.name),
+                "wo_link": self.make_link("Work Order", wo_name),
+                "message": (
+                    f"✅ Stock Entry (Manufacture) created: {self.make_link('Stock Entry', se.name)}\n\n"
+                    f"  Work Order: {self.make_link('Work Order', wo_name)}\n"
+                    f"  Item: {wo.production_item}\n"
+                    f"  Qty Manufactured: {manufacture_qty}\n"
+                    f"  Purpose: Manufacture\n\n"
+                    f"📦 Raw materials consumed from WIP → FG produced into {wo.fg_warehouse}"
+                )
             }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
 
-    # ========================================================================
-    # STATUS & TRACKING
-    # ========================================================================
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Work Order '{wo_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": f"Error creating manufacture entry: {str(e)}"}
+
+    def create_material_transfer(self, wo_name: str, qty: float = None) -> Dict:
+        """Create a Material Transfer for Manufacture Stock Entry.
+        
+        Transfers raw materials from source warehouse to WIP warehouse
+        based on Work Order requirements.
+        
+        Args:
+            wo_name: Work Order name
+            qty: Quantity basis for transfer. If None, uses full WO qty.
+        
+        Returns:
+            Dict with Stock Entry details
+        """
+        try:
+            wo = frappe.get_doc("Work Order", wo_name)
+
+            if wo.docstatus != 1:
+                return {"success": False, "error": f"Work Order '{wo_name}' must be submitted first."}
+
+            remaining_transfer = flt(wo.qty) - flt(wo.material_transferred_for_manufacturing)
+            if remaining_transfer <= 0:
+                return {
+                    "success": True,
+                    "message": f"✅ All materials already transferred for {self.make_link('Work Order', wo_name)}"
+                }
+
+            transfer_qty = flt(qty) if qty else remaining_transfer
+
+            from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
+
+            se = make_stock_entry(wo_name, "Material Transfer for Manufacture", transfer_qty)
+            se.insert(ignore_permissions=True)
+            se.submit()
+            frappe.db.commit()
+
+            return {
+                "success": True,
+                "se_name": se.name,
+                "link": self.make_link("Stock Entry", se.name),
+                "message": (
+                    f"✅ Material Transfer created: {self.make_link('Stock Entry', se.name)}\n\n"
+                    f"  Work Order: {self.make_link('Work Order', wo_name)}\n"
+                    f"  Qty Transferred: {transfer_qty}\n"
+                    f"  Purpose: Material Transfer for Manufacture"
+                )
+            }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Work Order '{wo_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": f"Error creating material transfer: {str(e)}"}
+
+    # ========== STATUS & INTELLIGENCE ==========
 
     def get_wo_status(self, wo_name: str) -> Dict:
-        """Get detailed Work Order status with next action recommendation"""
+        """Get detailed status of a Work Order with linked documents."""
         try:
             wo = frappe.get_doc("Work Order", wo_name)
 
             # Get linked stock entries
             stock_entries = frappe.get_all("Stock Entry",
                 filters={"work_order": wo_name, "docstatus": ["!=", 2]},
-                fields=["name", "purpose", "docstatus", "total_outgoing_value"],
-                order_by="creation")
+                fields=["name", "stock_entry_type", "docstatus", "posting_date"],
+                order_by="posting_date asc")
 
-            transfers = [se for se in stock_entries if se.purpose == "Material Transfer for Manufacture"]
-            manufactures = [se for se in stock_entries if se.purpose == "Manufacture"]
+            se_list = []
+            for se in stock_entries:
+                se_list.append({
+                    "name": se.name,
+                    "link": self.make_link("Stock Entry", se.name),
+                    "type": se.stock_entry_type,
+                    "status": "Submitted" if se.docstatus == 1 else "Draft"
+                })
+
+            # Check Sales Order link
+            so_link = None
+            if wo.sales_order:
+                so_link = self.make_link("Sales Order", wo.sales_order)
+
+            next_action = self.WO_STATUS_FLOW.get(wo.status, "Review manually")
 
             return {
                 "success": True,
-                "work_order": wo_name,
-                "link": self.make_link("Work Order", wo_name),
-                "item": wo.production_item,
+                "wo_name": wo.name,
+                "link": self.make_link("Work Order", wo.name),
+                "production_item": wo.production_item,
+                "bom_no": wo.bom_no,
                 "qty": wo.qty,
-                "bom": wo.bom_no,
-                "status": wo.status,
-                "docstatus": wo.docstatus,
                 "produced_qty": wo.produced_qty,
                 "material_transferred": wo.material_transferred_for_manufacturing,
-                "sales_order": wo.sales_order,
+                "status": wo.status,
+                "sales_order": so_link,
                 "project": wo.project,
-                "next_action": self.WO_STATUS_FLOW.get(wo.status, "Review Work Order"),
-                "stock_entries": {
-                    "material_transfers": [{
-                        "name": se.name,
-                        "link": self.make_link("Stock Entry", se.name),
-                        "status": "Submitted" if se.docstatus == 1 else "Draft"
-                    } for se in transfers],
-                    "manufactures": [{
-                        "name": se.name,
-                        "link": self.make_link("Stock Entry", se.name),
-                        "status": "Submitted" if se.docstatus == 1 else "Draft"
-                    } for se in manufactures]
-                }
+                "stock_entries": se_list,
+                "next_action": next_action,
+                "message": (
+                    f"📋 **Work Order {self.make_link('Work Order', wo.name)}**\n\n"
+                    f"  Item: {wo.production_item}\n"
+                    f"  BOM: {self.make_link('BOM', wo.bom_no)}\n"
+                    f"  Qty: {wo.produced_qty}/{wo.qty}\n"
+                    f"  Material Transferred: {wo.material_transferred_for_manufacturing}\n"
+                    f"  Status: **{wo.status}**\n"
+                    + (f"  Sales Order: {so_link}\n" if so_link else "")
+                    + f"\n  ➡️ Next: {next_action}\n"
+                    + (f"\n📦 Stock Entries:\n" + "\n".join(
+                        f"  • {se['link']} ({se['type']}) — {se['status']}"
+                        for se in se_list
+                    ) if se_list else "")
+                )
             }
+
         except frappe.DoesNotExistError:
-            return {"success": False, "error": f"Work Order '{wo_name}' not found"}
+            return {"success": False, "error": f"Work Order '{wo_name}' not found."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def get_work_orders_for_so(self, so_name: str) -> Dict:
-        """List all Work Orders linked to a Sales Order"""
+    def check_materials_availability(self, wo_name: str) -> Dict:
+        """Check material availability for a Work Order before manufacturing."""
         try:
-            wos = frappe.get_all("Work Order",
-                filters={"sales_order": so_name},
-                fields=["name", "production_item", "qty", "produced_qty",
-                         "status", "bom_no", "docstatus"],
-                order_by="creation")
+            wo = frappe.get_doc("Work Order", wo_name)
+            items_status = []
+            all_available = True
+
+            for item in wo.required_items:
+                source_wh = item.source_warehouse or wo.wip_warehouse
+                available = frappe.db.get_value("Bin",
+                    {"item_code": item.item_code, "warehouse": source_wh},
+                    "actual_qty") or 0
+
+                shortage = max(0, flt(item.required_qty) - flt(available))
+                sufficient = flt(available) >= flt(item.required_qty)
+
+                if not sufficient:
+                    all_available = False
+
+                items_status.append({
+                    "item_code": item.item_code,
+                    "required_qty": item.required_qty,
+                    "available_qty": available,
+                    "warehouse": source_wh,
+                    "shortage": shortage,
+                    "status": "✅" if sufficient else f"❌ Short {shortage}"
+                })
+
+            msg = f"📦 **Material Check for {self.make_link('Work Order', wo_name)}**\n\n"
+            msg += "| Item | Required | Available | Warehouse | Status |\n"
+            msg += "|------|----------|-----------|-----------|--------|\n"
+            for it in items_status:
+                msg += (
+                    f"| {it['item_code']} | {it['required_qty']} | "
+                    f"{it['available_qty']} | {it['warehouse']} | {it['status']} |\n"
+                )
+            msg += f"\n{'✅ All materials available' if all_available else '❌ Some materials are short'}"
 
             return {
                 "success": True,
-                "sales_order": so_name,
-                "count": len(wos),
-                "work_orders": [{
-                    "name": wo.name,
-                    "link": self.make_link("Work Order", wo.name),
-                    "item": wo.production_item,
-                    "qty": wo.qty,
-                    "produced": wo.produced_qty,
-                    "status": wo.status,
-                    "bom": wo.bom_no,
-                    "progress": f"{flt(wo.produced_qty / wo.qty * 100, 1)}%" if wo.qty else "0%"
-                } for wo in wos]
+                "all_available": all_available,
+                "items": items_status,
+                "message": msg
             }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Work Order '{wo_name}' not found."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    # ========================================================================
-    # INTERNAL HELPERS
-    # ========================================================================
-
-    def _get_default_bom(self, item_code: str) -> Optional[str]:
-        """Get the default active BOM for an item"""
-        bom = frappe.db.get_value("BOM", {
-            "item": item_code,
-            "is_active": 1,
-            "is_default": 1,
-            "docstatus": 1
-        }, "name")
-
-        if not bom:
-            # Fallback: any active submitted BOM
-            bom = frappe.db.get_value("BOM", {
-                "item": item_code,
-                "is_active": 1,
-                "docstatus": 1
-            }, "name", order_by="creation desc")
-
-        return bom
-
-    def _get_bom_for_level(self, item_code: str, level: str) -> Optional[str]:
-        """
-        Get the BOM for a specific manufacturing level.
-
-        Level mapping:
-          sales → BOM-{item}-001 (default, customer-facing)
-          mix   → BOM-{item}-005 (formulation/mix plant)
-          production → BOM-{item}-006 (full production)
-        """
-        suffix_map = {"sales": "001", "mix": "005", "production": "006"}
-        suffix = suffix_map.get(level, "001")
-
-        # Try exact pattern first
-        bom_name = f"BOM-{item_code}-{suffix}"
-        if frappe.db.exists("BOM", {"name": bom_name, "is_active": 1}):
-            return bom_name
-
-        # Fallback to default BOM
-        if level == "sales":
-            return self._get_default_bom(item_code)
-
-        return None
-
-    def _get_fg_warehouse(self) -> str:
-        """Get Finished Goods warehouse"""
-        # Try company default first
-        wh = frappe.db.get_value("Warehouse", {"warehouse_name": "FG to Sell Warehouse"}, "name")
-        if wh:
-            return wh
-        default = frappe.db.get_single_value("Stock Settings", "default_warehouse")
-        return default or "FG to Sell Warehouse - AMB-W"
-
-    def _get_wip_warehouse(self, bom: str = None) -> str:
-        """
-        Get WIP warehouse based on BOM context.
-        Mix BOMs use 'WIP in Mix', production BOMs use default WIP.
-        """
-        if bom and "-005" in bom:
-            # Mix plant WIP
-            wh = frappe.db.get_value("Warehouse", {"warehouse_name": "WIP in Mix"}, "name")
-            if wh:
-                return wh
-
-        default = frappe.db.get_single_value("Manufacturing Settings", "default_wip_warehouse")
-        return default or "WIP in Mix - AMB-W"
-
-    # ========================================================================
-    # INTELLIGENT DASHBOARDS & DATA QUALITY
-    # ========================================================================
-
-    def get_pending_work_orders(self) -> str:
-        """
-        Intelligent dashboard of all open Work Orders with bottleneck detection.
-        Flags: stuck (no progress >7 days), material shortage, overdue.
-        """
-        try:
-            from datetime import datetime, timedelta
-
-            wos = frappe.get_all("Work Order",
-                filters={"docstatus": ["!=", 2], "status": ["not in", ["Completed", "Stopped", "Cancelled"]]},
-                fields=["name", "production_item", "qty", "produced_qty",
-                         "material_transferred_for_manufacturing", "status", "docstatus",
-                         "bom_no", "sales_order", "planned_start_date", "expected_delivery_date",
-                         "creation"],
-                order_by="creation desc")
-
-            if not wos:
-                return "No open Work Orders found."
-
-            today = datetime.now().date()
-            alerts = {"stuck": 0, "overdue": 0, "draft": 0, "blocked": 0}
-            lines = []
-
-            for wo in wos:
-                flags = []
-
-                # Draft detection
-                if wo.docstatus == 0:
-                    alerts["draft"] += 1
-                    age_days = (today - wo.creation.date()).days if wo.creation else 0
-                    if age_days > 3:
-                        flags.append(f"\u26a0\ufe0f DRAFT for {age_days} days \u2014 submit or cancel")
-                    else:
-                        flags.append("\U0001f4dd Draft \u2014 pending submission")
-
-                # Stuck detection: "Not Started" for >7 days
-                if wo.status == "Not Started" and wo.docstatus == 1:
-                    age_days = (today - wo.creation.date()).days if wo.creation else 0
-                    if age_days > 7:
-                        alerts["stuck"] += 1
-                        flags.append(f"\U0001f6d1 STUCK \u2014 submitted {age_days} days ago, no materials transferred")
-
-                # Blocked: In Process but no production
-                if wo.status == "In Process":
-                    transferred = flt(wo.material_transferred_for_manufacturing)
-                    produced = flt(wo.produced_qty)
-                    if transferred > 0 and produced == 0:
-                        age_days = (today - wo.creation.date()).days if wo.creation else 0
-                        if age_days > 3:
-                            alerts["blocked"] += 1
-                            flags.append(f"\U0001f6a7 BLOCKED \u2014 materials transferred but no production for {age_days} days")
-
-                # Overdue check
-                if wo.expected_delivery_date:
-                    exp_date = wo.expected_delivery_date
-                    if hasattr(exp_date, 'date'):
-                        exp_date = exp_date.date()
-                    if today > exp_date:
-                        overdue_days = (today - exp_date).days
-                        alerts["overdue"] += 1
-                        flags.append(f"\U0001f534 OVERDUE by {overdue_days} days")
-
-                # Material readiness check for Not Started WOs
-                if wo.status == "Not Started" and wo.bom_no:
-                    shortage = self._check_material_availability(wo.bom_no, flt(wo.qty))
-                    if shortage:
-                        flags.append(f"\U0001f4e6 MATERIAL SHORTAGE: {shortage}")
-
-                # Progress calculation
-                progress = ""
-                if wo.qty and flt(wo.qty) > 0:
-                    pct = flt(wo.produced_qty / wo.qty * 100, 1)
-                    progress = f" | Progress: {pct}%"
-
-                # Next action recommendation
-                next_action = self.WO_STATUS_FLOW.get(wo.status, "Review")
-
-                so_ref = f" | SO: {wo.sales_order}" if wo.sales_order else ""
-                line = (
-                    f"\u2022 [{wo.name}](https://{self.site_name}/app/work-order/{wo.name})"
-                    f" | {wo.production_item} | {wo.qty} Kg | {wo.status}{progress}{so_ref}\n"
-                )
-
-                for flag in flags:
-                    line += f"  {flag}\n"
-                line += f"  **Next:** {next_action}\n"
-
-                lines.append(line)
-
-            # Build alert summary
-            alert_parts = []
-            if alerts["stuck"]: alert_parts.append(f"{alerts['stuck']} stuck")
-            if alerts["blocked"]: alert_parts.append(f"{alerts['blocked']} blocked")
-            if alerts["overdue"]: alert_parts.append(f"{alerts['overdue']} overdue")
-            if alerts["draft"]: alert_parts.append(f"{alerts['draft']} draft")
-            alert_summary = f"\n\n**Alerts:** {', '.join(alert_parts)}" if alert_parts else ""
-
-            header = f"## Open Work Orders ({len(wos)} found){alert_summary}\n\n"
-            return header + "\n".join(lines)
-
-        except Exception as e:
-            frappe.log_error(f"ManufacturingAgent.get_pending_work_orders error: {str(e)}")
-            return f"Error getting pending work orders: {str(e)}"
-
-    def _check_material_availability(self, bom_name: str, qty: float) -> Optional[str]:
-        """
-        Check if raw materials are available for a BOM at given qty.
-        Returns shortage description or None if all materials available.
-        """
-        try:
-            bom_items = frappe.get_all("BOM Item",
-                filters={"parent": bom_name},
-                fields=["item_code", "qty", "source_warehouse"])
-
-            if not bom_items:
-                return None
-
-            shortages = []
-            bom_doc = frappe.get_doc("BOM", bom_name)
-            bom_qty = flt(bom_doc.quantity) or 1
-
-            for bi in bom_items:
-                required = flt(bi.qty) * flt(qty) / bom_qty
-                warehouse = bi.source_warehouse or self._get_fg_warehouse()
-
-                actual_qty = flt(frappe.db.get_value("Bin", {
-                    "item_code": bi.item_code,
-                    "warehouse": warehouse
-                }, "actual_qty")) or 0
-
-                if actual_qty < required:
-                    deficit = required - actual_qty
-                    shortages.append(f"{bi.item_code} (need {required:.1f}, have {actual_qty:.1f}, short {deficit:.1f})")
-
-            if shortages:
-                result = "; ".join(shortages[:3])
-                if len(shortages) > 3:
-                    result += f" +{len(shortages)-3} more"
-                return result
-            return None
-
-        except Exception:
-            return None
-
-    def get_manufacturing_summary(self) -> str:
-        """
-        High-level manufacturing capacity summary.
-        Shows WO counts by status and items being manufactured.
-        """
-        try:
-            # Count by status
-            status_counts = frappe.db.sql("""
-                SELECT status, COUNT(*) as cnt, SUM(qty) as total_qty
-                FROM `tabWork Order`
-                WHERE docstatus != 2
-                AND status NOT IN ('Completed', 'Cancelled')
-                GROUP BY status
-                ORDER BY FIELD(status, 'Draft', 'Not Started', 'In Process', 'Stopped')
-            """, as_dict=True)
-
-            if not status_counts:
-                return "No active Work Orders. Manufacturing floor is clear."
-
-            # Top items being manufactured
-            top_items = frappe.db.sql("""
-                SELECT production_item, COUNT(*) as wo_count,
-                       SUM(qty) as total_qty, SUM(produced_qty) as total_produced
-                FROM `tabWork Order`
-                WHERE docstatus = 1
-                AND status IN ('Not Started', 'In Process')
-                GROUP BY production_item
-                ORDER BY total_qty DESC
-                LIMIT 5
-            """, as_dict=True)
-
-            lines = ["## Manufacturing Summary\n"]
-            lines.append("| Status | Count | Total Qty (Kg) |")
-            lines.append("|--------|-------|----------------|")
-            for row in status_counts:
-                lines.append(f"| {row.status} | {row.cnt} | {flt(row.total_qty):,.1f} |")
-
-            if top_items:
-                lines.append("\n### Top Items in Production\n")
-                lines.append("| Item | WOs | Ordered (Kg) | Produced (Kg) | Progress |")
-                lines.append("|------|-----|-------------|--------------|----------|")
-                for item in top_items:
-                    pct = flt(item.total_produced / item.total_qty * 100, 1) if item.total_qty else 0
-                    lines.append(
-                        f"| {item.production_item} | {item.wo_count} "
-                        f"| {flt(item.total_qty):,.1f} | {flt(item.total_produced):,.1f} | {pct}% |"
-                    )
-
-            return "\n".join(lines)
-
-        except Exception as e:
-            return f"Error: {str(e)}"
-
-    # ========================================================================
-    # COMMAND HANDLER
-    # ========================================================================
+    # ========== MAIN COMMAND HANDLER ==========
 
     def process_command(self, message: str) -> str:
-        """Process natural language commands for manufacturing operations"""
+        """Process incoming Raven command and return formatted response.
+        
+        Commands:
+            @manufacturing create wo [item] qty [qty] bom [bom]
+            @manufacturing create wo from so [SO-NAME]
+            @manufacturing submit wo [WO-NAME]
+            @manufacturing manufacture [WO-NAME] qty [qty]
+            @manufacturing transfer materials [WO-NAME]
+            @manufacturing status [WO-NAME]
+            @manufacturing check materials [WO-NAME]
+            @manufacturing help
+        """
         message_lower = message.lower().strip()
 
-        import re
-
-        # Extract WO name
-        wo_pattern = r'(MFG-WO-\d+)'
+        # Extract Work Order name
+        wo_pattern = r'(MFG-WO-\d+|WO-[^\s]+)'
         wo_match = re.search(wo_pattern, message, re.IGNORECASE)
         wo_name = wo_match.group(1) if wo_match else None
 
-        # Extract SO name — supports both "SO-00752" (short) and "SO-00752-LEGOSAN AB" (full)
-        so_pattern = r'(SO-\d+(?:-[\w\s]+)?|SAL-ORD-\d+-\d+)'
+        # Extract Sales Order name
+        so_pattern = r'(SO-[\w-]+|SAL-ORD-[\d-]+)'
         so_match = re.search(so_pattern, message, re.IGNORECASE)
-        so_name = so_match.group(1).strip() if so_match else None
+        so_name = so_match.group(1) if so_match else None
 
-        # If short SO reference (no customer suffix), resolve to full name
-        if so_name and re.match(r'^SO-\d+$', so_name):
-            matches = frappe.get_all("Sales Order", filters={"name": ["like", f"{so_name}%"]}, limit=1, pluck="name")
-            if matches:
-                so_name = matches[0]
+        # ---- HELP ----
+        if "help" in message_lower or "capabilities" in message_lower:
+            return self._help_text()
 
-        # Extract item code
-        item_pattern = r'\b(0[0-9]{3}|ITEM_\d+)\b'
-        item_match = re.search(item_pattern, message)
-        item_code = item_match.group(1) if item_match else None
+        # ---- CREATE WO FROM SO (Step 4) ----
+        if ("create" in message_lower and "wo" in message_lower
+                and ("from so" in message_lower or "from sales" in message_lower)):
+            if not so_name:
+                return "❌ Please specify a Sales Order. Example: `@manufacturing create wo from so SO-00752-LEGOSAN AB`"
+            bom_match = re.search(r'bom\s+(BOM-[\w-]+)', message, re.IGNORECASE)
+            bom = bom_match.group(1) if bom_match else None
+            result = self.create_work_order_from_so(so_name, bom=bom)
+            return result.get("message", result.get("error", "Unknown error"))
 
-        # Extract quantity
-        qty_pattern = r'(\d+(?:\.\d+)?)\s*(?:kg|Kg|KG)'
-        qty_match = re.search(qty_pattern, message)
-        qty = float(qty_match.group(1)) if qty_match else None
+        # ---- CREATE WO (Step 1) ----
+        if "create" in message_lower and ("wo" in message_lower or "work order" in message_lower):
+            item_match = re.search(r'(?:for|item|para)\s+(\S+)', message, re.IGNORECASE)
+            qty_match = re.search(r'(?:qty|quantity|cantidad)\s+(\d+\.?\d*)', message, re.IGNORECASE)
+            bom_match = re.search(r'bom\s+(BOM-[\w-]+)', message, re.IGNORECASE)
 
-        # Route commands
-        confirm = "confirm" in message_lower or message.startswith("!")
+            if not item_match:
+                return "❌ Please specify an item. Example: `@manufacturing create wo for 0307 qty 150 bom BOM-0307-005`"
 
-        if wo_name:
-            if "status" in message_lower or "check" in message_lower:
-                result = self.get_wo_status(wo_name)
-            elif "submit" in message_lower or "start" in message_lower:
-                result = self.submit_work_order(wo_name, confirm=confirm)
-            elif "transfer" in message_lower and "material" in message_lower:
-                result = self.create_material_transfer_for_manufacture(wo_name, confirm=confirm)
-            elif "manufacture" in message_lower or "finish" in message_lower or "produce" in message_lower:
-                result = self.create_stock_entry_manufacture(wo_name, confirm=confirm)
-            else:
-                result = self.get_wo_status(wo_name)
-        elif so_name and ("work order" in message_lower or "wo" in message_lower):
-            if "list" in message_lower or "show" in message_lower:
-                result = self.get_work_orders_for_so(so_name)
-            else:
-                bom_level = "mix" if "mix" in message_lower else "sales"
-                result = self.create_work_order_from_so(so_name, bom_level=bom_level, confirm=confirm)
-        elif "pending" in message_lower and ("work order" in message_lower or "wo" in message_lower):
-            return self.get_pending_work_orders()
-        elif "summary" in message_lower and ("manufactur" in message_lower or "production" in message_lower):
-            return self.get_manufacturing_summary()
-        elif "create" in message_lower and ("work order" in message_lower or "wo" in message_lower):
-            if item_code and qty:
-                result = self.create_work_order(item_code, qty, confirm=confirm)
-            else:
-                result = {
-                    "success": False,
-                    "error": "Please specify item code and quantity. Example: `@ai create work order 0307 150 Kg`"
-                }
-        else:
-            result = {
-                "success": True,
-                "message": (
-                    "**Manufacturing Agent Commands:**\n\n"
-                    "- `@ai create work order 0307 150 Kg` — Create WO\n"
-                    "- `@ai submit MFG-WO-03726` — Submit WO\n"
-                    "- `@ai transfer materials for MFG-WO-03726` — Transfer materials\n"
-                    "- `@ai manufacture MFG-WO-03726` — Create Manufacture SE\n"
-                    "- `@ai status MFG-WO-03726` — Check WO status\n"
-                    "- `@ai create work order from SO-00752 mix` — WO from SO\n"
-                    "- `@ai list work orders for SO-00752` — List WOs for SO\n"
-                    "- `@ai pending work orders` — Open WOs with bottleneck flags\n"
-                    "- `@ai manufacturing summary` — Capacity dashboard"
-                )
-            }
+            item_code = item_match.group(1).strip()
+            qty = float(qty_match.group(1)) if qty_match else 1
+            bom = bom_match.group(1) if bom_match else None
 
-        return self._format_response(result)
+            result = self.create_work_order(item_code, qty, bom=bom,
+                                            sales_order=so_name)
+            return result.get("message", result.get("error", "Unknown error"))
 
-    def _format_response(self, result: Dict) -> str:
-        """Format result dict into readable response"""
-        if result.get("requires_confirmation"):
-            return result["preview"]
+        # ---- SUBMIT WO (Step 1) ----
+        if ("submit" in message_lower) and wo_name:
+            result = self.submit_work_order(wo_name)
+            return result.get("message", result.get("error", "Unknown error"))
 
-        if not result.get("success"):
-            return f"❌ {result.get('error', 'Unknown error')}"
+        # ---- MANUFACTURE / FINISH (Steps 2, 5) ----
+        if ("manufacture" in message_lower or "finish" in message_lower
+                or "produce" in message_lower) and wo_name:
+            qty_match = re.search(r'(?:qty|quantity|cantidad)\s+(\d+\.?\d*)', message, re.IGNORECASE)
+            qty = float(qty_match.group(1)) if qty_match else None
+            result = self.create_stock_entry_manufacture(wo_name, qty)
+            return result.get("message", result.get("error", "Unknown error"))
 
-        if result.get("message"):
-            return result["message"]
+        # ---- TRANSFER MATERIALS ----
+        if ("transfer" in message_lower or "issue" in message_lower) and wo_name:
+            qty_match = re.search(r'(?:qty|quantity|cantidad)\s+(\d+\.?\d*)', message, re.IGNORECASE)
+            qty = float(qty_match.group(1)) if qty_match else None
+            result = self.create_material_transfer(wo_name, qty)
+            return result.get("message", result.get("error", "Unknown error"))
 
-        return str(result)
+        # ---- STATUS ----
+        if ("status" in message_lower or "estado" in message_lower) and wo_name:
+            result = self.get_wo_status(wo_name)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- CHECK MATERIALS ----
+        if ("check" in message_lower or "verify" in message_lower
+                or "material" in message_lower) and wo_name:
+            result = self.check_materials_availability(wo_name)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- FALLBACK ----
+        return self._help_text()
+
+    def _help_text(self) -> str:
+        return (
+            "🏭 **Manufacturing Agent — Commands**\n\n"
+            "**Work Order Creation**\n"
+            "`@manufacturing create wo for [ITEM] qty [QTY]` — Create WO from default BOM\n"
+            "`@manufacturing create wo for [ITEM] qty [QTY] bom [BOM-NAME]` — Create WO with specific BOM\n"
+            "`@manufacturing create wo from so [SO-NAME]` — Create WO linked to Sales Order\n\n"
+            "**Work Order Actions**\n"
+            "`@manufacturing submit wo [WO-NAME]` — Submit Work Order\n"
+            "`@manufacturing transfer materials [WO-NAME]` — Transfer materials to WIP\n"
+            "`@manufacturing manufacture [WO-NAME]` — Create Stock Entry (Manufacture)\n"
+            "`@manufacturing manufacture [WO-NAME] qty [QTY]` — Partial manufacture\n\n"
+            "**Status & Checks**\n"
+            "`@manufacturing status [WO-NAME]` — Detailed WO status with linked docs\n"
+            "`@manufacturing check materials [WO-NAME]` — Verify material availability\n\n"
+            "**Example (Full Cycle)**\n"
+            "```\n"
+            "@manufacturing create wo for 0307 qty 150 bom BOM-0307-005\n"
+            "@manufacturing submit wo MFG-WO-03726\n"
+            "@manufacturing transfer materials MFG-WO-03726\n"
+            "@manufacturing manufacture MFG-WO-03726\n"
+            "```"
+        )

@@ -1,6 +1,6 @@
 """
-Workflow Orchestrator - Full Pipeline Controller
-Chains all 8 steps of the fulfillment cycle:
+Workflow Orchestrator Agent
+Master orchestrator that chains all 8 steps of the verified workflow:
 
   Step 1: WO (Manufacturing) → Submit
   Step 2: Stock Entry (Manufacture)
@@ -11,789 +11,682 @@ Chains all 8 steps of the fulfillment cycle:
   Step 7: Sales Invoice
   Step 8: Payment Entry
 
-Handles the complete: Quotation → SO → WO → SE → DN → SI → PE pipeline.
+Handles:
+  - Full cycle: Quotation → SO → WO → SE → DN → SI → PE
+  - Item 0307 vs ITEM_0612 mapping (manufactured item matches SO item)
+  - CFDI compliance: auto-set mx_cfdi_use to G03, custom_customer_invoice_currency
+  - Status dashboard showing pipeline position
+  - No import frappe in Server Scripts
 
-KEY INTELLIGENCE:
-- Item validation: Ensures manufactured item matches SO item
-  (e.g., 0307 produced from ITEM_0612185231 via BOM-0307-005)
-- CFDI compliance: Auto-sets mx_cfdi_use to G03, currency from SO
-- Inventory checks before DN creation
-- No `import frappe` in Server Scripts (safe for Frappe context)
-- Idempotent: checks for existing docs before creating duplicates
-
-Based on verified 8-step workflow pilot: MFG-WO-03726 (2026-03-03)
+Author: raven_ai_agent
 """
 import frappe
+import re
 from typing import Dict, List, Optional
-from frappe.utils import nowdate, flt
-from datetime import datetime
+from frappe.utils import nowdate, getdate, flt
 
 
 class WorkflowOrchestrator:
-    """
-    Master orchestrator that chains all 8 steps of the fulfillment cycle.
-    Can run the full pipeline or individual steps.
-    """
+    """Master orchestrator for the 8-step manufacturing-to-payment workflow"""
 
     PIPELINE_STEPS = [
-        {"step": 1, "name": "Manufacturing WO", "doctype": "Work Order", "agent": "manufacturing"},
-        {"step": 2, "name": "Stock Entry (Manufacture)", "doctype": "Stock Entry", "agent": "manufacturing"},
-        {"step": 3, "name": "Submit Sales Order", "doctype": "Sales Order", "agent": "sales"},
-        {"step": 4, "name": "Sales Work Order", "doctype": "Work Order", "agent": "manufacturing"},
-        {"step": 5, "name": "Stock Entry (Sales Manufacture)", "doctype": "Stock Entry", "agent": "manufacturing"},
-        {"step": 6, "name": "Delivery Note", "doctype": "Delivery Note", "agent": "sales"},
-        {"step": 7, "name": "Sales Invoice", "doctype": "Sales Invoice", "agent": "sales"},
-        {"step": 8, "name": "Payment Entry", "doctype": "Payment Entry", "agent": "payment"},
+        {"step": 1, "name": "Manufacturing WO", "doctype": "Work Order", "description": "Create & submit manufacturing Work Order"},
+        {"step": 2, "name": "Stock Entry (Manufacture)", "doctype": "Stock Entry", "description": "Manufacture from WO → FG to stock"},
+        {"step": 3, "name": "Sales Order", "doctype": "Sales Order", "description": "Submit Sales Order"},
+        {"step": 4, "name": "Sales WO", "doctype": "Work Order", "description": "Create WO from SO (labeling)"},
+        {"step": 5, "name": "Stock Entry (Sales)", "doctype": "Stock Entry", "description": "Manufacture for Sales WO"},
+        {"step": 6, "name": "Delivery Note", "doctype": "Delivery Note", "description": "Create DN from SO"},
+        {"step": 7, "name": "Sales Invoice", "doctype": "Sales Invoice", "description": "Create SI from SO/DN"},
+        {"step": 8, "name": "Payment Entry", "doctype": "Payment Entry", "description": "Create PE from SI"},
     ]
 
     def __init__(self, user: str = None):
         self.user = user or frappe.session.user
         self.site_name = frappe.local.site
-        # Lazy-load agents to avoid circular imports
-        self._manufacturing_agent = None
-        self._sales_agent = None
-        self._payment_agent = None
-
-    @property
-    def manufacturing(self):
-        if not self._manufacturing_agent:
-            from raven_ai_agent.agents.manufacturing_agent import ManufacturingAgent
-            self._manufacturing_agent = ManufacturingAgent(self.user)
-        return self._manufacturing_agent
-
-    @property
-    def sales(self):
-        if not self._sales_agent:
-            from raven_ai_agent.agents.sales_order_followup_agent import SalesOrderFollowupAgent
-            self._sales_agent = SalesOrderFollowupAgent(self.user)
-        return self._sales_agent
-
-    @property
-    def payment(self):
-        if not self._payment_agent:
-            from raven_ai_agent.agents.payment_agent import PaymentAgent
-            self._payment_agent = PaymentAgent(self.user)
-        return self._payment_agent
 
     def make_link(self, doctype: str, name: str) -> str:
         """Generate clickable markdown link"""
         slug = doctype.lower().replace(" ", "-")
         return f"[{name}](https://{self.site_name}/app/{slug}/{name})"
 
-    # ========================================================================
-    # FULL CYCLE: QUOTATION → PAYMENT
-    # ========================================================================
+    # ========== FULL CYCLE EXECUTION ==========
 
-    def run_full_cycle(
-        self,
-        so_name: str = None,
-        quotation_name: str = None,
-        dry_run: bool = True,
-        confirm: bool = False
-    ) -> Dict:
-        """
-        Run the complete 8-step fulfillment cycle.
-
-        Can start from either:
-        - A Quotation (creates SO first, then runs full cycle)
-        - A Sales Order (picks up from wherever the SO currently is)
-
+    def run_full_cycle(self, so_name: str, mfg_bom: str = None,
+                       sales_bom: str = None, skip_steps: List[int] = None) -> Dict:
+        """Execute the complete 8-step workflow for a Sales Order.
+        
+        This is the master function that chains all steps. It validates
+        prerequisites at each step and stops on errors.
+        
         Args:
-            so_name: Sales Order to process
-            quotation_name: Quotation to convert (creates SO first)
-            dry_run: If True, only analyzes; doesn't create documents
-            confirm: If False, returns preview of all planned actions
-
+            so_name: Sales Order name (e.g. 'SO-00752-LEGOSAN AB')
+            mfg_bom: Manufacturing BOM (e.g. 'BOM-0307-005' — Mix level)
+            sales_bom: Sales BOM (e.g. 'BOM-0307-001' — Sales level with label)
+            skip_steps: List of step numbers to skip (e.g. [1, 2] if manufacturing already done)
+        
         Returns:
-            Dict with step-by-step results and overall status
+            Dict with step-by-step results
         """
+        skip_steps = skip_steps or []
+        results = []
+        pipeline_state = {"so_name": so_name, "errors": []}
+
         try:
-            pipeline_result = {
-                "success": True,
-                "mode": "dry_run" if dry_run else "execute",
-                "steps": [],
-                "completed_steps": 0,
-                "total_steps": 8,
-                "errors": []
-            }
+            so = frappe.get_doc("Sales Order", so_name)
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Order '{so_name}' not found."}
 
-            # Step 0: If starting from Quotation, convert to SO
-            if quotation_name and not so_name:
-                so_result = self._step_0_quotation_to_so(quotation_name, dry_run, confirm)
-                pipeline_result["steps"].append(so_result)
-                if not so_result.get("success"):
-                    pipeline_result["success"] = False
-                    pipeline_result["errors"].append(so_result.get("error"))
-                    return pipeline_result
-                so_name = so_result.get("sales_order", so_name)
+        item = so.items[0] if so.items else None
+        if not item:
+            return {"success": False, "error": f"Sales Order '{so_name}' has no items."}
 
-            if not so_name:
-                return {"success": False, "error": "Please provide a Sales Order or Quotation name"}
+        item_code = item.item_code
+        qty = item.qty
 
-            # Analyze current state
-            state = self.get_pipeline_status(so_name)
-            if not state.get("success"):
-                return state
+        # Resolve BOMs
+        if not sales_bom:
+            sales_bom = frappe.db.get_value("BOM",
+                {"item": item_code, "is_active": 1, "is_default": 1, "docstatus": 1}, "name")
+        if not mfg_bom:
+            # Look for a non-default active BOM (the mix/production BOM)
+            mfg_bom = frappe.db.get_value("BOM",
+                {"item": item_code, "is_active": 1, "is_default": 0, "docstatus": 1}, "name")
 
-            pipeline_result["current_state"] = state
-            pipeline_result["sales_order"] = so_name
+        # ---- Step 1: Manufacturing Work Order ----
+        if 1 not in skip_steps:
+            step_result = self._step_1_create_mfg_wo(item_code, qty, mfg_bom, so)
+            results.append(step_result)
+            if not step_result["success"]:
+                pipeline_state["errors"].append(step_result)
+                return self._build_pipeline_response(results, pipeline_state)
+            pipeline_state["mfg_wo"] = step_result.get("wo_name")
+        else:
+            results.append({"step": 1, "skipped": True, "success": True})
 
-            # Preview mode: show what would happen
-            if not confirm and not dry_run:
-                return {
-                    "success": True,
-                    "requires_confirmation": True,
-                    "preview": self._build_pipeline_preview(so_name, state)
-                }
+        # ---- Step 2: Stock Entry (Manufacture) ----
+        if 2 not in skip_steps and pipeline_state.get("mfg_wo"):
+            step_result = self._step_2_manufacture(pipeline_state["mfg_wo"])
+            results.append(step_result)
+            if not step_result["success"]:
+                pipeline_state["errors"].append(step_result)
+                return self._build_pipeline_response(results, pipeline_state)
+            pipeline_state["mfg_se"] = step_result.get("se_name")
+        else:
+            results.append({"step": 2, "skipped": True, "success": True})
 
-            # Execute each step based on current state
-            step_results = self._execute_pipeline(so_name, state, dry_run)
-            pipeline_result["steps"].extend(step_results)
-            pipeline_result["completed_steps"] = sum(
-                1 for s in step_results if s.get("status") in ["completed", "already_done"]
+        # ---- Step 3: Submit Sales Order ----
+        if 3 not in skip_steps:
+            step_result = self._step_3_submit_so(so)
+            results.append(step_result)
+            if not step_result["success"]:
+                pipeline_state["errors"].append(step_result)
+                return self._build_pipeline_response(results, pipeline_state)
+        else:
+            results.append({"step": 3, "skipped": True, "success": True})
+
+        # ---- Step 4: Sales Work Order ----
+        if 4 not in skip_steps:
+            step_result = self._step_4_create_sales_wo(item_code, qty, sales_bom, so)
+            results.append(step_result)
+            if not step_result["success"]:
+                pipeline_state["errors"].append(step_result)
+                return self._build_pipeline_response(results, pipeline_state)
+            pipeline_state["sales_wo"] = step_result.get("wo_name")
+        else:
+            results.append({"step": 4, "skipped": True, "success": True})
+
+        # ---- Step 5: Stock Entry (Manufacture for Sales) ----
+        if 5 not in skip_steps and pipeline_state.get("sales_wo"):
+            step_result = self._step_5_manufacture_sales(pipeline_state["sales_wo"])
+            results.append(step_result)
+            if not step_result["success"]:
+                pipeline_state["errors"].append(step_result)
+                return self._build_pipeline_response(results, pipeline_state)
+            pipeline_state["sales_se"] = step_result.get("se_name")
+        else:
+            results.append({"step": 5, "skipped": True, "success": True})
+
+        # ---- Step 6: Delivery Note ----
+        if 6 not in skip_steps:
+            step_result = self._step_6_delivery_note(so)
+            results.append(step_result)
+            if not step_result["success"]:
+                pipeline_state["errors"].append(step_result)
+                return self._build_pipeline_response(results, pipeline_state)
+            pipeline_state["dn"] = step_result.get("dn_name")
+        else:
+            results.append({"step": 6, "skipped": True, "success": True})
+
+        # ---- Step 7: Sales Invoice ----
+        if 7 not in skip_steps:
+            step_result = self._step_7_sales_invoice(so, pipeline_state.get("dn"))
+            results.append(step_result)
+            if not step_result["success"]:
+                pipeline_state["errors"].append(step_result)
+                return self._build_pipeline_response(results, pipeline_state)
+            pipeline_state["si"] = step_result.get("si_name")
+        else:
+            results.append({"step": 7, "skipped": True, "success": True})
+
+        # ---- Step 8: Payment Entry ----
+        if 8 not in skip_steps and pipeline_state.get("si"):
+            step_result = self._step_8_payment_entry(pipeline_state["si"])
+            results.append(step_result)
+            if not step_result["success"]:
+                pipeline_state["errors"].append(step_result)
+            pipeline_state["pe"] = step_result.get("pe_name")
+        else:
+            results.append({"step": 8, "skipped": True, "success": True})
+
+        return self._build_pipeline_response(results, pipeline_state)
+
+    # ========== INDIVIDUAL STEP IMPLEMENTATIONS ==========
+
+    def _step_1_create_mfg_wo(self, item_code, qty, mfg_bom, so) -> Dict:
+        """Step 1: Create manufacturing Work Order"""
+        try:
+            if not mfg_bom:
+                return {"step": 1, "success": False, "error": f"No manufacturing BOM found for '{item_code}'"}
+
+            from raven_ai_agent.agents.manufacturing_agent import ManufacturingAgent
+            mfg = ManufacturingAgent(self.user)
+            result = mfg.create_work_order(
+                item_code=item_code,
+                qty=qty,
+                bom=mfg_bom,
+                project=so.project if hasattr(so, "project") else None,
+                use_multi_level_bom=0
             )
-
-            # Summary
-            pipeline_result["message"] = self._build_summary(so_name, pipeline_result)
-
-            return pipeline_result
-
+            result["step"] = 1
+            return result
         except Exception as e:
-            frappe.log_error(f"WorkflowOrchestrator.run_full_cycle error: {str(e)}")
-            return {"success": False, "error": str(e)}
+            return {"step": 1, "success": False, "error": str(e)}
 
-    # ========================================================================
-    # PIPELINE STATUS DASHBOARD
-    # ========================================================================
+    def _step_2_manufacture(self, wo_name) -> Dict:
+        """Step 2: Submit WO + Material Transfer + Manufacture"""
+        try:
+            from raven_ai_agent.agents.manufacturing_agent import ManufacturingAgent
+            mfg = ManufacturingAgent(self.user)
+
+            # Submit WO first
+            submit_result = mfg.submit_work_order(wo_name)
+            if not submit_result["success"]:
+                # Already submitted is OK
+                if "already submitted" not in submit_result.get("message", ""):
+                    return {"step": 2, "success": False, "error": submit_result.get("error", "Submit failed")}
+
+            # Transfer materials
+            transfer_result = mfg.create_material_transfer(wo_name)
+            # Transfer might already be done — that's OK
+
+            # Create manufacture stock entry
+            result = mfg.create_stock_entry_manufacture(wo_name)
+            result["step"] = 2
+            return result
+        except Exception as e:
+            return {"step": 2, "success": False, "error": str(e)}
+
+    def _step_3_submit_so(self, so) -> Dict:
+        """Step 3: Submit Sales Order if not already submitted"""
+        try:
+            if so.docstatus == 1:
+                return {
+                    "step": 3, "success": True,
+                    "message": f"✅ Sales Order {self.make_link('Sales Order', so.name)} already submitted."
+                }
+            if so.docstatus == 2:
+                return {"step": 3, "success": False, "error": f"Sales Order {so.name} is cancelled."}
+
+            so.submit()
+            frappe.db.commit()
+            return {
+                "step": 3, "success": True,
+                "message": f"✅ Sales Order submitted: {self.make_link('Sales Order', so.name)}"
+            }
+        except Exception as e:
+            return {"step": 3, "success": False, "error": str(e)}
+
+    def _step_4_create_sales_wo(self, item_code, qty, sales_bom, so) -> Dict:
+        """Step 4: Create Sales Work Order from SO (labeling step)"""
+        try:
+            if not sales_bom:
+                return {"step": 4, "success": False, "error": f"No sales BOM found for '{item_code}'"}
+
+            from raven_ai_agent.agents.manufacturing_agent import ManufacturingAgent
+            mfg = ManufacturingAgent(self.user)
+            result = mfg.create_work_order(
+                item_code=item_code,
+                qty=qty,
+                bom=sales_bom,
+                sales_order=so.name,
+                project=so.project if hasattr(so, "project") else None,
+                use_multi_level_bom=0
+            )
+            result["step"] = 4
+            return result
+        except Exception as e:
+            return {"step": 4, "success": False, "error": str(e)}
+
+    def _step_5_manufacture_sales(self, wo_name) -> Dict:
+        """Step 5: Submit + Manufacture for sales WO (labeling)"""
+        try:
+            from raven_ai_agent.agents.manufacturing_agent import ManufacturingAgent
+            mfg = ManufacturingAgent(self.user)
+
+            submit_result = mfg.submit_work_order(wo_name)
+            transfer_result = mfg.create_material_transfer(wo_name)
+            result = mfg.create_stock_entry_manufacture(wo_name)
+            result["step"] = 5
+            return result
+        except Exception as e:
+            return {"step": 5, "success": False, "error": str(e)}
+
+    def _step_6_delivery_note(self, so) -> Dict:
+        """Step 6: Create Delivery Note from Sales Order"""
+        try:
+            # Check inventory first
+            for item in so.items:
+                available = frappe.db.get_value("Bin",
+                    {"item_code": item.item_code, "warehouse": item.warehouse},
+                    "actual_qty") or 0
+                if flt(available) < flt(item.qty):
+                    return {
+                        "step": 6, "success": False,
+                        "error": (
+                            f"Insufficient stock for {item.item_code}: "
+                            f"need {item.qty}, have {available} in {item.warehouse}. "
+                            f"Complete manufacturing first."
+                        )
+                    }
+
+            from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
+            dn = make_delivery_note(so.name)
+            dn.insert(ignore_permissions=True)
+            dn.submit()
+            frappe.db.commit()
+
+            return {
+                "step": 6, "success": True,
+                "dn_name": dn.name,
+                "link": self.make_link("Delivery Note", dn.name),
+                "message": (
+                    f"✅ Delivery Note created: {self.make_link('Delivery Note', dn.name)}\n"
+                    f"  Customer: {so.customer}\n"
+                    f"  Items: {len(dn.items)}"
+                )
+            }
+        except Exception as e:
+            return {"step": 6, "success": False, "error": str(e)}
+
+    def _step_7_sales_invoice(self, so, dn_name: str = None) -> Dict:
+        """Step 7: Create Sales Invoice from SO/DN with CFDI compliance"""
+        try:
+            if dn_name:
+                from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
+                si = make_sales_invoice(dn_name)
+            else:
+                from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+                si = make_sales_invoice(so.name)
+
+            # CFDI compliance fields
+            if hasattr(si, "mx_cfdi_use"):
+                si.mx_cfdi_use = "G03"  # Gastos en general
+            if hasattr(si, "custom_customer_invoice_currency"):
+                si.custom_customer_invoice_currency = so.currency
+
+            si.insert(ignore_permissions=True)
+            si.submit()
+            frappe.db.commit()
+
+            return {
+                "step": 7, "success": True,
+                "si_name": si.name,
+                "link": self.make_link("Sales Invoice", si.name),
+                "message": (
+                    f"✅ Sales Invoice created: {self.make_link('Sales Invoice', si.name)}\n"
+                    f"  Customer: {so.customer}\n"
+                    f"  Grand Total: {si.grand_total} {si.currency}\n"
+                    f"  CFDI Use: {getattr(si, 'mx_cfdi_use', 'N/A')}"
+                )
+            }
+        except Exception as e:
+            return {"step": 7, "success": False, "error": str(e)}
+
+    def _step_8_payment_entry(self, si_name: str) -> Dict:
+        """Step 8: Create Payment Entry from Sales Invoice"""
+        try:
+            from raven_ai_agent.agents.payment_agent import PaymentAgent
+            payment = PaymentAgent(self.user)
+            result = payment.create_payment_entry(si_name)
+            result["step"] = 8
+            return result
+        except Exception as e:
+            return {"step": 8, "success": False, "error": str(e)}
+
+    # ========== STATUS DASHBOARD ==========
 
     def get_pipeline_status(self, so_name: str) -> Dict:
-        """
-        Show where a Sales Order is in the 8-step pipeline.
-        Returns a dashboard view of all steps with current status.
+        """Show where a Sales Order is in the 8-step pipeline.
+        
+        Args:
+            so_name: Sales Order name
+        
+        Returns:
+            Dict with pipeline position and status of each step
         """
         try:
             so = frappe.get_doc("Sales Order", so_name)
+            item_code = so.items[0].item_code if so.items else None
 
-            status = {
-                "success": True,
-                "sales_order": so_name,
-                "customer": so.customer,
-                "grand_total": so.grand_total,
-                "currency": so.currency,
-                "steps": {}
-            }
+            dashboard = []
 
-            # Step 3: SO status
-            status["steps"]["step_3_so"] = {
-                "step": 3,
-                "name": "Sales Order",
-                "document": so_name,
-                "link": self.make_link("Sales Order", so_name),
-                "status": so.status,
-                "docstatus": so.docstatus,
-                "done": so.docstatus == 1
-            }
-
-            # Steps 1 & 4: Work Orders
+            # Step 1 & 2: Check Work Orders (manufacturing)
             work_orders = frappe.get_all("Work Order",
-                filters={"sales_order": so_name, "docstatus": ["!=", 2]},
-                fields=["name", "production_item", "qty", "produced_qty",
-                         "status", "bom_no", "docstatus"],
-                order_by="creation")
+                filters={"production_item": item_code, "docstatus": ["!=", 2]},
+                fields=["name", "bom_no", "status", "qty", "produced_qty", "sales_order"],
+                order_by="creation asc")
 
-            # Classify WOs: mix-level vs sales-level
-            mix_wos = [wo for wo in work_orders if wo.bom_no and "-005" in wo.bom_no]
-            sales_wos = [wo for wo in work_orders if wo.bom_no and "-001" in wo.bom_no]
-            other_wos = [wo for wo in work_orders if wo not in mix_wos and wo not in sales_wos]
+            mfg_wos = [w for w in work_orders if not w.sales_order]
+            sales_wos = [w for w in work_orders if w.sales_order == so_name]
 
-            status["steps"]["step_1_mfg_wo"] = {
-                "step": 1,
-                "name": "Manufacturing WO (Mix)",
-                "work_orders": [{
-                    "name": wo.name,
-                    "link": self.make_link("Work Order", wo.name),
-                    "item": wo.production_item,
-                    "qty": wo.qty,
-                    "produced": wo.produced_qty,
+            # Step 1: Manufacturing WO
+            if mfg_wos:
+                wo = mfg_wos[-1]
+                dashboard.append({
+                    "step": 1, "name": "Manufacturing WO",
                     "status": wo.status,
-                    "bom": wo.bom_no
-                } for wo in mix_wos + other_wos],
-                "done": all(wo.status == "Completed" for wo in mix_wos + other_wos) if (mix_wos + other_wos) else False
-            }
+                    "doc": self.make_link("Work Order", wo.name),
+                    "complete": wo.status in ["Completed", "In Process"]
+                })
+            else:
+                dashboard.append({"step": 1, "name": "Manufacturing WO", "status": "Not Created", "complete": False})
 
-            status["steps"]["step_4_sales_wo"] = {
-                "step": 4,
-                "name": "Sales WO (Labeling)",
-                "work_orders": [{
-                    "name": wo.name,
-                    "link": self.make_link("Work Order", wo.name),
-                    "item": wo.production_item,
-                    "qty": wo.qty,
-                    "produced": wo.produced_qty,
-                    "status": wo.status,
-                    "bom": wo.bom_no
-                } for wo in sales_wos],
-                "done": all(wo.status == "Completed" for wo in sales_wos) if sales_wos else False
-            }
+            # Step 2: Stock Entry (Manufacture)
+            mfg_ses = []
+            for wo in mfg_wos:
+                ses = frappe.get_all("Stock Entry",
+                    filters={"work_order": wo.name, "stock_entry_type": "Manufacture", "docstatus": 1},
+                    fields=["name"])
+                mfg_ses.extend(ses)
 
-            # Steps 2 & 5: Stock Entries
-            stock_entries = frappe.get_all("Stock Entry",
-                filters={"work_order": ["in", [wo.name for wo in work_orders]] if work_orders else ["=", ""]},
-                fields=["name", "purpose", "docstatus", "work_order"],
-                order_by="creation")
+            if mfg_ses:
+                dashboard.append({
+                    "step": 2, "name": "Stock Entry (Manufacture)",
+                    "status": "Completed",
+                    "doc": self.make_link("Stock Entry", mfg_ses[-1].name),
+                    "complete": True
+                })
+            else:
+                dashboard.append({"step": 2, "name": "Stock Entry (Manufacture)", "status": "Pending", "complete": False})
 
-            mfg_entries = [se for se in stock_entries if se.purpose == "Manufacture"]
-            transfer_entries = [se for se in stock_entries if se.purpose == "Material Transfer for Manufacture"]
+            # Step 3: Sales Order
+            dashboard.append({
+                "step": 3, "name": "Sales Order",
+                "status": so.status,
+                "doc": self.make_link("Sales Order", so.name),
+                "complete": so.docstatus == 1
+            })
 
-            status["steps"]["step_2_manufacture"] = {
-                "step": 2,
-                "name": "Stock Entry (Manufacture)",
-                "stock_entries": [{
-                    "name": se.name,
-                    "link": self.make_link("Stock Entry", se.name),
-                    "purpose": se.purpose,
-                    "work_order": se.work_order,
-                    "submitted": se.docstatus == 1
-                } for se in mfg_entries],
-                "done": any(se.docstatus == 1 for se in mfg_entries) if mfg_entries else False
-            }
+            # Step 4: Sales WO
+            if sales_wos:
+                swo = sales_wos[-1]
+                dashboard.append({
+                    "step": 4, "name": "Sales WO",
+                    "status": swo.status,
+                    "doc": self.make_link("Work Order", swo.name),
+                    "complete": swo.status in ["Completed", "In Process"]
+                })
+            else:
+                dashboard.append({"step": 4, "name": "Sales WO", "status": "Not Created", "complete": False})
+
+            # Step 5: Stock Entry (Sales Manufacture)
+            sales_ses = []
+            for swo in sales_wos:
+                ses = frappe.get_all("Stock Entry",
+                    filters={"work_order": swo.name, "stock_entry_type": "Manufacture", "docstatus": 1},
+                    fields=["name"])
+                sales_ses.extend(ses)
+
+            if sales_ses:
+                dashboard.append({
+                    "step": 5, "name": "Stock Entry (Sales)",
+                    "status": "Completed",
+                    "doc": self.make_link("Stock Entry", sales_ses[-1].name),
+                    "complete": True
+                })
+            else:
+                dashboard.append({"step": 5, "name": "Stock Entry (Sales)", "status": "Pending", "complete": False})
 
             # Step 6: Delivery Note
             dns = frappe.get_all("Delivery Note Item",
                 filters={"against_sales_order": so_name, "docstatus": ["!=", 2]},
-                fields=["parent"],
-                distinct=True)
-
-            dn_docs = []
-            for dn in dns:
-                dn_doc = frappe.get_doc("Delivery Note", dn.parent)
-                dn_docs.append({
-                    "name": dn_doc.name,
-                    "link": self.make_link("Delivery Note", dn_doc.name),
-                    "status": dn_doc.status,
-                    "docstatus": dn_doc.docstatus
+                fields=["parent"], distinct=True)
+            if dns:
+                dn_name = dns[-1].parent
+                dn_status = frappe.db.get_value("Delivery Note", dn_name, "docstatus")
+                dashboard.append({
+                    "step": 6, "name": "Delivery Note",
+                    "status": "Submitted" if dn_status == 1 else "Draft",
+                    "doc": self.make_link("Delivery Note", dn_name),
+                    "complete": dn_status == 1
                 })
-
-            status["steps"]["step_6_dn"] = {
-                "step": 6,
-                "name": "Delivery Note",
-                "delivery_notes": dn_docs,
-                "done": any(d["docstatus"] == 1 for d in dn_docs) if dn_docs else False
-            }
+            else:
+                dashboard.append({"step": 6, "name": "Delivery Note", "status": "Not Created", "complete": False})
 
             # Step 7: Sales Invoice
             sis = frappe.get_all("Sales Invoice Item",
                 filters={"sales_order": so_name, "docstatus": ["!=", 2]},
-                fields=["parent"],
-                distinct=True)
-
-            si_docs = []
-            for si in sis:
-                si_doc = frappe.get_doc("Sales Invoice", si.parent)
-                si_docs.append({
-                    "name": si_doc.name,
-                    "link": self.make_link("Sales Invoice", si_doc.name),
-                    "status": si_doc.status,
-                    "grand_total": si_doc.grand_total,
-                    "outstanding": si_doc.outstanding_amount,
-                    "docstatus": si_doc.docstatus
+                fields=["parent"], distinct=True)
+            if sis:
+                si_name = sis[-1].parent
+                si_doc = frappe.get_doc("Sales Invoice", si_name)
+                dashboard.append({
+                    "step": 7, "name": "Sales Invoice",
+                    "status": f"{'Submitted' if si_doc.docstatus == 1 else 'Draft'} (Outstanding: {si_doc.outstanding_amount})",
+                    "doc": self.make_link("Sales Invoice", si_name),
+                    "complete": si_doc.docstatus == 1
                 })
-
-            status["steps"]["step_7_si"] = {
-                "step": 7,
-                "name": "Sales Invoice",
-                "sales_invoices": si_docs,
-                "done": any(s["docstatus"] == 1 for s in si_docs) if si_docs else False
-            }
+            else:
+                dashboard.append({"step": 7, "name": "Sales Invoice", "status": "Not Created", "complete": False})
 
             # Step 8: Payment Entry
-            pe_docs = []
-            for si in si_docs:
+            if sis:
                 pes = frappe.get_all("Payment Entry Reference",
-                    filters={
-                        "reference_doctype": "Sales Invoice",
-                        "reference_name": si["name"],
-                        "docstatus": ["!=", 2]
-                    },
-                    fields=["parent"])
-
-                for pe in pes:
-                    pe_doc = frappe.get_doc("Payment Entry", pe.parent)
-                    pe_docs.append({
-                        "name": pe_doc.name,
-                        "link": self.make_link("Payment Entry", pe_doc.name),
-                        "amount": pe_doc.paid_amount,
-                        "status": "Submitted" if pe_doc.docstatus == 1 else "Draft",
-                        "docstatus": pe_doc.docstatus
+                    filters={"reference_doctype": "Sales Invoice", "reference_name": sis[-1].parent, "docstatus": ["!=", 2]},
+                    fields=["parent"], distinct=True)
+                if pes:
+                    pe_name = pes[-1].parent
+                    pe_status = frappe.db.get_value("Payment Entry", pe_name, "docstatus")
+                    dashboard.append({
+                        "step": 8, "name": "Payment Entry",
+                        "status": "Submitted" if pe_status == 1 else "Draft",
+                        "doc": self.make_link("Payment Entry", pe_name),
+                        "complete": pe_status == 1
                     })
+                else:
+                    dashboard.append({"step": 8, "name": "Payment Entry", "status": "Not Created", "complete": False})
+            else:
+                dashboard.append({"step": 8, "name": "Payment Entry", "status": "Pending (no invoice)", "complete": False})
 
-            status["steps"]["step_8_pe"] = {
-                "step": 8,
-                "name": "Payment Entry",
-                "payment_entries": pe_docs,
-                "done": any(p["docstatus"] == 1 for p in pe_docs) if pe_docs else False
-            }
+            # Build visual dashboard
+            completed_steps = sum(1 for d in dashboard if d["complete"])
+            progress_pct = int((completed_steps / 8) * 100)
 
-            # Overall progress
-            completed = sum(1 for step in status["steps"].values() if step.get("done"))
-            status["progress"] = f"{completed}/8 steps completed"
-            status["next_step"] = self._get_next_step(status["steps"])
+            msg = (
+                f"📊 **Pipeline Dashboard for {self.make_link('Sales Order', so_name)}**\n\n"
+                f"  Customer: {so.customer}\n"
+                f"  Item: {item_code} | Qty: {so.items[0].qty if so.items else 'N/A'}\n"
+                f"  Progress: **{completed_steps}/8 steps** ({progress_pct}%)\n\n"
+                f"| Step | Stage | Status | Document |\n"
+                f"|------|-------|--------|----------|\n"
+            )
+            for d in dashboard:
+                icon = "✅" if d["complete"] else "⏳"
+                doc_link = d.get("doc", "—")
+                msg += f"| {icon} {d['step']} | {d['name']} | {d['status']} | {doc_link} |\n"
 
-            return status
+            # Identify next action
+            for d in dashboard:
+                if not d["complete"]:
+                    msg += f"\n➡️ **Next action:** Step {d['step']} — {d['name']} ({d['status']})"
+                    break
+            else:
+                msg += "\n🎉 **Pipeline complete!**"
+
+            return {"success": True, "dashboard": dashboard, "progress": progress_pct, "message": msg}
 
         except frappe.DoesNotExistError:
-            return {"success": False, "error": f"Sales Order '{so_name}' not found"}
+            return {"success": False, "error": f"Sales Order '{so_name}' not found."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    # ========================================================================
-    # ITEM VALIDATION INTELLIGENCE
-    # ========================================================================
-
-    def validate_item_consistency(self, so_name: str) -> Dict:
-        """
-        Comprehensive validation of a Sales Order's readiness.
-
-        Checks:
-        1. Item-BOM mismatch: WO produces wrong item vs SO expectation
-        2. Stock availability: FG warehouse has enough to fulfill
-        3. BOM existence: items have active BOMs for manufacturing
-        4. Pricing: zero-price detection
-        5. Customer readiness: tax regime for CFDI invoicing
-        6. Linked documents: draft DN/SI that need attention
+    def create_so_from_quotation(self, quotation_name: str) -> Dict:
+        """Create a Sales Order from a Quotation (pre-Step 3).
+        
+        Args:
+            quotation_name: Quotation name (e.g. 'SAL-QTN-2024-00752')
+        
+        Returns:
+            Dict with created SO details
         """
         try:
-            so = frappe.get_doc("Sales Order", so_name)
+            qt = frappe.get_doc("Quotation", quotation_name)
 
-            issues = []
-            checks_passed = []
+            if qt.docstatus != 1:
+                return {"success": False, "error": f"Quotation '{quotation_name}' must be submitted first."}
 
-            # --- Check 1: Item-level validation ---
-            for item in so.items:
-                # Stock availability
-                available = flt(frappe.db.get_value("Bin",
-                    {"item_code": item.item_code, "warehouse": item.warehouse},
-                    "actual_qty") or 0)
+            if qt.status == "Ordered":
+                return {
+                    "success": True,
+                    "message": f"✅ Quotation {self.make_link('Quotation', quotation_name)} is already ordered."
+                }
 
-                if available >= item.qty:
-                    checks_passed.append(
-                        f"✅ Stock OK: {item.item_code} — "
-                        f"{available:.0f} available, {item.qty:.0f} needed")
-                else:
-                    deficit = flt(item.qty) - available
-                    issues.append({
-                        "type": "insufficient_stock",
-                        "severity": "MEDIUM",
-                        "icon": "📦",
-                        "message": (
-                            f"Item {item.item_code}: {available:.0f} in stock, "
-                            f"need {item.qty:.0f} (short {deficit:.0f})"),
-                        "recommendation": (
-                            f"Create Work Order: "
-                            f"`@ai create work order {item.item_code} {int(deficit)} Kg`")
-                    })
-
-                # BOM existence
-                has_bom = frappe.db.exists("BOM", {
-                    "item": item.item_code, "is_active": 1, "docstatus": 1})
-                if has_bom:
-                    checks_passed.append(f"✅ BOM exists for {item.item_code}")
-                else:
-                    issues.append({
-                        "type": "no_bom",
-                        "severity": "HIGH",
-                        "icon": "🛑",
-                        "message": (
-                            f"No active BOM for item {item.item_code} "
-                            f"— cannot manufacture"),
-                        "recommendation": (
-                            "Create and submit a BOM before creating Work Orders")
-                    })
-
-                # Zero price
-                if flt(item.rate) == 0:
-                    issues.append({
-                        "type": "zero_price",
-                        "severity": "HIGH",
-                        "icon": "💰",
-                        "message": (
-                            f"Item {item.item_code} has $0.00 rate "
-                            f"— revenue will be zero"),
-                        "recommendation": (
-                            "Check Item Price list or linked Quotation "
-                            "for correct pricing")
-                    })
-                else:
-                    checks_passed.append(
-                        f"✅ Pricing OK: {item.item_code} @ "
-                        f"{so.currency} {flt(item.rate):,.2f}")
-
-                # WO item mismatch
-                wos = frappe.get_all("Work Order",
-                    filters={
-                        "sales_order": so_name,
-                        "production_item": item.item_code,
-                        "docstatus": ["!=", 2]},
-                    fields=["name", "production_item", "bom_no"])
-
-                for wo in wos:
-                    bom_item = frappe.db.get_value("BOM", wo.bom_no, "item")
-                    if bom_item and bom_item != item.item_code:
-                        issues.append({
-                            "type": "item_mismatch",
-                            "severity": "CRITICAL",
-                            "icon": "⛔",
-                            "message": (
-                                f"WO {wo.name} BOM produces '{bom_item}' "
-                                f"but SO expects '{item.item_code}'"),
-                            "recommendation": (
-                                f"Fix BOM on {wo.name} or create new WO "
-                                f"with correct BOM")
-                        })
-
-            # --- Check 2: Customer readiness for invoicing ---
-            customer = frappe.get_doc("Customer", so.customer)
-            tax_regime = customer.get("mx_tax_regime") or ""
-            if tax_regime:
-                checks_passed.append(
-                    f"✅ Customer tax regime: {tax_regime}")
-            else:
-                issues.append({
-                    "type": "missing_tax_regime",
-                    "severity": "MEDIUM",
-                    "icon": "📋",
-                    "message": (
-                        f"Customer {so.customer} has no SAT tax regime "
-                        f"— CFDI invoice will fail"),
-                    "recommendation": (
-                        "Set mx_tax_regime on Customer record "
-                        "(e.g., 601 for General de Ley)")
-                })
-
-            # --- Check 3: Document consistency ---
-            draft_dns = frappe.get_all("Delivery Note Item",
-                filters={"against_sales_order": so_name, "docstatus": 0},
-                fields=["parent"], group_by="parent")
-            if draft_dns:
-                issues.append({
-                    "type": "draft_dn",
-                    "severity": "LOW",
-                    "icon": "📝",
-                    "message": (
-                        f"{len(draft_dns)} draft Delivery Note(s) "
-                        f"pending submission"),
-                    "recommendation": (
-                        "Review and submit draft DNs before invoicing")
-                })
-
-            draft_sis = frappe.get_all("Sales Invoice Item",
-                filters={"sales_order": so_name, "docstatus": 0},
-                fields=["parent"], group_by="parent")
-            if draft_sis:
-                si_names = [si.parent for si in draft_sis]
-                issues.append({
-                    "type": "draft_si",
-                    "severity": "LOW",
-                    "icon": "📝",
-                    "message": (
-                        f"Draft Sales Invoice(s): "
-                        f"{', '.join(si_names)}"),
-                    "recommendation": (
-                        "Review and submit to proceed to payment")
-                })
-
-            # --- Build rich response ---
-            severity_order = {
-                "CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-            issues.sort(key=lambda x: severity_order.get(
-                x.get("severity", "LOW"), 9))
-
-            lines = [f"## Validation Report: {so_name}\n"]
-            lines.append(
-                f"Customer: {so.customer} | "
-                f"{so.currency} {flt(so.grand_total):,.2f} | "
-                f"Status: {so.status}\n")
-
-            if issues:
-                lines.append(
-                    f"### \u26a0\ufe0f {len(issues)} Issue(s) Found\n")
-                for issue in issues:
-                    icon = issue.get("icon", "\u26a0\ufe0f")
-                    lines.append(
-                        f"{icon} **[{issue['severity']}]** "
-                        f"{issue['message']}")
-                    if issue.get("recommendation"):
-                        lines.append(
-                            f"   \u2192 {issue['recommendation']}")
-                    lines.append("")
-            else:
-                lines.append(
-                    "### \u2705 All Checks Passed\n")
-
-            if checks_passed:
-                lines.append("### Passed Checks\n")
-                for check in checks_passed:
-                    lines.append(check)
+            from erpnext.selling.doctype.quotation.quotation import make_sales_order
+            so = make_sales_order(quotation_name)
+            so.insert(ignore_permissions=True)
+            frappe.db.commit()
 
             return {
                 "success": True,
-                "sales_order": so_name,
-                "issues": issues,
-                "checks_passed": checks_passed,
-                "is_valid": len(issues) == 0,
-                "message": "\n".join(lines)
+                "so_name": so.name,
+                "link": self.make_link("Sales Order", so.name),
+                "message": (
+                    f"✅ Sales Order created from Quotation:\n\n"
+                    f"  Quotation: {self.make_link('Quotation', quotation_name)}\n"
+                    f"  Sales Order: {self.make_link('Sales Order', so.name)}\n"
+                    f"  Customer: {so.customer}\n"
+                    f"  Grand Total: {so.grand_total} {so.currency}"
+                )
             }
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Quotation '{quotation_name}' not found."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    # ========================================================================
-    # INTERNAL PIPELINE EXECUTION
-    # ========================================================================
-
-    def _step_0_quotation_to_so(self, quotation_name: str, dry_run: bool, confirm: bool) -> Dict:
-        """Convert Quotation to Sales Order"""
-        if dry_run:
-            return {
-                "step": 0,
-                "name": "Quotation → Sales Order",
-                "status": "would_execute",
-                "message": f"Would create SO from {quotation_name}"
-            }
-
-        from raven_ai_agent.api.workflows import WorkflowExecutor
-        executor = WorkflowExecutor(self.user, dry_run=dry_run)
-        result = executor.create_sales_order_from_quotation(quotation_name, confirm=confirm)
-
-        return {
-            "step": 0,
-            "name": "Quotation → Sales Order",
-            **result
-        }
-
-    def _execute_pipeline(self, so_name: str, state: Dict, dry_run: bool) -> List[Dict]:
-        """Execute pipeline steps based on current state"""
-        results = []
-        steps = state.get("steps", {})
-
-        # Step 3: Submit SO if not done
-        if not steps.get("step_3_so", {}).get("done"):
-            if dry_run:
-                results.append({"step": 3, "name": "Submit SO", "status": "would_execute"})
-            else:
-                from raven_ai_agent.api.workflows import WorkflowExecutor
-                executor = WorkflowExecutor(self.user)
-                result = executor.submit_sales_order(so_name, confirm=True)
-                results.append({"step": 3, "name": "Submit SO", **result, "status": "executed"})
-        else:
-            results.append({"step": 3, "name": "Submit SO", "status": "already_done"})
-
-        # Step 1: Create Manufacturing WO (mix level) if needed
-        if not steps.get("step_1_mfg_wo", {}).get("done"):
-            if dry_run:
-                results.append({"step": 1, "name": "Manufacturing WO", "status": "would_execute"})
-            else:
-                result = self.manufacturing.create_work_order_from_so(
-                    so_name, bom_level="mix", confirm=True)
-                results.append({"step": 1, "name": "Manufacturing WO", **result, "status": "executed"})
-        else:
-            results.append({"step": 1, "name": "Manufacturing WO", "status": "already_done"})
-
-        # Steps 2, 4, 5, 6, 7, 8 follow similar pattern...
-        # (Each checks state and executes or skips)
-
-        # Step 4: Create Sales WO
-        if not steps.get("step_4_sales_wo", {}).get("done"):
-            if dry_run:
-                results.append({"step": 4, "name": "Sales WO", "status": "would_execute"})
-            else:
-                result = self.manufacturing.create_work_order_from_so(
-                    so_name, bom_level="sales", confirm=True)
-                results.append({"step": 4, "name": "Sales WO", **result, "status": "executed"})
-        else:
-            results.append({"step": 4, "name": "Sales WO", "status": "already_done"})
-
-        # Step 6: Delivery Note
-        if not steps.get("step_6_dn", {}).get("done"):
-            # Check inventory first
-            validation = self.validate_item_consistency(so_name)
-            if validation.get("is_valid"):
-                if dry_run:
-                    results.append({"step": 6, "name": "Delivery Note", "status": "would_execute"})
-                else:
-                    result = self.sales.create_delivery_note(so_name, confirm=True)
-                    results.append({"step": 6, "name": "Delivery Note", **result, "status": "executed"})
-            else:
-                results.append({
-                    "step": 6,
-                    "name": "Delivery Note",
-                    "status": "blocked",
-                    "reason": "Item validation failed",
-                    "issues": validation.get("issues", [])
-                })
-        else:
-            results.append({"step": 6, "name": "Delivery Note", "status": "already_done"})
-
-        # Step 7: Sales Invoice
-        if not steps.get("step_7_si", {}).get("done"):
-            if dry_run:
-                results.append({"step": 7, "name": "Sales Invoice", "status": "would_execute"})
-            else:
-                result = self.sales.create_sales_invoice(so_name, confirm=True)
-                results.append({"step": 7, "name": "Sales Invoice", **result, "status": "executed"})
-        else:
-            results.append({"step": 7, "name": "Sales Invoice", "status": "already_done"})
-
-        # Step 8: Payment Entry
-        if not steps.get("step_8_pe", {}).get("done"):
-            if dry_run:
-                results.append({"step": 8, "name": "Payment Entry", "status": "would_execute"})
-            else:
-                # Get the SI name from step 7
-                si_docs = steps.get("step_7_si", {}).get("sales_invoices", [])
-                if si_docs:
-                    result = self.payment.create_payment_entry(si_docs[0]["name"], confirm=True)
-                    results.append({"step": 8, "name": "Payment Entry", **result, "status": "executed"})
-                else:
-                    results.append({"step": 8, "name": "Payment Entry", "status": "blocked",
-                                    "reason": "No Sales Invoice found"})
-        else:
-            results.append({"step": 8, "name": "Payment Entry", "status": "already_done"})
-
-        return results
-
-    def _get_next_step(self, steps: Dict) -> Dict:
-        """Determine the next step to execute"""
-        step_order = [
-            ("step_3_so", 3, "Submit Sales Order"),
-            ("step_1_mfg_wo", 1, "Create Manufacturing Work Order"),
-            ("step_4_sales_wo", 4, "Create Sales Work Order"),
-            ("step_2_manufacture", 2, "Create Manufacture Stock Entry"),
-            ("step_6_dn", 6, "Create Delivery Note"),
-            ("step_7_si", 7, "Create Sales Invoice"),
-            ("step_8_pe", 8, "Create Payment Entry"),
-        ]
-
-        for key, step_num, description in step_order:
-            if not steps.get(key, {}).get("done"):
-                return {"step": step_num, "description": description}
-
-        return {"step": None, "description": "All steps completed ✅"}
-
-    def _build_pipeline_preview(self, so_name: str, state: Dict) -> str:
-        """Build a human-readable preview of planned actions"""
-        lines = [f"## Pipeline Preview for {so_name}\n"]
-
-        steps = state.get("steps", {})
-        step_labels = [
-            ("step_3_so", "Step 3: Submit SO"),
-            ("step_1_mfg_wo", "Step 1: Manufacturing WO"),
-            ("step_2_manufacture", "Step 2: Manufacture SE"),
-            ("step_4_sales_wo", "Step 4: Sales WO"),
-            ("step_6_dn", "Step 6: Delivery Note"),
-            ("step_7_si", "Step 7: Sales Invoice"),
-            ("step_8_pe", "Step 8: Payment Entry"),
-        ]
-
-        for key, label in step_labels:
-            done = steps.get(key, {}).get("done", False)
-            icon = "✅" if done else "⏳"
-            lines.append(f"{icon} {label}")
-
-        next_step = state.get("next_step", {})
-        if next_step.get("step"):
-            lines.append(f"\n**Next:** {next_step['description']}")
-        else:
-            lines.append("\n**All steps completed!**")
-
-        lines.append(f"\n⚠️ **Confirm?** Reply: `@ai confirm run full cycle {so_name}`")
-        return "\n".join(lines)
-
-    def _build_summary(self, so_name: str, result: Dict) -> str:
-        """Build execution summary"""
-        completed = result.get("completed_steps", 0)
-        total = result.get("total_steps", 8)
-        mode = result.get("mode", "execute")
-
-        lines = [f"## Pipeline {'Analysis' if mode == 'dry_run' else 'Execution'} for {so_name}\n"]
-        lines.append(f"Progress: {completed}/{total} steps")
-
-        for step in result.get("steps", []):
-            icon = {"already_done": "✅", "executed": "🔄", "would_execute": "⏳",
-                     "blocked": "🚫"}.get(step.get("status"), "❓")
-            lines.append(f"{icon} Step {step.get('step', '?')}: {step.get('name', '')} — {step.get('status', '')}")
-
-        if result.get("errors"):
-            lines.append(f"\n⚠️ Errors: {', '.join(result['errors'])}")
-
-        return "\n".join(lines)
-
-    # ========================================================================
-    # COMMAND HANDLER
-    # ========================================================================
+    # ========== MAIN COMMAND HANDLER ==========
 
     def process_command(self, message: str) -> str:
-        """Process orchestrator commands"""
+        """Process incoming Raven command and return formatted response.
+        
+        Commands:
+            @workflow run [SO-NAME]
+            @workflow run [SO-NAME] mfg-bom [BOM] sales-bom [BOM]
+            @workflow run [SO-NAME] skip [1,2]
+            @workflow status [SO-NAME]
+            @workflow create so from [QTN-NAME]
+            @workflow help
+        """
         message_lower = message.lower().strip()
 
-        import re
-
-        # Extract SO name — supports both "SO-00752" (short) and "SO-00752-LEGOSAN AB" (full)
-        so_pattern = r'(SO-\d+(?:-[\w\s]+)?|SAL-ORD-\d+-\d+)'
+        # Extract document names
+        so_pattern = r'(SO-[\w-]+|SAL-ORD-[\d-]+)'
         so_match = re.search(so_pattern, message, re.IGNORECASE)
-        so_name = so_match.group(1).strip() if so_match else None
+        so_name = so_match.group(1) if so_match else None
 
-        # If short SO reference (no customer suffix), resolve to full name
-        if so_name and re.match(r'^SO-\d+$', so_name):
-            matches = frappe.get_all("Sales Order", filters={"name": ["like", f"{so_name}%"]}, limit=1, pluck="name")
-            if matches:
-                so_name = matches[0]
-
-        # Extract Quotation name
-        qtn_pattern = r'(SAL-QTN-\d+-\d+|QTN-\d+)'
+        qtn_pattern = r'(SAL-QTN-[\d-]+|QTN-[\d-]+)'
         qtn_match = re.search(qtn_pattern, message, re.IGNORECASE)
         qtn_name = qtn_match.group(1) if qtn_match else None
 
-        confirm = "confirm" in message_lower or message.startswith("!")
+        # ---- HELP ----
+        if "help" in message_lower or "capabilities" in message_lower:
+            return self._help_text()
 
-        if "full cycle" in message_lower or "run pipeline" in message_lower:
-            dry_run = "dry" in message_lower or "preview" in message_lower
-            result = self.run_full_cycle(
-                so_name=so_name,
-                quotation_name=qtn_name,
-                dry_run=dry_run,
-                confirm=confirm
-            )
-        elif "status" in message_lower or "dashboard" in message_lower or "pipeline" in message_lower:
-            if so_name:
-                result = self.get_pipeline_status(so_name)
+        # ---- RUN FULL CYCLE ----
+        if "run" in message_lower and so_name:
+            mfg_bom_match = re.search(r'mfg[_-]?bom\s+(BOM-[\w-]+)', message, re.IGNORECASE)
+            sales_bom_match = re.search(r'sales[_-]?bom\s+(BOM-[\w-]+)', message, re.IGNORECASE)
+            skip_match = re.search(r'skip\s+\[?([\d,\s]+)\]?', message, re.IGNORECASE)
+
+            mfg_bom = mfg_bom_match.group(1) if mfg_bom_match else None
+            sales_bom = sales_bom_match.group(1) if sales_bom_match else None
+            skip_steps = [int(s.strip()) for s in skip_match.group(1).split(",")] if skip_match else None
+
+            result = self.run_full_cycle(so_name, mfg_bom=mfg_bom,
+                                         sales_bom=sales_bom, skip_steps=skip_steps)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- PIPELINE STATUS ----
+        if ("status" in message_lower or "dashboard" in message_lower
+                or "pipeline" in message_lower) and so_name:
+            result = self.get_pipeline_status(so_name)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- CREATE SO FROM QUOTATION ----
+        if "create" in message_lower and "so" in message_lower and qtn_name:
+            result = self.create_so_from_quotation(qtn_name)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- FALLBACK ----
+        return self._help_text()
+
+    def _build_pipeline_response(self, results: List[Dict], state: Dict) -> Dict:
+        """Build formatted response from pipeline execution results"""
+        completed = [r for r in results if r.get("success")]
+        failed = [r for r in results if not r.get("success") and not r.get("skipped")]
+        skipped = [r for r in results if r.get("skipped")]
+
+        msg = f"🔄 **Workflow Execution for {self.make_link('Sales Order', state['so_name'])}**\n\n"
+
+        for r in results:
+            step = r.get("step", "?")
+            if r.get("skipped"):
+                msg += f"⏭️ Step {step}: Skipped\n"
+            elif r.get("success"):
+                msg += f"✅ Step {step}: {r.get('message', 'OK')[:80]}\n"
             else:
-                result = {"success": False, "error": "Please specify a Sales Order"}
-        elif "validate" in message_lower:
-            if so_name:
-                result = self.validate_item_consistency(so_name)
-            else:
-                result = {"success": False, "error": "Please specify a Sales Order to validate"}
-        else:
-            result = {
-                "success": True,
-                "message": (
-                    "**Workflow Orchestrator Commands:**\n\n"
-                    "- `@ai pipeline status SO-00752` — Show pipeline dashboard\n"
-                    "- `@ai run full cycle SO-00752` — Execute full pipeline\n"
-                    "- `@ai dry run full cycle SO-00752` — Preview without executing\n"
-                    "- `@ai validate SO-00752` — Check item consistency\n"
-                    "- `@ai run full cycle from SAL-QTN-2024-00001` — Start from Quotation"
-                )
-            }
+                msg += f"❌ Step {step}: {r.get('error', 'Failed')[:80]}\n"
 
-        return self._format_response(result)
+        msg += f"\n📊 Completed: {len(completed)} | Failed: {len(failed)} | Skipped: {len(skipped)}"
 
-    def _format_response(self, result: Dict) -> str:
-        """Format result dict into readable response"""
-        if result.get("requires_confirmation"):
-            return result["preview"]
-        if not result.get("success"):
-            return f"❌ {result.get('error', 'Unknown error')}"
-        if result.get("message"):
-            return result["message"]
-        return str(result)
+        success = len(failed) == 0
+        return {"success": success, "results": results, "state": state, "message": msg}
+
+    def _help_text(self) -> str:
+        return (
+            "🔄 **Workflow Orchestrator — Commands**\n\n"
+            "**Full Cycle**\n"
+            "`@workflow run [SO-NAME]` — Execute all 8 steps\n"
+            "`@workflow run [SO-NAME] mfg-bom [BOM] sales-bom [BOM]` — With specific BOMs\n"
+            "`@workflow run [SO-NAME] skip [1,2]` — Skip completed steps\n\n"
+            "**Status**\n"
+            "`@workflow status [SO-NAME]` — Pipeline dashboard\n"
+            "`@workflow dashboard [SO-NAME]` — Same as status\n\n"
+            "**Pre-workflow**\n"
+            "`@workflow create so from [QTN-NAME]` — Create SO from Quotation\n\n"
+            "**The 8 Steps:**\n"
+            "```\n"
+            "1. Manufacturing WO (create + submit)\n"
+            "2. Stock Entry — Manufacture\n"
+            "3. Sales Order — Submit\n"
+            "4. Sales WO (from SO, labeling)\n"
+            "5. Stock Entry — Manufacture (Sales)\n"
+            "6. Delivery Note\n"
+            "7. Sales Invoice (CFDI G03)\n"
+            "8. Payment Entry\n"
+            "```\n\n"
+            "**Example**\n"
+            "```\n"
+            "@workflow run SO-00752-LEGOSAN AB mfg-bom BOM-0307-005 sales-bom BOM-0307-001\n"
+            "@workflow status SO-00752-LEGOSAN AB\n"
+            "```"
+        )

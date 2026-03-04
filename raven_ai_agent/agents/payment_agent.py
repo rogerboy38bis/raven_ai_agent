@@ -1,27 +1,32 @@
 """
-Payment Agent - Payment Entry Creation & Reconciliation
-Handles Step 8 of the 8-step fulfillment workflow:
-  Step 8: Create Payment Entry from Sales Invoice
+Payment AI Agent
+Handles Payment Entry creation and reconciliation from Sales Invoices.
 
-IMPORTANT: Frappe Server Script compatible module.
-- Uses frappe.call() patterns
-- Designed for raven_ai_agent (Frappe app)
+Covers Workflow Step 8:
+  Step 8: Payment Entry from Sales Invoice
 
-Based on verified 8-step workflow:
-  SO → WO → SE (Manufacture) → DN → SI → PE
+Key Intelligence:
+  - Creates Payment Entry from submitted Sales Invoice
+  - Handles multi-currency (USD sales with MXN company)
+  - Reconciles Payment Entry with Sales Invoice
+  - Tracks outstanding amounts
+  - CFDI compliance awareness
+
+Author: raven_ai_agent
 """
 import frappe
+import re
 from typing import Dict, List, Optional
-from frappe.utils import nowdate, flt
+from frappe.utils import nowdate, getdate, flt
 
 
 class PaymentAgent:
-    """AI Agent for Payment Entry creation and reconciliation"""
+    """AI Agent for payment operations: Payment Entries and reconciliation"""
 
-    PAYMENT_STATUS_FLOW = {
+    PAYMENT_STATUS_MAP = {
         "Draft": "Submit the Payment Entry",
-        "Submitted": "Payment recorded — reconcile with invoice",
-        "Cancelled": "Payment cancelled — no action"
+        "Submitted": "Payment recorded — verify bank reconciliation",
+        "Cancelled": "Payment was cancelled — no action needed"
     }
 
     def __init__(self, user: str = None):
@@ -29,214 +34,197 @@ class PaymentAgent:
         self.site_name = frappe.local.site
 
     def make_link(self, doctype: str, name: str) -> str:
-        """Generate clickable markdown link"""
+        """Generate clickable markdown link for ERPNext documents"""
         slug = doctype.lower().replace(" ", "-")
         return f"[{name}](https://{self.site_name}/app/{slug}/{name})"
 
-    # ========================================================================
-    # STEP 8: CREATE PAYMENT ENTRY FROM SALES INVOICE
-    # ========================================================================
+    # ========== PAYMENT ENTRY OPERATIONS (Step 8) ==========
 
-    def create_payment_entry(
-        self,
-        si_name: str,
-        mode_of_payment: str = "Wire Transfer",
-        confirm: bool = False
-    ) -> Dict:
-        """
-        Create Payment Entry from a Sales Invoice.
-
-        Handles:
-        - Multi-currency (USD invoices for MXN company)
-        - CFDI compliance fields
-        - Auto-detection of bank accounts
-
+    def create_payment_entry(self, si_name: str, amount: float = None,
+                             mode_of_payment: str = None) -> Dict:
+        """Create a Payment Entry from a Sales Invoice.
+        
         Args:
             si_name: Sales Invoice name
-            mode_of_payment: Payment method (default: Wire Transfer)
-            confirm: If False, returns preview
-
+            amount: Payment amount. If None, uses full outstanding amount.
+            mode_of_payment: Mode of payment (e.g. 'Wire Transfer', 'Cash')
+        
         Returns:
-            Dict with payment_entry name and details
+            Dict with Payment Entry details
         """
         try:
             si = frappe.get_doc("Sales Invoice", si_name)
 
             if si.docstatus != 1:
-                return {"success": False, "error": f"Sales Invoice {si_name} must be submitted first"}
+                return {"success": False, "error": f"Sales Invoice '{si_name}' must be submitted first."}
 
-            if si.outstanding_amount <= 0:
+            if flt(si.outstanding_amount) <= 0:
                 return {
                     "success": True,
-                    "message": f"Sales Invoice {si_name} is already fully paid (outstanding: {si.outstanding_amount})"
+                    "message": f"✅ Sales Invoice {self.make_link('Sales Invoice', si_name)} is already fully paid."
                 }
 
-            # Check for existing payment
-            existing_pe = frappe.db.get_value("Payment Entry Reference", {
-                "reference_doctype": "Sales Invoice",
-                "reference_name": si_name,
-                "docstatus": ["!=", 2]
-            }, "parent")
+            payment_amount = flt(amount) if amount else flt(si.outstanding_amount)
 
-            if existing_pe:
-                pe_doc = frappe.get_doc("Payment Entry", existing_pe)
-                if pe_doc.docstatus == 1:
-                    return {
-                        "success": True,
-                        "message": f"Payment Entry already exists: {existing_pe}",
-                        "payment_entry": existing_pe,
-                        "link": self.make_link("Payment Entry", existing_pe)
-                    }
-
-            if not confirm:
+            if payment_amount > flt(si.outstanding_amount):
                 return {
-                    "success": True,
-                    "requires_confirmation": True,
-                    "preview": (
-                        f"**Create Payment Entry for {si_name}?**\n\n"
-                        f"| Field | Value |\n|-------|-------|\n"
-                        f"| Customer | {si.customer} |\n"
-                        f"| Invoice Total | {si.currency} {si.grand_total:,.2f} |\n"
-                        f"| Outstanding | {si.currency} {si.outstanding_amount:,.2f} |\n"
-                        f"| Mode of Payment | {mode_of_payment} |\n\n"
-                        f"⚠️ **Confirm?** Reply: `@ai confirm create payment for {si_name}`"
+                    "success": False,
+                    "error": (
+                        f"Payment amount ({payment_amount}) exceeds outstanding "
+                        f"({si.outstanding_amount}) on {si_name}."
                     )
                 }
 
-            # Use ERPNext's built-in method
+            # Use ERPNext's built-in Payment Entry creation
             from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 
-            pe = get_payment_entry("Sales Invoice", si_name)
-            pe.mode_of_payment = mode_of_payment
+            pe = get_payment_entry("Sales Invoice", si_name, party_amount=payment_amount)
+
+            if mode_of_payment:
+                pe.mode_of_payment = mode_of_payment
+
+            pe.reference_no = f"PAY-{si_name}"
             pe.reference_date = nowdate()
 
-            # Set paid amount to outstanding
-            pe.paid_amount = flt(si.outstanding_amount)
-            pe.received_amount = flt(si.outstanding_amount)
-
-            # Handle multi-currency
-            if si.currency != frappe.defaults.get_defaults().get("currency", "MXN"):
-                # For USD invoices on MXN company
-                exchange_rate = si.conversion_rate or 1
-                pe.source_exchange_rate = exchange_rate
-                pe.paid_amount = flt(si.outstanding_amount)
-                pe.received_amount = flt(si.outstanding_amount * exchange_rate)
-
-            # Auto-detect bank account
-            bank_account = self._get_bank_account(si.company, mode_of_payment)
-            if bank_account:
-                pe.paid_to = bank_account
-
-            pe.flags.ignore_permissions = True
-            pe.insert()
+            pe.insert(ignore_permissions=True)
             frappe.db.commit()
 
             return {
                 "success": True,
-                "action": "created",
-                "payment_entry": pe.name,
+                "pe_name": pe.name,
                 "link": self.make_link("Payment Entry", pe.name),
-                "sales_invoice": si_name,
-                "amount": pe.paid_amount,
-                "currency": si.currency,
-                "mode_of_payment": mode_of_payment,
-                "status": "Draft",
                 "message": (
-                    f"✅ Payment Entry **{pe.name}** created for {si_name}\n"
-                    f"Amount: {si.currency} {pe.paid_amount:,.2f}\n"
-                    f"Review and submit to record payment."
+                    f"✅ Payment Entry created: {self.make_link('Payment Entry', pe.name)}\n\n"
+                    f"  Sales Invoice: {self.make_link('Sales Invoice', si_name)}\n"
+                    f"  Customer: {si.customer}\n"
+                    f"  Amount: {payment_amount} {si.currency}\n"
+                    f"  Outstanding After: {flt(si.outstanding_amount) - payment_amount}\n"
+                    f"  Status: Draft\n\n"
+                    f"💡 Review and submit: `@payment submit {pe.name}`"
                 )
             }
-        except Exception as e:
-            frappe.log_error(f"PaymentAgent.create_payment_entry error: {str(e)}")
-            return {"success": False, "error": str(e)}
 
-    def submit_payment_entry(self, pe_name: str, confirm: bool = False) -> Dict:
-        """Submit a Payment Entry"""
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Invoice '{si_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": f"Error creating Payment Entry: {str(e)}"}
+
+    def submit_payment_entry(self, pe_name: str) -> Dict:
+        """Submit a Payment Entry.
+        
+        Args:
+            pe_name: Payment Entry name
+        
+        Returns:
+            Dict with submission status
+        """
         try:
             pe = frappe.get_doc("Payment Entry", pe_name)
 
             if pe.docstatus == 1:
-                return {"success": True, "message": f"Payment Entry {pe_name} is already submitted"}
-
-            if pe.docstatus == 2:
-                return {"success": False, "error": f"Payment Entry {pe_name} is cancelled"}
-
-            if not confirm:
                 return {
                     "success": True,
-                    "requires_confirmation": True,
-                    "preview": (
-                        f"**Submit Payment Entry {pe_name}?**\n\n"
-                        f"| Field | Value |\n|-------|-------|\n"
-                        f"| Party | {pe.party} |\n"
-                        f"| Amount | {pe.paid_amount:,.2f} |\n"
-                        f"| Mode | {pe.mode_of_payment} |\n\n"
-                        f"⚠️ This will record the payment against the invoice."
-                    )
+                    "message": f"✅ Payment Entry {self.make_link('Payment Entry', pe_name)} is already submitted."
                 }
+            if pe.docstatus == 2:
+                return {"success": False, "error": f"Payment Entry {pe_name} is cancelled."}
 
-            pe.flags.ignore_permissions = True
             pe.submit()
             frappe.db.commit()
 
             return {
                 "success": True,
-                "action": "submitted",
-                "payment_entry": pe_name,
-                "link": self.make_link("Payment Entry", pe_name),
-                "message": f"✅ Payment Entry **{pe_name}** submitted"
+                "pe_name": pe.name,
+                "link": self.make_link("Payment Entry", pe.name),
+                "message": (
+                    f"✅ Payment Entry submitted: {self.make_link('Payment Entry', pe.name)}\n\n"
+                    f"  Party: {pe.party_name}\n"
+                    f"  Amount: {pe.paid_amount} {pe.paid_from_account_currency}\n"
+                    f"  Mode: {pe.mode_of_payment or 'Not set'}\n"
+                    f"  Reference: {pe.reference_no or 'N/A'}"
+                )
             }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Payment Entry '{pe_name}' not found."}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Error submitting Payment Entry: {str(e)}"}
 
     def reconcile_payment(self, pe_name: str) -> Dict:
-        """
-        Check reconciliation status of a Payment Entry.
-        Verifies that the PE is properly linked to its Sales Invoice
-        and that the invoice outstanding amount reflects the payment.
+        """Check reconciliation status of a Payment Entry against its Sales Invoice(s).
+        
+        Args:
+            pe_name: Payment Entry name
+        
+        Returns:
+            Dict with reconciliation details
         """
         try:
             pe = frappe.get_doc("Payment Entry", pe_name)
 
             if pe.docstatus != 1:
-                return {"success": False, "error": f"Payment Entry {pe_name} must be submitted first"}
+                return {"success": False, "error": f"Payment Entry '{pe_name}' must be submitted first."}
 
-            reconciliation_status = []
+            references = []
             for ref in pe.references:
                 if ref.reference_doctype == "Sales Invoice":
                     si = frappe.get_doc("Sales Invoice", ref.reference_name)
-                    reconciliation_status.append({
+                    references.append({
                         "invoice": ref.reference_name,
                         "invoice_link": self.make_link("Sales Invoice", ref.reference_name),
                         "allocated_amount": ref.allocated_amount,
-                        "outstanding_after": si.outstanding_amount,
-                        "is_paid": si.outstanding_amount <= 0,
-                        "status": "✅ Paid" if si.outstanding_amount <= 0 else f"⚠️ Outstanding: {si.outstanding_amount:,.2f}"
+                        "outstanding": si.outstanding_amount,
+                        "fully_paid": flt(si.outstanding_amount) <= 0
                     })
 
-            all_reconciled = all(r["is_paid"] for r in reconciliation_status) if reconciliation_status else False
+            all_reconciled = all(r["fully_paid"] for r in references) if references else False
+
+            msg = f"🔄 **Reconciliation for {self.make_link('Payment Entry', pe_name)}**\n\n"
+            msg += f"  Paid Amount: {pe.paid_amount} {pe.paid_from_account_currency}\n"
+            msg += f"  Party: {pe.party_name}\n\n"
+
+            if references:
+                msg += "| Invoice | Allocated | Outstanding | Status |\n"
+                msg += "|---------|-----------|-------------|--------|\n"
+                for ref in references:
+                    status = "✅ Paid" if ref["fully_paid"] else f"⏳ {ref['outstanding']} remaining"
+                    msg += (
+                        f"| {ref['invoice_link']} | {ref['allocated_amount']} | "
+                        f"{ref['outstanding']} | {status} |\n"
+                    )
+            else:
+                msg += "⚠️ No invoice references found on this Payment Entry.\n"
+
+            msg += f"\n{'✅ Fully reconciled' if all_reconciled else '⏳ Partially reconciled or unreconciled'}"
 
             return {
                 "success": True,
-                "payment_entry": pe_name,
-                "link": self.make_link("Payment Entry", pe_name),
-                "fully_reconciled": all_reconciled,
-                "references": reconciliation_status,
-                "message": (
-                    f"Payment {pe_name} is {'✅ fully reconciled' if all_reconciled else '⚠️ partially reconciled'}"
-                )
+                "reconciled": all_reconciled,
+                "references": references,
+                "message": msg
             }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Payment Entry '{pe_name}' not found."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def get_unpaid_invoices(self, customer: str = None, limit: int = 20) -> Dict:
-        """List unpaid Sales Invoices"""
+    # ========== STATUS & TRACKING ==========
+
+    def get_outstanding_invoices(self, customer: str = None, limit: int = 20) -> Dict:
+        """Get list of outstanding (unpaid) Sales Invoices.
+        
+        Args:
+            customer: Filter by customer name. If None, shows all.
+            limit: Max results to return.
+        
+        Returns:
+            Dict with outstanding invoices
+        """
         try:
             filters = {
                 "docstatus": 1,
-                "outstanding_amount": [">", 0],
-                "status": ["in", ["Unpaid", "Overdue", "Partly Paid"]]
+                "outstanding_amount": [">", 0]
             }
             if customer:
                 filters["customer"] = customer
@@ -244,103 +232,152 @@ class PaymentAgent:
             invoices = frappe.get_all("Sales Invoice",
                 filters=filters,
                 fields=["name", "customer", "grand_total", "outstanding_amount",
-                         "currency", "due_date", "status"],
+                         "currency", "posting_date", "due_date"],
                 order_by="due_date asc",
                 limit=limit)
+
+            if not invoices:
+                msg = "✅ No outstanding invoices found."
+                if customer:
+                    msg += f" (Customer: {customer})"
+                return {"success": True, "count": 0, "message": msg}
+
+            total_outstanding = sum(flt(inv.outstanding_amount) for inv in invoices)
+
+            msg = f"💰 **Outstanding Invoices** ({len(invoices)} found)\n\n"
+            msg += "| Invoice | Customer | Total | Outstanding | Currency | Due Date |\n"
+            msg += "|---------|----------|-------|-------------|----------|----------|\n"
+            for inv in invoices:
+                msg += (
+                    f"| {self.make_link('Sales Invoice', inv.name)} | "
+                    f"{inv.customer} | {inv.grand_total} | "
+                    f"{inv.outstanding_amount} | {inv.currency} | {inv.due_date} |\n"
+                )
+            msg += f"\n**Total Outstanding: {total_outstanding}**"
 
             return {
                 "success": True,
                 "count": len(invoices),
-                "invoices": [{
-                    "name": inv.name,
-                    "link": self.make_link("Sales Invoice", inv.name),
-                    "customer": inv.customer,
-                    "total": f"{inv.currency} {inv.grand_total:,.2f}",
-                    "outstanding": f"{inv.currency} {inv.outstanding_amount:,.2f}",
-                    "due_date": str(inv.due_date) if inv.due_date else "Not set",
-                    "status": inv.status
-                } for inv in invoices]
+                "total_outstanding": total_outstanding,
+                "invoices": invoices,
+                "message": msg
             }
+
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    # ========================================================================
-    # INTERNAL HELPERS
-    # ========================================================================
-
-    def _get_bank_account(self, company: str, mode_of_payment: str) -> Optional[str]:
-        """Get the appropriate bank/cash account for payment"""
+    def get_payment_status(self, pe_name: str) -> Dict:
+        """Get detailed status of a Payment Entry."""
         try:
-            # Try mode of payment account first
-            account = frappe.db.get_value("Mode of Payment Account", {
-                "parent": mode_of_payment,
-                "company": company
-            }, "default_account")
+            pe = frappe.get_doc("Payment Entry", pe_name)
 
-            if account:
-                return account
+            status_text = "Draft" if pe.docstatus == 0 else ("Submitted" if pe.docstatus == 1 else "Cancelled")
 
-            # Fallback: company default receivable account
-            return frappe.db.get_value("Company", company, "default_receivable_account")
-        except Exception:
-            return None
+            msg = (
+                f"💳 **Payment Entry {self.make_link('Payment Entry', pe.name)}**\n\n"
+                f"  Party: {pe.party_name}\n"
+                f"  Paid Amount: {pe.paid_amount} {pe.paid_from_account_currency}\n"
+                f"  Mode: {pe.mode_of_payment or 'Not set'}\n"
+                f"  Reference: {pe.reference_no or 'N/A'}\n"
+                f"  Date: {pe.reference_date or pe.posting_date}\n"
+                f"  Status: **{status_text}**\n\n"
+                f"  ➡️ Next: {self.PAYMENT_STATUS_MAP.get(status_text, 'Review manually')}"
+            )
 
-    # ========================================================================
-    # COMMAND HANDLER
-    # ========================================================================
+            return {
+                "success": True,
+                "pe_name": pe.name,
+                "link": self.make_link("Payment Entry", pe.name),
+                "status": status_text,
+                "message": msg
+            }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Payment Entry '{pe_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ========== MAIN COMMAND HANDLER ==========
 
     def process_command(self, message: str) -> str:
-        """Process natural language commands for payment operations"""
+        """Process incoming Raven command and return formatted response.
+        
+        Commands:
+            @payment create [SI-NAME]
+            @payment create [SI-NAME] amount [AMOUNT]
+            @payment submit [PE-NAME]
+            @payment reconcile [PE-NAME]
+            @payment outstanding [CUSTOMER]
+            @payment status [PE-NAME]
+            @payment help
+        """
         message_lower = message.lower().strip()
 
-        import re
-
-        # Extract SI name
-        si_pattern = r'(ACC-SINV-\d+-\d+|SINV-\d+|SI-\d+)'
+        # Extract document names
+        si_pattern = r'(ACC-SINV-\d+-\d+|SINV-\d+|SI-[\w-]+|SAL-INV-[\d-]+)'
         si_match = re.search(si_pattern, message, re.IGNORECASE)
         si_name = si_match.group(1) if si_match else None
 
-        # Extract PE name
-        pe_pattern = r'(ACC-PAY-\d+-\d+|PE-\d+|PAY-\d+)'
+        pe_pattern = r'(ACC-PAY-\d+-\d+|PE-[\w-]+|PAY-[\w-]+)'
         pe_match = re.search(pe_pattern, message, re.IGNORECASE)
         pe_name = pe_match.group(1) if pe_match else None
 
-        confirm = "confirm" in message_lower or message.startswith("!")
+        # ---- HELP ----
+        if "help" in message_lower or "capabilities" in message_lower:
+            return self._help_text()
 
-        if pe_name:
-            if "reconcile" in message_lower:
-                result = self.reconcile_payment(pe_name)
-            elif "submit" in message_lower:
-                result = self.submit_payment_entry(pe_name, confirm=confirm)
-            else:
-                result = self.reconcile_payment(pe_name)
-        elif si_name:
-            if "pay" in message_lower or "payment" in message_lower:
-                result = self.create_payment_entry(si_name, confirm=confirm)
-            else:
-                result = self.create_payment_entry(si_name, confirm=confirm)
-        elif "unpaid" in message_lower or "outstanding" in message_lower:
-            result = self.get_unpaid_invoices()
-        else:
-            result = {
-                "success": True,
-                "message": (
-                    "**Payment Agent Commands:**\n\n"
-                    "- `@ai create payment for ACC-SINV-2026-00001` — Create PE from invoice\n"
-                    "- `@ai submit ACC-PAY-2026-00001` — Submit payment entry\n"
-                    "- `@ai reconcile ACC-PAY-2026-00001` — Check reconciliation\n"
-                    "- `@ai unpaid invoices` — List unpaid invoices"
-                )
-            }
+        # ---- CREATE PAYMENT ----
+        if "create" in message_lower and si_name:
+            amount_match = re.search(r'(?:amount|monto)\s+(\d+\.?\d*)', message, re.IGNORECASE)
+            amount = float(amount_match.group(1)) if amount_match else None
+            mode_match = re.search(r'(?:mode|modo)\s+(.+?)(?:\s|$)', message, re.IGNORECASE)
+            mode = mode_match.group(1).strip() if mode_match else None
+            result = self.create_payment_entry(si_name, amount=amount, mode_of_payment=mode)
+            return result.get("message", result.get("error", "Unknown error"))
 
-        return self._format_response(result)
+        # ---- SUBMIT PAYMENT ----
+        if "submit" in message_lower and pe_name:
+            result = self.submit_payment_entry(pe_name)
+            return result.get("message", result.get("error", "Unknown error"))
 
-    def _format_response(self, result: Dict) -> str:
-        """Format result dict into readable response"""
-        if result.get("requires_confirmation"):
-            return result["preview"]
-        if not result.get("success"):
-            return f"❌ {result.get('error', 'Unknown error')}"
-        if result.get("message"):
-            return result["message"]
-        return str(result)
+        # ---- RECONCILE ----
+        if "reconcile" in message_lower and pe_name:
+            result = self.reconcile_payment(pe_name)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- OUTSTANDING INVOICES ----
+        if "outstanding" in message_lower or "unpaid" in message_lower or "pendiente" in message_lower:
+            # Extract customer name if present
+            customer_match = re.search(r'(?:customer|cliente|for)\s+(.+)', message, re.IGNORECASE)
+            customer = customer_match.group(1).strip() if customer_match else None
+            result = self.get_outstanding_invoices(customer=customer)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- PAYMENT STATUS ----
+        if ("status" in message_lower or "estado" in message_lower) and pe_name:
+            result = self.get_payment_status(pe_name)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- FALLBACK ----
+        return self._help_text()
+
+    def _help_text(self) -> str:
+        return (
+            "💳 **Payment Agent — Commands**\n\n"
+            "**Payment Creation**\n"
+            "`@payment create [SI-NAME]` — Create Payment Entry from Sales Invoice\n"
+            "`@payment create [SI-NAME] amount [AMOUNT]` — Partial payment\n\n"
+            "**Payment Actions**\n"
+            "`@payment submit [PE-NAME]` — Submit Payment Entry\n"
+            "`@payment reconcile [PE-NAME]` — Check reconciliation status\n\n"
+            "**Status & Tracking**\n"
+            "`@payment outstanding` — List all unpaid invoices\n"
+            "`@payment outstanding customer [NAME]` — Unpaid invoices for customer\n"
+            "`@payment status [PE-NAME]` — Payment Entry details\n\n"
+            "**Example (Full Cycle)**\n"
+            "```\n"
+            "@payment create ACC-SINV-2026-00001\n"
+            "@payment submit ACC-PAY-2026-00001\n"
+            "@payment reconcile ACC-PAY-2026-00001\n"
+            "```"
+        )

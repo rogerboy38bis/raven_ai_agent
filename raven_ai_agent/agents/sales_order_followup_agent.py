@@ -1,92 +1,339 @@
 """
-Sales Order Follow-up AI Agent (UPDATED)
+Sales Order Follow-up AI Agent — UPDATED
 Tracks and advances Sales Orders through the complete fulfillment cycle.
 Based on SOP: Ciclo de Venta a Compra en ERPNext
 
-UPDATED (2026-03-03) — Added:
-  - create_delivery_note(so_name) — auto-creates DN from SO (Step 6)
-  - create_sales_invoice(so_name) — auto-creates SI from SO/DN with CFDI (Step 7)
-  - create_from_quotation(quotation_name) — creates SO from Quotation (Step 3)
-  - Updated STATUS_NEXT_ACTIONS to include manufacturing steps
-  - Server Script safe (no import frappe issues)
-  - Data quality flags: zero-price, overdue, stale order detection
-  - Short SO name resolution (SO-00752 → SO-00752-LEGOSAN AB)
+UPDATED to cover Workflow Steps 3, 6, 7:
+  Step 3: SO → Submit (+ auto-create from Quotation)
+  Step 6: Delivery Note (auto-create from SO)
+  Step 7: Sales Invoice (auto-create from SO/DN with CFDI/currency logic)
 
-CFDI Intelligence:
-  - Auto-sets mx_cfdi_use to G03 (Gastos en general) for export customers
-  - Sets custom_customer_invoice_currency from SO grand_total currency
-  - SAT Tax Regime 601 for foreign customers (RFC: XAXX010101000)
+Changes from original:
+  + create_delivery_note(so_name) — auto-creates DN from SO
+  + create_sales_invoice(so_name) — auto-creates SI from SO/DN with CFDI fields
+  + create_from_quotation(quotation_name) — creates SO from Quotation
+  + submit_sales_order(so_name) — auto-submit SO
+  + Updated STATUS_NEXT_ACTIONS to include manufacturing steps
+  + Server Script awareness (no import frappe in Server Scripts)
 
-Data Quality Intelligence:
-  - Zero-price detection with 3-tier diagnosis:
-    1. Item Price exists in price list → suggest re-fetch
-    2. Quotation exists with priced item → suggest link/copy
-    3. No price source found → flag for review
-  - Overdue delivery detection (days past due)
-  - Stale order detection (>6 months with no activity)
+Author: raven_ai_agent
 """
 import frappe
 from typing import Dict, List, Optional
-from frappe.utils import nowdate, getdate, add_days, flt
+from frappe.utils import nowdate, getdate, flt
+import re
 
 
 class SalesOrderFollowupAgent:
     """AI Agent for Sales Order follow-up and fulfillment tracking"""
-
-    # Updated status workflow mapping — now includes manufacturing awareness
+    
+    # Status workflow mapping — UPDATED with manufacturing steps
     STATUS_NEXT_ACTIONS = {
-        "Draft": "Submit the Sales Order → then create Work Orders",
-        "To Deliver and Bill": (
-            "Check inventory → "
-            "If stock available: Create Delivery Note → "
-            "If no stock: Create Work Order (manufacturing) first"
-        ),
-        "To Deliver": "Create Delivery Note (billing done, pending delivery)",
-        "To Bill": "Create Sales Invoice (delivered, pending billing)",
-        "Completed": "Order fully fulfilled — check Payment Entry status",
+        "Draft": "Submit the Sales Order → then create Manufacturing WO",
+        "To Deliver and Bill": "Check inventory → If stock available: Create DN; If not: Create Manufacturing WO",
+        "To Deliver": "Create Delivery Note (stock must be available in FG to Sell)",
+        "To Bill": "Create Sales Invoice (with CFDI G03 for Mexico)",
+        "Completed": "Order fully fulfilled — create Payment Entry if outstanding",
         "Cancelled": "Order was cancelled — no action needed",
-        "Closed": "Order closed — no further action"
+        "Overdue": "Follow up with customer — order is past delivery date"
     }
-
+    
     def __init__(self, user: str = None):
         self.user = user or frappe.session.user
         self.site_name = frappe.local.site
-
+    
     def make_link(self, doctype: str, name: str) -> str:
         """Generate clickable markdown link"""
         slug = doctype.lower().replace(" ", "-")
         return f"[{name}](https://{self.site_name}/app/{slug}/{name})"
+    
+    # ========== NEW: DOCUMENT CREATION (Steps 3, 6, 7) ==========
 
-    # ========== STATUS & TRACKING ==========
+    def submit_sales_order(self, so_name: str) -> Dict:
+        """Submit a Sales Order (Step 3).
+        
+        Args:
+            so_name: Sales Order name
+        
+        Returns:
+            Dict with submission status
+        """
+        try:
+            so = frappe.get_doc("Sales Order", so_name)
+
+            if so.docstatus == 1:
+                return {
+                    "success": True,
+                    "message": (
+                        f"✅ Sales Order {self.make_link('Sales Order', so_name)} is already submitted.\n"
+                        f"  Status: {so.status}\n"
+                        f"  ➡️ Next: {self.STATUS_NEXT_ACTIONS.get(so.status, 'Review')}"
+                    )
+                }
+            if so.docstatus == 2:
+                return {"success": False, "error": f"Sales Order {so_name} is cancelled."}
+
+            so.submit()
+            frappe.db.commit()
+
+            return {
+                "success": True,
+                "so_name": so.name,
+                "link": self.make_link("Sales Order", so.name),
+                "message": (
+                    f"✅ Sales Order submitted: {self.make_link('Sales Order', so.name)}\n\n"
+                    f"  Customer: {so.customer}\n"
+                    f"  Grand Total: {so.grand_total} {so.currency}\n"
+                    f"  Status: {so.status}\n\n"
+                    f"💡 Next steps:\n"
+                    f"  1. Create Manufacturing WO: `@manufacturing create wo from so {so.name}`\n"
+                    f"  2. Or check inventory: `@sales_order_follow_up inventory {so.name}`"
+                )
+            }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Order '{so_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": f"Error submitting SO: {str(e)}"}
+
+    def create_from_quotation(self, quotation_name: str) -> Dict:
+        """Create a Sales Order from a Quotation (pre-Step 3).
+        
+        Args:
+            quotation_name: Quotation name (e.g. 'SAL-QTN-2024-00752')
+        
+        Returns:
+            Dict with created SO details
+        """
+        try:
+            qt = frappe.get_doc("Quotation", quotation_name)
+
+            if qt.docstatus != 1:
+                return {"success": False, "error": f"Quotation '{quotation_name}' must be submitted first."}
+
+            if qt.status == "Ordered":
+                # Find the existing SO
+                existing_so = frappe.db.get_value("Sales Order Item",
+                    {"prevdoc_docname": quotation_name}, "parent")
+                msg = f"✅ Quotation already ordered."
+                if existing_so:
+                    msg += f"\n  Sales Order: {self.make_link('Sales Order', existing_so)}"
+                return {"success": True, "message": msg}
+
+            from erpnext.selling.doctype.quotation.quotation import make_sales_order
+            so = make_sales_order(quotation_name)
+            so.insert(ignore_permissions=True)
+            frappe.db.commit()
+
+            return {
+                "success": True,
+                "so_name": so.name,
+                "link": self.make_link("Sales Order", so.name),
+                "message": (
+                    f"✅ Sales Order created from Quotation:\n\n"
+                    f"  Quotation: {self.make_link('Quotation', quotation_name)}\n"
+                    f"  Sales Order: {self.make_link('Sales Order', so.name)}\n"
+                    f"  Customer: {so.customer}\n"
+                    f"  Grand Total: {so.grand_total} {so.currency}\n\n"
+                    f"💡 Next: Submit the SO with `@sales_order_follow_up submit {so.name}`"
+                )
+            }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Quotation '{quotation_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": f"Error creating SO from Quotation: {str(e)}"}
+
+    def create_delivery_note(self, so_name: str) -> Dict:
+        """Create a Delivery Note from a Sales Order (Step 6).
+        
+        Validates inventory availability before creating the DN.
+        
+        Args:
+            so_name: Sales Order name
+        
+        Returns:
+            Dict with DN details
+        """
+        try:
+            so = frappe.get_doc("Sales Order", so_name)
+
+            if so.docstatus != 1:
+                return {"success": False, "error": f"Sales Order '{so_name}' must be submitted first."}
+
+            if so.delivery_status == "Fully Delivered":
+                return {"success": True, "message": f"✅ SO {self.make_link('Sales Order', so_name)} is already fully delivered."}
+
+            # Check inventory before creating DN
+            shortages = []
+            for item in so.items:
+                available = frappe.db.get_value("Bin",
+                    {"item_code": item.item_code, "warehouse": item.warehouse},
+                    "actual_qty") or 0
+                if flt(available) < flt(item.qty - (item.delivered_qty or 0)):
+                    remaining = flt(item.qty) - flt(item.delivered_qty or 0)
+                    shortages.append(
+                        f"  ❌ {item.item_code}: need {remaining}, have {available} in {item.warehouse}"
+                    )
+
+            if shortages:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Cannot create Delivery Note — insufficient stock:\n"
+                        + "\n".join(shortages)
+                        + f"\n\n💡 Complete manufacturing first:\n"
+                        f"  `@manufacturing create wo from so {so_name}`"
+                    )
+                }
+
+            from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
+            dn = make_delivery_note(so_name)
+            dn.insert(ignore_permissions=True)
+            dn.submit()
+            frappe.db.commit()
+
+            return {
+                "success": True,
+                "dn_name": dn.name,
+                "link": self.make_link("Delivery Note", dn.name),
+                "message": (
+                    f"✅ Delivery Note created: {self.make_link('Delivery Note', dn.name)}\n\n"
+                    f"  Sales Order: {self.make_link('Sales Order', so_name)}\n"
+                    f"  Customer: {so.customer}\n"
+                    f"  Items: {len(dn.items)}\n\n"
+                    f"💡 Next: Create Sales Invoice with `@sales_order_follow_up invoice {so_name}`"
+                )
+            }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Order '{so_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": f"Error creating Delivery Note: {str(e)}"}
+
+    def create_sales_invoice(self, so_name: str, from_dn: bool = True) -> Dict:
+        """Create a Sales Invoice from a Sales Order/Delivery Note (Step 7).
+        
+        Includes CFDI compliance: auto-sets mx_cfdi_use to G03,
+        sets custom_customer_invoice_currency from SO grand_total currency.
+        
+        Args:
+            so_name: Sales Order name
+            from_dn: If True, creates SI from the last DN. If False, from SO directly.
+        
+        Returns:
+            Dict with SI details
+        """
+        try:
+            so = frappe.get_doc("Sales Order", so_name)
+
+            if so.docstatus != 1:
+                return {"success": False, "error": f"Sales Order '{so_name}' must be submitted first."}
+
+            if so.billing_status == "Fully Billed":
+                return {"success": True, "message": f"✅ SO {self.make_link('Sales Order', so_name)} is already fully billed."}
+
+            si = None
+
+            if from_dn:
+                # Try to create from latest Delivery Note
+                dns = frappe.get_all("Delivery Note Item",
+                    filters={"against_sales_order": so_name, "docstatus": 1},
+                    fields=["parent"], distinct=True, order_by="parent desc")
+
+                if dns:
+                    dn_name = dns[0].parent
+                    # Check if DN already has an invoice
+                    existing_si = frappe.get_all("Sales Invoice Item",
+                        filters={"delivery_note": dn_name, "docstatus": ["!=", 2]},
+                        fields=["parent"], distinct=True)
+                    
+                    if existing_si:
+                        return {
+                            "success": True,
+                            "message": (
+                                f"✅ Delivery Note {self.make_link('Delivery Note', dn_name)} "
+                                f"already has invoice: {self.make_link('Sales Invoice', existing_si[0].parent)}"
+                            )
+                        }
+
+                    from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
+                    si = make_sales_invoice(dn_name)
+                else:
+                    # Fall back to creating from SO directly
+                    from_dn = False
+
+            if not from_dn:
+                from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+                si = make_sales_invoice(so_name)
+
+            if not si:
+                return {"success": False, "error": "Could not generate Sales Invoice."}
+
+            # CFDI compliance — Mexico invoice fields
+            if hasattr(si, "mx_cfdi_use"):
+                si.mx_cfdi_use = "G03"  # Gastos en general
+
+            if hasattr(si, "custom_customer_invoice_currency"):
+                si.custom_customer_invoice_currency = so.currency
+
+            si.insert(ignore_permissions=True)
+            si.submit()
+            frappe.db.commit()
+
+            cfdi_info = ""
+            if hasattr(si, "mx_cfdi_use"):
+                cfdi_info = f"\n  CFDI Use: {si.mx_cfdi_use}"
+
+            return {
+                "success": True,
+                "si_name": si.name,
+                "link": self.make_link("Sales Invoice", si.name),
+                "message": (
+                    f"✅ Sales Invoice created: {self.make_link('Sales Invoice', si.name)}\n\n"
+                    f"  Sales Order: {self.make_link('Sales Order', so_name)}\n"
+                    f"  Customer: {so.customer}\n"
+                    f"  Grand Total: {si.grand_total} {si.currency}"
+                    + cfdi_info
+                    + f"\n  Outstanding: {si.outstanding_amount}\n\n"
+                    f"💡 Next: Create Payment Entry with `@payment create {si.name}`"
+                )
+            }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Order '{so_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": f"Error creating Sales Invoice: {str(e)}"}
+
+    # ========== ORIGINAL METHODS (preserved) ==========
 
     def get_so_status(self, so_name: str) -> Dict:
         """Get detailed status of a specific Sales Order"""
         try:
             so = frappe.get_doc("Sales Order", so_name)
-
+            
             # Get linked documents
-            delivery_notes = frappe.get_all("Delivery Note Item",
+            delivery_notes = frappe.get_all("Delivery Note Item", 
                 filters={"against_sales_order": so_name, "docstatus": ["!=", 2]},
                 fields=["parent"], distinct=True)
-
+            
             sales_invoices = frappe.get_all("Sales Invoice Item",
                 filters={"sales_order": so_name, "docstatus": ["!=", 2]},
                 fields=["parent"], distinct=True)
-
+            
             material_requests = frappe.get_all("Material Request Item",
                 filters={"sales_order": so_name, "docstatus": ["!=", 2]},
                 fields=["parent"], distinct=True)
 
-            # NEW: Get linked Work Orders
+            # Check Work Orders (NEW)
             work_orders = frappe.get_all("Work Order",
                 filters={"sales_order": so_name, "docstatus": ["!=", 2]},
-                fields=["name", "status", "production_item", "qty", "produced_qty"],
-                order_by="creation")
-
+                fields=["name", "status", "production_item", "qty", "produced_qty"])
+            
             # Check inventory for each item
             inventory_status = []
             for item in so.items:
-                available = frappe.db.get_value("Bin",
+                available = frappe.db.get_value("Bin", 
                     {"item_code": item.item_code, "warehouse": item.warehouse},
                     "actual_qty") or 0
                 inventory_status.append({
@@ -95,9 +342,9 @@ class SalesOrderFollowupAgent:
                     "available_qty": available,
                     "sufficient": available >= item.qty
                 })
-
+            
             all_sufficient = all(i["sufficient"] for i in inventory_status)
-
+            
             return {
                 "success": True,
                 "so_name": so.name,
@@ -107,7 +354,6 @@ class SalesOrderFollowupAgent:
                 "delivery_status": so.delivery_status,
                 "billing_status": so.billing_status,
                 "grand_total": so.grand_total,
-                "currency": so.currency,
                 "delivery_date": str(so.delivery_date) if so.delivery_date else None,
                 "next_action": self.STATUS_NEXT_ACTIONS.get(so.status, "Review order status"),
                 "inventory_sufficient": all_sufficient,
@@ -116,127 +362,65 @@ class SalesOrderFollowupAgent:
                     "delivery_notes": [d.parent for d in delivery_notes],
                     "sales_invoices": [i.parent for i in sales_invoices],
                     "material_requests": [m.parent for m in material_requests],
-                    "work_orders": [{
-                        "name": wo.name,
-                        "status": wo.status,
-                        "item": wo.production_item,
-                        "progress": f"{flt(wo.produced_qty / wo.qty * 100, 1)}%" if wo.qty else "0%"
-                    } for wo in work_orders]
+                    "work_orders": [{"name": w.name, "status": w.status, "produced": f"{w.produced_qty}/{w.qty}"} for w in work_orders]
                 }
             }
         except frappe.DoesNotExistError:
             return {"success": False, "error": f"Sales Order '{so_name}' not found"}
         except Exception as e:
             return {"success": False, "error": str(e)}
-
+    
     def get_pending_orders(self, limit: int = 20) -> Dict:
-        """List all Sales Orders pending delivery or billing with data quality flags"""
+        """List all Sales Orders pending delivery or billing"""
         try:
-            from datetime import date, timedelta
-            today = date.today()
-
             orders = frappe.get_all("Sales Order",
                 filters={
                     "docstatus": 1,
                     "status": ["in", ["To Deliver and Bill", "To Deliver", "To Bill"]]
                 },
-                fields=["name", "customer", "status", "grand_total", "delivery_date",
-                         "transaction_date", "currency"],
+                fields=["name", "customer", "status", "grand_total", "delivery_date", "transaction_date"],
                 order_by="delivery_date asc",
                 limit=limit)
-
+            
             result = []
-            alerts_summary = {"zero_price": 0, "overdue": 0, "stale": 0}
-
             for so in orders:
-                # === Data Quality Flags ===
-                flags = []
-
-                # Flag 1: Zero-price order (missing pricing) — deep diagnosis
-                if flt(so.grand_total) == 0:
-                    items = frappe.get_all("Sales Order Item",
-                        filters={"parent": so.name},
-                        fields=["item_code", "qty", "rate"])
-                    has_price_list = False
-                    has_matching_qtn = False
-                    for it in items:
-                        if it.rate == 0:
-                            # Check Item Price list
-                            price = frappe.get_all("Item Price",
-                                filters={"item_code": it.item_code, "selling": 1},
-                                fields=["price_list_rate", "currency"],
-                                limit=1)
-                            if price:
-                                has_price_list = True
-                            # Check if a quotation exists with this exact item + price
-                            qtn_items = frappe.get_all("Quotation Item",
-                                filters={"item_code": it.item_code, "rate": [">", 0]},
-                                fields=["parent", "rate", "qty"],
-                                limit=1)
-                            if qtn_items:
-                                has_matching_qtn = True
-
-                    if has_price_list:
-                        p = price[0]
-                        flags.append(f"⚠️ ZERO PRICE — Item Price exists ({p.currency} {p.price_list_rate}/unit), re-fetch pricing")
-                    elif has_matching_qtn:
-                        qi = qtn_items[0]
-                        flags.append(f"⚠️ ZERO PRICE — Quotation {qi.parent} has rate {qi.rate}/unit, link or copy pricing")
-                    else:
-                        flags.append("🚨 ZERO PRICE — No selling price or quotation found, needs pricing review")
-                    alerts_summary["zero_price"] += 1
-
-                # Flag 2: Overdue delivery (past delivery date, still open)
-                if so.delivery_date and so.delivery_date < today:
-                    days_overdue = (today - so.delivery_date).days
-                    flags.append(f"🔴 OVERDUE by {days_overdue} days")
-                    alerts_summary["overdue"] += 1
-
-                # Flag 3: Stale order (>6 months old, no activity)
-                if so.transaction_date and (today - so.transaction_date).days > 180:
-                    age_months = (today - so.transaction_date).days // 30
-                    flags.append(f"📦 STALE — {age_months} months old, consider closing or follow-up")
-                    alerts_summary["stale"] += 1
-
                 result.append({
                     "name": so.name,
                     "link": self.make_link("Sales Order", so.name),
                     "customer": so.customer,
                     "status": so.status,
-                    "grand_total": f"{so.currency} {so.grand_total:,.2f}",
+                    "grand_total": so.grand_total,
                     "delivery_date": str(so.delivery_date) if so.delivery_date else "Not set",
-                    "next_action": self.STATUS_NEXT_ACTIONS.get(so.status, "Review"),
-                    "flags": flags
+                    "next_action": self.STATUS_NEXT_ACTIONS.get(so.status, "Review")
                 })
-
+            
             return {
                 "success": True,
                 "count": len(result),
-                "orders": result,
-                "alerts": alerts_summary
+                "orders": result
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
-
+    
     def check_inventory(self, so_name: str) -> Dict:
         """Check item availability for a Sales Order"""
         try:
             so = frappe.get_doc("Sales Order", so_name)
-
+            
             items = []
             all_available = True
-
+            
             for item in so.items:
                 available = frappe.db.get_value("Bin",
                     {"item_code": item.item_code, "warehouse": item.warehouse},
                     "actual_qty") or 0
-
+                
                 shortage = max(0, item.qty - available)
                 sufficient = available >= item.qty
-
+                
                 if not sufficient:
                     all_available = False
-
+                
                 items.append({
                     "item_code": item.item_code,
                     "item_name": item.item_name,
@@ -245,13 +429,9 @@ class SalesOrderFollowupAgent:
                     "shortage": shortage,
                     "status": "✅ OK" if sufficient else f"❌ Short by {shortage}"
                 })
-
-            recommendation = (
-                "Ready for delivery — create Delivery Note"
-                if all_available
-                else "Create Work Order (manufacturing) or Material Request for missing items"
-            )
-
+            
+            recommendation = "Ready for delivery" if all_available else "Create Material Request or Manufacturing WO for missing items"
+            
             return {
                 "success": True,
                 "so_name": so.name,
@@ -265,322 +445,15 @@ class SalesOrderFollowupAgent:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    # ==========================================================================
-    # NEW: STEP 3 — CREATE SO FROM QUOTATION
-    # ==========================================================================
-
-    def create_from_quotation(self, quotation_name: str, confirm: bool = False) -> Dict:
-        """
-        Create Sales Order from a submitted Quotation.
-        Handles payment terms, delivery dates, and idempotency.
-
-        Args:
-            quotation_name: Quotation name (e.g., SAL-QTN-2024-00001)
-            confirm: If False, returns preview
-        """
-        try:
-            from erpnext.selling.doctype.quotation.quotation import make_sales_order
-
-            qtn = frappe.get_doc("Quotation", quotation_name)
-
-            if qtn.docstatus != 1:
-                return {
-                    "success": False,
-                    "error": f"Quotation {quotation_name} must be submitted first (docstatus={qtn.docstatus})"
-                }
-
-            # Idempotency: check for existing SO from this Quotation
-            existing_so = frappe.db.get_value("Sales Order Item",
-                {"prevdoc_docname": quotation_name, "docstatus": ["!=", 2]},
-                "parent")
-            if existing_so:
-                return {
-                    "success": True,
-                    "action": "existing_found",
-                    "message": f"Sales Order already exists: {existing_so}",
-                    "sales_order": existing_so,
-                    "link": self.make_link("Sales Order", existing_so)
-                }
-
-            if not confirm:
-                return {
-                    "success": True,
-                    "requires_confirmation": True,
-                    "preview": (
-                        f"**Create Sales Order from {quotation_name}?**\n\n"
-                        f"| Field | Value |\n|-------|-------|\n"
-                        f"| Customer | {qtn.party_name} |\n"
-                        f"| Total | {qtn.currency} {qtn.grand_total:,.2f} |\n"
-                        f"| Items | {len(qtn.items)} |\n\n"
-                        f"⚠️ **Confirm?** Reply: `@ai confirm create SO from {quotation_name}`"
-                    )
-                }
-
-            # Create SO using ERPNext's built-in method
-            so = make_sales_order(quotation_name)
-            so.delivery_date = add_days(nowdate(), 7)
-
-            # Fix payment terms — Due Date must be >= Posting Date
-            today = nowdate()
-            if hasattr(so, 'payment_schedule') and so.payment_schedule:
-                for ps in so.payment_schedule:
-                    if ps.due_date and str(ps.due_date) < today:
-                        ps.due_date = today
-
-            so.flags.ignore_permissions = True
-            so.insert()
-            frappe.db.commit()
-
-            return {
-                "success": True,
-                "action": "created",
-                "message": f"✅ Sales Order **{so.name}** created from {quotation_name}",
-                "sales_order": so.name,
-                "link": self.make_link("Sales Order", so.name),
-                "customer": so.customer,
-                "grand_total": so.grand_total,
-                "currency": so.currency
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    # ==========================================================================
-    # NEW: STEP 6 — CREATE DELIVERY NOTE
-    # ==========================================================================
-
-    def create_delivery_note(self, so_name: str, confirm: bool = False) -> Dict:
-        """
-        Create Delivery Note from a submitted Sales Order.
-
-        Pre-checks:
-        - SO must be submitted
-        - Inventory must be available (checks Bin)
-        - No duplicate DN (idempotent)
-        - Handles Quality Inspection requirement (warns if needed)
-
-        Args:
-            so_name: Sales Order name
-            confirm: If False, returns preview
-        """
-        try:
-            from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
-
-            so = frappe.get_doc("Sales Order", so_name)
-
-            if so.docstatus != 1:
-                return {"success": False, "error": f"Sales Order {so_name} must be submitted first"}
-
-            if so.delivery_status == "Fully Delivered":
-                return {"success": True, "message": f"Sales Order {so_name} is already fully delivered"}
-
-            # Idempotency: check for existing DN
-            existing_dn = frappe.db.get_value("Delivery Note Item",
-                {"against_sales_order": so_name, "docstatus": ["!=", 2]},
-                "parent")
-            if existing_dn:
-                return {
-                    "success": True,
-                    "action": "existing_found",
-                    "message": f"Delivery Note already exists: {existing_dn}",
-                    "delivery_note": existing_dn,
-                    "link": self.make_link("Delivery Note", existing_dn)
-                }
-
-            # Check inventory availability
-            inv_check = self.check_inventory(so_name)
-            if not inv_check.get("all_available"):
-                shortage_items = [
-                    f"{i['item_code']}: short by {i['shortage']}"
-                    for i in inv_check.get("items", []) if i.get("shortage", 0) > 0
-                ]
-                return {
-                    "success": False,
-                    "error": (
-                        f"Insufficient inventory for {so_name}.\n"
-                        f"Shortages:\n" + "\n".join(f"- {s}" for s in shortage_items) + "\n\n"
-                        f"Complete manufacturing first: `@ai create work order from {so_name}`"
-                    )
-                }
-
-            if not confirm:
-                items_preview = "\n".join([
-                    f"- {i['item_code']}: {i['required_qty']} (available: {i['available_qty']})"
-                    for i in inv_check.get("items", [])
-                ])
-                return {
-                    "success": True,
-                    "requires_confirmation": True,
-                    "preview": (
-                        f"**Create Delivery Note from {so_name}?**\n\n"
-                        f"Customer: {so.customer}\n"
-                        f"Items:\n{items_preview}\n\n"
-                        f"⚠️ **Confirm?** Reply: `@ai confirm create DN from {so_name}`"
-                    )
-                }
-
-            # Create DN using ERPNext's built-in method
-            dn = make_delivery_note(so_name)
-            dn.flags.ignore_permissions = True
-            dn.insert()
-            frappe.db.commit()
-
-            # Warn about Quality Inspection if required
-            qi_warning = ""
-            for item in dn.items:
-                qi_required = frappe.db.get_value("Item", item.item_code, "inspection_required_before_delivery")
-                if qi_required:
-                    qi_warning = (
-                        f"\n⚠️ Quality Inspection required for {item.item_code} "
-                        f"before DN can be submitted."
-                    )
-                    break
-
-            return {
-                "success": True,
-                "action": "created",
-                "delivery_note": dn.name,
-                "link": self.make_link("Delivery Note", dn.name),
-                "sales_order": so_name,
-                "status": "Draft",
-                "message": (
-                    f"✅ Delivery Note **{dn.name}** created from {so_name}.\n"
-                    f"Review and submit to confirm delivery.{qi_warning}"
-                )
-            }
-        except Exception as e:
-            frappe.log_error(f"SalesOrderFollowupAgent.create_delivery_note error: {str(e)}")
-            return {"success": False, "error": str(e)}
-
-    # ==========================================================================
-    # NEW: STEP 7 — CREATE SALES INVOICE (with CFDI)
-    # ==========================================================================
-
-    def create_sales_invoice(
-        self,
-        so_name: str,
-        cfdi_use: str = "G03",
-        confirm: bool = False
-    ) -> Dict:
-        """
-        Create Sales Invoice from Sales Order or Delivery Note.
-
-        CFDI Intelligence:
-        - Auto-sets mx_cfdi_use (default G03 = Gastos en general)
-        - Sets currency from SO (handles USD invoices for MXN company)
-        - Sets SAT payment method based on amount
-        - Handles export customers (RFC: XAXX010101000, regime 601)
-
-        Args:
-            so_name: Sales Order name
-            cfdi_use: SAT CFDI Use code (default: G03)
-            confirm: If False, returns preview
-        """
-        try:
-            so = frappe.get_doc("Sales Order", so_name)
-
-            if so.docstatus != 1:
-                return {"success": False, "error": f"Sales Order {so_name} must be submitted first"}
-
-            if so.billing_status == "Fully Billed":
-                return {"success": True, "message": f"Sales Order {so_name} is already fully billed"}
-
-            # Idempotency: check for existing SI
-            existing_si = frappe.db.get_value("Sales Invoice Item",
-                {"sales_order": so_name, "docstatus": ["!=", 2]},
-                "parent")
-            if existing_si:
-                return {
-                    "success": True,
-                    "action": "existing_found",
-                    "message": f"Sales Invoice already exists: {existing_si}",
-                    "sales_invoice": existing_si,
-                    "link": self.make_link("Sales Invoice", existing_si)
-                }
-
-            # Check if DN exists and is submitted (preferred path)
-            dn_name = frappe.db.get_value("Delivery Note Item",
-                {"against_sales_order": so_name, "docstatus": 1},
-                "parent")
-
-            if not confirm:
-                return {
-                    "success": True,
-                    "requires_confirmation": True,
-                    "preview": (
-                        f"**Create Sales Invoice for {so_name}?**\n\n"
-                        f"| Field | Value |\n|-------|-------|\n"
-                        f"| Customer | {so.customer} |\n"
-                        f"| Total | {so.currency} {so.grand_total:,.2f} |\n"
-                        f"| CFDI Use | {cfdi_use} |\n"
-                        f"| Based on DN | {dn_name or 'Direct from SO'} |\n\n"
-                        f"⚠️ **Confirm?** Reply: `@ai confirm create invoice for {so_name}`"
-                    )
-                }
-
-            # Create SI — prefer from DN if available, else from SO
-            if dn_name:
-                from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
-                si = make_sales_invoice(dn_name)
-            else:
-                from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
-                si = make_sales_invoice(so_name)
-
-            # ============ CFDI COMPLIANCE ============
-            # Set CFDI Use (G03 = Gastos en general, most common for export)
-            if hasattr(si, 'mx_cfdi_use'):
-                si.mx_cfdi_use = cfdi_use
-
-            # Set currency from SO (handles USD invoices)
-            si.currency = so.currency
-            if so.currency != frappe.defaults.get_defaults().get("currency", "MXN"):
-                si.conversion_rate = so.conversion_rate
-
-            # Set SAT payment method
-            if hasattr(si, 'mx_payment_method'):
-                # PUE = single payment, PPD = partial payments
-                si.mx_payment_method = "PUE"
-
-            # Set customer invoice currency
-            if hasattr(si, 'custom_customer_invoice_currency'):
-                si.custom_customer_invoice_currency = so.currency
-
-            si.flags.ignore_permissions = True
-            si.insert()
-            frappe.db.commit()
-
-            return {
-                "success": True,
-                "action": "created",
-                "sales_invoice": si.name,
-                "link": self.make_link("Sales Invoice", si.name),
-                "sales_order": so_name,
-                "delivery_note": dn_name,
-                "grand_total": si.grand_total,
-                "currency": si.currency,
-                "cfdi_use": cfdi_use,
-                "status": "Draft",
-                "message": (
-                    f"✅ Sales Invoice **{si.name}** created for {so_name}\n"
-                    f"Total: {si.currency} {si.grand_total:,.2f}\n"
-                    f"CFDI: {cfdi_use}\n"
-                    f"Review CFDI tab and submit."
-                )
-            }
-        except Exception as e:
-            frappe.log_error(f"SalesOrderFollowupAgent.create_sales_invoice error: {str(e)}")
-            return {"success": False, "error": str(e)}
-
-    # ========== EXISTING: NEXT STEPS (UPDATED) ==========
-
     def get_next_steps(self, so_name: str) -> Dict:
-        """Recommend next actions based on current SO state — now manufacturing-aware"""
+        """Recommend next actions based on current SO state — UPDATED with manufacturing awareness"""
         try:
             so = frappe.get_doc("Sales Order", so_name)
-
+            
             steps = []
-
+            
             if so.docstatus == 0:
-                steps.append("1. Submit the Sales Order to confirm it")
+                steps.append("1. Submit the Sales Order: `@sales_order_follow_up submit " + so_name + "`")
                 return {
                     "success": True,
                     "so_name": so.name,
@@ -588,19 +461,23 @@ class SalesOrderFollowupAgent:
                     "status": "Draft",
                     "steps": steps
                 }
-
+            
             if so.status == "Completed":
-                # Check if payment exists
-                si = frappe.db.get_value("Sales Invoice Item",
-                    {"sales_order": so_name, "docstatus": 1}, "parent")
-                if si:
-                    outstanding = frappe.db.get_value("Sales Invoice", si, "outstanding_amount") or 0
-                    if outstanding > 0:
-                        steps.append(f"1. Create Payment Entry for {si} (outstanding: {outstanding:,.2f})")
-                    else:
-                        steps.append("All done — order is fully paid ✅")
-                else:
-                    steps.append("Order completed — no invoice found (check billing)")
+                # Check if payment is pending
+                sis = frappe.get_all("Sales Invoice Item",
+                    filters={"sales_order": so_name, "docstatus": 1},
+                    fields=["parent"], distinct=True)
+                has_outstanding = False
+                for si_ref in sis:
+                    outstanding = frappe.db.get_value("Sales Invoice", si_ref.parent, "outstanding_amount")
+                    if flt(outstanding) > 0:
+                        has_outstanding = True
+                        steps.append(f"1. Payment pending on {self.make_link('Sales Invoice', si_ref.parent)} — Outstanding: {outstanding}")
+                        steps.append(f"   `@payment create {si_ref.parent}`")
+
+                if not has_outstanding:
+                    steps = ["Order is fully completed and paid — no actions needed"]
+
                 return {
                     "success": True,
                     "so_name": so.name,
@@ -611,31 +488,35 @@ class SalesOrderFollowupAgent:
 
             # Check inventory
             inv_check = self.check_inventory(so_name)
-
-            # Check for existing Work Orders
-            work_orders = frappe.get_all("Work Order",
+            
+            # Check existing Work Orders
+            existing_wos = frappe.get_all("Work Order",
                 filters={"sales_order": so_name, "docstatus": ["!=", 2]},
-                fields=["name", "status", "production_item"],
-                order_by="creation")
-
-            active_wos = [wo for wo in work_orders if wo.status not in ["Completed", "Cancelled"]]
+                fields=["name", "status", "produced_qty", "qty"])
 
             if so.status in ["To Deliver and Bill", "To Deliver"]:
-                if active_wos:
-                    steps.append("1. Complete active Work Orders first:")
-                    for wo in active_wos:
-                        steps.append(f"   - {self.make_link('Work Order', wo.name)}: {wo.status}")
-                elif inv_check.get("all_available"):
-                    steps.append(f"1. Create Delivery Note — inventory is available")
-                    steps.append(f"   Use: `@ai create DN from {so_name}`")
+                if inv_check.get("all_available"):
+                    steps.append(f"1. ✅ Inventory available — Create Delivery Note")
+                    steps.append(f"   `@sales_order_follow_up delivery {so_name}`")
                 else:
-                    steps.append("1. Create Work Order (manufacturing) — inventory insufficient")
-                    steps.append(f"   Use: `@ai create work order from {so_name}`")
+                    if existing_wos:
+                        for wo in existing_wos:
+                            if wo.status not in ["Completed", "Cancelled"]:
+                                steps.append(f"1. 🏭 Work Order in progress: {self.make_link('Work Order', wo.name)} ({wo.status})")
+                                steps.append(f"   Produced: {wo.produced_qty}/{wo.qty}")
+                            elif wo.status == "Completed":
+                                steps.append(f"1. ✅ WO Completed: {self.make_link('Work Order', wo.name)}")
+                    else:
+                        steps.append("1. ❌ Inventory insufficient — Create Manufacturing WO")
+                        steps.append(f"   `@manufacturing create wo from so {so_name}`")
 
             if so.status in ["To Deliver and Bill", "To Bill"]:
                 if so.delivery_status == "Fully Delivered":
-                    steps.append(f"• Create Sales Invoice: `@ai create invoice for {so_name}`")
+                    steps.append(f"• Create Sales Invoice: `@sales_order_follow_up invoice {so_name}`")
 
+            if not steps:
+                steps = [f"Review order status: {so.status}"]
+            
             return {
                 "success": True,
                 "so_name": so.name,
@@ -644,21 +525,19 @@ class SalesOrderFollowupAgent:
                 "delivery_status": so.delivery_status,
                 "billing_status": so.billing_status,
                 "inventory_available": inv_check.get("all_available", False),
-                "active_work_orders": len(active_wos),
-                "steps": steps if steps else ["Review order status manually"]
+                "work_orders": existing_wos,
+                "steps": steps
             }
         except frappe.DoesNotExistError:
             return {"success": False, "error": f"Sales Order '{so_name}' not found"}
         except Exception as e:
             return {"success": False, "error": str(e)}
-
-    # ========== PURCHASE CYCLE TRACKING (unchanged) ==========
-
+    
     def track_purchase_cycle(self, so_name: str) -> Dict:
         """Track the complete purchase cycle for a Sales Order"""
         try:
             so = frappe.get_doc("Sales Order", so_name)
-
+            
             cycle = {
                 "sales_order": {"name": so.name, "link": self.make_link("Sales Order", so.name), "status": so.status},
                 "material_requests": [],
@@ -667,12 +546,12 @@ class SalesOrderFollowupAgent:
                 "purchase_orders": [],
                 "purchase_receipts": []
             }
-
+            
             # Get Material Requests
             mrs = frappe.get_all("Material Request Item",
                 filters={"sales_order": so_name},
                 fields=["parent"], distinct=True)
-
+            
             for mr in mrs:
                 mr_doc = frappe.get_doc("Material Request", mr.parent)
                 cycle["material_requests"].append({
@@ -681,26 +560,42 @@ class SalesOrderFollowupAgent:
                     "status": mr_doc.status,
                     "docstatus": mr_doc.docstatus
                 })
-
+                
                 # Get RFQs from MR
                 rfqs = frappe.get_all("Request for Quotation Item",
                     filters={"material_request": mr.parent},
                     fields=["parent"], distinct=True)
-
+                
                 for rfq in rfqs:
                     rfq_doc = frappe.get_doc("Request for Quotation", rfq.parent)
                     cycle["rfqs"].append({
                         "name": rfq_doc.name,
                         "link": self.make_link("Request for Quotation", rfq_doc.name),
-                        "status": rfq_doc.status
+                        "status": rfq_doc.status,
+                        "docstatus": rfq_doc.docstatus
                     })
-
+                    
+                    # Get Supplier Quotations from RFQ
+                    sqs = frappe.get_all("Supplier Quotation Item",
+                        filters={"request_for_quotation": rfq.parent},
+                        fields=["parent"], distinct=True)
+                    
+                    for sq in sqs:
+                        sq_doc = frappe.get_doc("Supplier Quotation", sq.parent)
+                        cycle["supplier_quotations"].append({
+                            "name": sq_doc.name,
+                            "link": self.make_link("Supplier Quotation", sq_doc.name),
+                            "supplier": sq_doc.supplier,
+                            "status": sq_doc.status,
+                            "docstatus": sq_doc.docstatus
+                        })
+            
             # Get Purchase Orders linked to MRs
             for mr in mrs:
                 pos = frappe.get_all("Purchase Order Item",
                     filters={"material_request": mr.parent},
                     fields=["parent"], distinct=True)
-
+                
                 for po in pos:
                     po_doc = frappe.get_doc("Purchase Order", po.parent)
                     if not any(p["name"] == po_doc.name for p in cycle["purchase_orders"]):
@@ -708,150 +603,193 @@ class SalesOrderFollowupAgent:
                             "name": po_doc.name,
                             "link": self.make_link("Purchase Order", po_doc.name),
                             "supplier": po_doc.supplier,
-                            "status": po_doc.status
+                            "status": po_doc.status,
+                            "docstatus": po_doc.docstatus
                         })
-
+                        
+                        # Get Purchase Receipts
+                        prs = frappe.get_all("Purchase Receipt Item",
+                            filters={"purchase_order": po.parent},
+                            fields=["parent"], distinct=True)
+                        
+                        for pr in prs:
+                            pr_doc = frappe.get_doc("Purchase Receipt", pr.parent)
+                            if not any(p["name"] == pr_doc.name for p in cycle["purchase_receipts"]):
+                                cycle["purchase_receipts"].append({
+                                    "name": pr_doc.name,
+                                    "link": self.make_link("Purchase Receipt", pr_doc.name),
+                                    "status": pr_doc.status,
+                                    "docstatus": pr_doc.docstatus
+                                })
+            
             return {"success": True, "cycle": cycle}
         except Exception as e:
             return {"success": False, "error": str(e)}
-
-    # ========== MAIN HANDLER (UPDATED) ==========
-
+    
+    # ========== MAIN HANDLER — UPDATED ==========
+    
     def process_command(self, message: str) -> str:
-        """Process incoming command and return response"""
+        """Process incoming command and return response — UPDATED with new commands"""
         message_lower = message.lower().strip()
-
-        # Extract SO name — supports both "SO-00752" (short) and "SO-00752-LEGOSAN AB" (full)
-        import re
-        so_pattern = r'(SO-\d+(?:-[\w\s]+)?|SAL-ORD-\d+-\d+)'
+        
+        # Extract SO name if present
+        so_pattern = r'(SO-[\w-]+|SAL-ORD-[\d-]+)'
         so_match = re.search(so_pattern, message, re.IGNORECASE)
-        so_name = so_match.group(1).strip() if so_match else None
-
-        # If short SO reference (no customer suffix), resolve to full name
-        if so_name and re.match(r'^SO-\d+$', so_name):
-            matches = frappe.get_all("Sales Order", filters={"name": ["like", f"{so_name}%"]}, limit=1, pluck="name")
-            if matches:
-                so_name = matches[0]
+        so_name = so_match.group(1) if so_match else None
 
         # Extract Quotation name
-        qtn_pattern = r'(SAL-QTN-\d+-\d+|QTN-\d+)'
+        qtn_pattern = r'(SAL-QTN-[\d-]+|QTN-[\d-]+)'
         qtn_match = re.search(qtn_pattern, message, re.IGNORECASE)
         qtn_name = qtn_match.group(1) if qtn_match else None
+        
+        # ---- HELP ----
+        if "help" in message_lower or "capabilities" in message_lower:
+            return self._help_text()
 
-        confirm = "confirm" in message_lower or message.startswith("!")
+        # ---- CREATE SO FROM QUOTATION (NEW) ----
+        if ("create" in message_lower and "from" in message_lower
+                and ("quotation" in message_lower or "qtn" in message_lower)):
+            if not qtn_name:
+                return "❌ Please specify a Quotation. Example: `@sales_order_follow_up create from quotation SAL-QTN-2024-00752`"
+            result = self.create_from_quotation(qtn_name)
+            return result.get("message", result.get("error", "Unknown error"))
 
-        # Route commands
-        if "pending" in message_lower or "list" in message_lower:
+        # ---- SUBMIT SO (NEW) ----
+        if "submit" in message_lower and so_name:
+            result = self.submit_sales_order(so_name)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- CREATE DELIVERY NOTE (NEW — Step 6) ----
+        if ("delivery" in message_lower or "dn" in message_lower or "entregar" in message_lower) and so_name:
+            result = self.create_delivery_note(so_name)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- CREATE SALES INVOICE (NEW — Step 7) ----
+        if ("invoice" in message_lower or "factura" in message_lower
+                or "bill" in message_lower or "si" in message_lower) and so_name:
+            from_dn = "from dn" in message_lower or "from delivery" in message_lower or "dn" not in message_lower
+            result = self.create_sales_invoice(so_name, from_dn=from_dn)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- PENDING ORDERS ----
+        if "pending" in message_lower or "list" in message_lower or "pendientes" in message_lower:
             result = self.get_pending_orders()
             if result["success"]:
-                alerts = result.get("alerts", {})
                 lines = [f"## Pending Sales Orders ({result['count']} found)\n"]
-
-                # Alerts summary header
-                alert_parts = []
-                if alerts.get("zero_price"):
-                    alert_parts.append(f"{alerts['zero_price']} zero-price")
-                if alerts.get("overdue"):
-                    alert_parts.append(f"{alerts['overdue']} overdue")
-                if alerts.get("stale"):
-                    alert_parts.append(f"{alerts['stale']} stale")
-                if alert_parts:
-                    lines.append(f"**Alerts:** {', '.join(alert_parts)}\n")
-
                 for order in result["orders"]:
                     lines.append(f"• {order['link']} | {order['customer']} | {order['status']}")
                     lines.append(f"  Delivery: {order['delivery_date']} | Total: {order['grand_total']}")
-                    # Show flags if any
-                    for flag in order.get("flags", []):
-                        lines.append(f"  {flag}")
-                    lines.append(f"  **Next:** {order['next_action']}\n")
-                return "\n".join(lines)
+                    lines.append(f"  ➡️ {order['next_action']}")
+                return "\n".join(lines) if result["count"] > 0 else "✅ No pending sales orders."
             return f"❌ Error: {result['error']}"
-
-        # NEW: Create from Quotation
-        if qtn_name and ("create" in message_lower or "convert" in message_lower):
-            result = self.create_from_quotation(qtn_name, confirm=confirm)
-            return self._format_response(result)
-
-        if so_name:
-            # NEW: Create Delivery Note
-            if ("delivery" in message_lower or "dn" in message_lower) and "create" in message_lower:
-                result = self.create_delivery_note(so_name, confirm=confirm)
-                return self._format_response(result)
-
-            # NEW: Create Sales Invoice
-            if ("invoice" in message_lower or "si" in message_lower) and "create" in message_lower:
-                result = self.create_sales_invoice(so_name, confirm=confirm)
-                return self._format_response(result)
-
-            if "inventory" in message_lower or "stock" in message_lower:
-                result = self.check_inventory(so_name)
-                if result["success"]:
-                    lines = [f"## Inventory Check for {result['link']}\n"]
-                    for item in result["items"]:
-                        lines.append(f"• {item['item_code']}: {item['status']}")
-                    lines.append(f"\n**Recommendation:** {result['recommendation']}")
-                    return "\n".join(lines)
-                return f"❌ Error: {result['error']}"
-
-            if "next" in message_lower or "step" in message_lower:
-                result = self.get_next_steps(so_name)
-                if result["success"]:
-                    lines = [f"## Next Steps for {result['link']} ({result['status']})\n"]
-                    for step in result["steps"]:
-                        lines.append(step)
-                    return "\n".join(lines)
-                return f"❌ Error: {result['error']}"
-
-            if "track" in message_lower or "purchase" in message_lower or "cycle" in message_lower:
-                result = self.track_purchase_cycle(so_name)
-                if result["success"]:
-                    cycle = result["cycle"]
-                    lines = [f"## Purchase Cycle for {cycle['sales_order']['link']}\n"]
-                    lines.append(f"**Status:** {cycle['sales_order']['status']}")
-                    lines.append(f"**MRs:** {len(cycle['material_requests'])} | "
-                                 f"**RFQs:** {len(cycle['rfqs'])} | "
-                                 f"**POs:** {len(cycle['purchase_orders'])}")
-                    return "\n".join(lines)
-                return f"❌ Error: {result['error']}"
-
-            # Default: show status
+        
+        # ---- STATUS ----
+        if ("status" in message_lower or "estado" in message_lower) and so_name:
             result = self.get_so_status(so_name)
             if result["success"]:
+                msg = (
+                    f"📋 **{result['link']}**\n\n"
+                    f"  Customer: {result['customer']}\n"
+                    f"  Status: **{result['status']}**\n"
+                    f"  Delivery: {result['delivery_status']} | Billing: {result['billing_status']}\n"
+                    f"  Total: {result['grand_total']}\n"
+                    f"  Delivery Date: {result['delivery_date']}\n"
+                    f"  Inventory: {'✅ Sufficient' if result['inventory_sufficient'] else '❌ Insufficient'}\n\n"
+                    f"  ➡️ **Next:** {result['next_action']}\n"
+                )
+                # Show linked Work Orders (NEW)
+                wos = result["linked_documents"].get("work_orders", [])
+                if wos:
+                    msg += "\n🏭 **Work Orders:**\n"
+                    for wo in wos:
+                        msg += f"  • {self.make_link('Work Order', wo['name'])} — {wo['status']} ({wo['produced']})\n"
+
                 linked = result["linked_documents"]
-                lines = [
-                    f"## {result['link']} — {result['status']}\n",
-                    f"**Customer:** {result['customer']}",
-                    f"**Total:** {result.get('currency', '')} {result['grand_total']:,.2f}",
-                    f"**Delivery:** {result['delivery_date'] or 'Not set'}",
-                    f"**Inventory:** {'✅ Available' if result['inventory_sufficient'] else '❌ Insufficient'}",
-                    f"\n**Linked Documents:**",
-                    f"- DNs: {', '.join(linked['delivery_notes']) or 'None'}",
-                    f"- SIs: {', '.join(linked['sales_invoices']) or 'None'}",
-                    f"- WOs: {len(linked.get('work_orders', []))} work orders",
-                    f"\n**Next:** {result['next_action']}"
+                if linked["delivery_notes"]:
+                    msg += "\n📦 Delivery Notes: " + ", ".join(self.make_link("Delivery Note", d) for d in linked["delivery_notes"])
+                if linked["sales_invoices"]:
+                    msg += "\n🧾 Sales Invoices: " + ", ".join(self.make_link("Sales Invoice", i) for i in linked["sales_invoices"])
+                return msg
+            return f"❌ {result['error']}"
+
+        # ---- INVENTORY CHECK ----
+        if ("inventory" in message_lower or "stock" in message_lower
+                or "inventario" in message_lower) and so_name:
+            result = self.check_inventory(so_name)
+            if result["success"]:
+                msg = f"📦 **Inventory Check for {result['link']}**\n\n"
+                for item in result["items"]:
+                    msg += f"  {item['status']} {item['item_code']} — Need: {item['required_qty']}, Have: {item['available_qty']}\n"
+                msg += f"\n💡 {result['recommendation']}"
+                return msg
+            return f"❌ {result['error']}"
+        
+        # ---- NEXT STEPS ----
+        if ("next" in message_lower or "que sigue" in message_lower
+                or "recommend" in message_lower) and so_name:
+            result = self.get_next_steps(so_name)
+            if result["success"]:
+                msg = f"📋 **Next Steps for {result['link']}** (Status: {result['status']})\n\n"
+                for step in result["steps"]:
+                    msg += f"{step}\n"
+                return msg
+            return f"❌ {result['error']}"
+        
+        # ---- TRACK PURCHASE CYCLE ----
+        if ("track" in message_lower or "cycle" in message_lower
+                or "ciclo" in message_lower) and so_name:
+            result = self.track_purchase_cycle(so_name)
+            if result["success"]:
+                cycle = result["cycle"]
+                msg = f"🔄 **Purchase Cycle for {cycle['sales_order']['link']}** ({cycle['sales_order']['status']})\n\n"
+                
+                sections = [
+                    ("📋 Material Requests", cycle["material_requests"]),
+                    ("📩 RFQs", cycle["rfqs"]),
+                    ("💰 Supplier Quotations", cycle["supplier_quotations"]),
+                    ("📦 Purchase Orders", cycle["purchase_orders"]),
+                    ("✅ Purchase Receipts", cycle["purchase_receipts"])
                 ]
-                return "\n".join(lines)
-            return f"❌ Error: {result['error']}"
+                for title, items in sections:
+                    if items:
+                        msg += f"\n{title}:\n"
+                        for item in items:
+                            msg += f"  • {item['link']} — {item.get('status', 'N/A')}\n"
+                
+                return msg
+            return f"❌ {result['error']}"
 
+        # ---- FALLBACK ----
+        if so_name:
+            result = self.get_so_status(so_name)
+            if result["success"]:
+                return (
+                    f"Sales Order {result['link']} — {result['status']}\n"
+                    f"➡️ {result['next_action']}\n\n"
+                    f"Use `@sales_order_follow_up help` for all commands."
+                )
+
+        return self._help_text()
+
+    def _help_text(self) -> str:
         return (
-            "**Sales Order Agent Commands:**\n\n"
-            "- `@ai pending orders` — List pending SOs\n"
-            "- `@ai status SO-00752` — Show SO details\n"
-            "- `@ai inventory SO-00752` — Check stock\n"
-            "- `@ai next steps SO-00752` — Recommend actions\n"
-            "- `@ai create SO from SAL-QTN-2024-00001` — SO from Quotation\n"
-            "- `@ai create DN from SO-00752` — Create Delivery Note\n"
-            "- `@ai create invoice for SO-00752` — Create Sales Invoice\n"
-            "- `@ai track purchase SO-00752` — Track purchase cycle"
+            "📋 **Sales Order Follow-up Agent — Commands**\n\n"
+            "**Document Creation (NEW)**\n"
+            "`@sales_order_follow_up create from quotation [QTN-NAME]` — Create SO from Quotation\n"
+            "`@sales_order_follow_up submit [SO-NAME]` — Submit Sales Order\n"
+            "`@sales_order_follow_up delivery [SO-NAME]` — Create Delivery Note\n"
+            "`@sales_order_follow_up invoice [SO-NAME]` — Create Sales Invoice (CFDI G03)\n\n"
+            "**Status & Tracking**\n"
+            "`@sales_order_follow_up pending` — List pending orders\n"
+            "`@sales_order_follow_up status [SO-NAME]` — Detailed SO status\n"
+            "`@sales_order_follow_up inventory [SO-NAME]` — Check stock availability\n"
+            "`@sales_order_follow_up next [SO-NAME]` — Recommended next actions\n"
+            "`@sales_order_follow_up track [SO-NAME]` — Full purchase cycle tracking\n\n"
+            "**Example (Full Cycle)**\n"
+            "```\n"
+            "@sales_order_follow_up create from quotation SAL-QTN-2024-00752\n"
+            "@sales_order_follow_up submit SO-00752-LEGOSAN AB\n"
+            "@sales_order_follow_up delivery SO-00752-LEGOSAN AB\n"
+            "@sales_order_follow_up invoice SO-00752-LEGOSAN AB\n"
+            "```"
         )
-
-    def _format_response(self, result: Dict) -> str:
-        """Format result dict into readable response"""
-        if result.get("requires_confirmation"):
-            return result["preview"]
-        if not result.get("success"):
-            return f"❌ {result.get('error', 'Unknown error')}"
-        if result.get("message"):
-            return result["message"]
-        return str(result)
