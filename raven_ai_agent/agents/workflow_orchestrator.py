@@ -611,10 +611,16 @@ class WorkflowOrchestrator:
 
         import re
 
-        # Extract SO name
-        so_pattern = r'(SO-\d+-[\w\s]+|SAL-ORD-\d+-\d+)'
+        # Extract SO name — supports both "SO-00752" (short) and "SO-00752-LEGOSAN AB" (full)
+        so_pattern = r'(SO-\d+(?:-[\w\s]+)?|SAL-ORD-\d+-\d+)'
         so_match = re.search(so_pattern, message, re.IGNORECASE)
         so_name = so_match.group(1).strip() if so_match else None
+
+        # If short SO reference (no customer suffix), resolve to full name
+        if so_name and re.match(r'^SO-\d+$', so_name):
+            matches = frappe.get_all("Sales Order", filters={"name": ["like", f"{so_name}%"]}, limit=1, pluck="name")
+            if matches:
+                so_name = matches[0]
 
         # Extract Quotation name
         qtn_pattern = r'(SAL-QTN-\d+-\d+|QTN-\d+)'
