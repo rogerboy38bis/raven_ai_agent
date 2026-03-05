@@ -688,7 +688,7 @@ class BaseMixin:
             return executor.create_sales_order_from_quotation(qtn_match.group(1).upper(), confirm=is_confirm)
         
         # Sales Order patterns - supports SAL-ORD-YYYY-NNNNN and SO-XXXXX-NAME formats
-        so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+)', query, re.IGNORECASE)
+        so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b)[\w\.]+)*)', query, re.IGNORECASE)
         
         # Submit Sales Order
         if so_match and "submit" in query_lower and "sales order" in query_lower:
