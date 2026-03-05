@@ -383,7 +383,7 @@ class SalesMixin:
                 return {"success": False, "error": str(e)}
         
         # Create Delivery Note from Sales Order
-        if so_match and ("create delivery" in query_lower or "ship" in query_lower or "deliver" in query_lower or "nota de entrega" in query_lower):
+        if so_match and ("create delivery" in query_lower or "ship" in query_lower or "deliver" in query_lower or "nota de entrega" in query_lower or "!delivery" in query_lower or "delivery note" in query_lower):
             try:
                 so_name = so_match.group(1)
                 so = frappe.get_doc("Sales Order", so_name)
@@ -428,7 +428,7 @@ class SalesMixin:
         
         # Create Sales Invoice from SO or DN
         dn_match = re.search(r'(MAT-DN-\d+-\d+|DN-[^\s]+)', query, re.IGNORECASE)
-        if (so_match or dn_match) and ("create sales invoice" in query_lower or "factura de venta" in query_lower or "invoice customer" in query_lower):
+        if (so_match or dn_match) and ("create sales invoice" in query_lower or "factura de venta" in query_lower or "invoice customer" in query_lower or "!invoice" in query_lower or "sales invoice" in query_lower or "create invoice" in query_lower):
             try:
                 if dn_match:
                     dn_name = dn_match.group(1)

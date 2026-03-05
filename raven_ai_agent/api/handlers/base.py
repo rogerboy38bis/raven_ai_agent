@@ -1,6 +1,11 @@
 """
 Base Mixin - Core utility methods for RaymondLucyAgent
 
+⚠️  REFERENCE COPY — NOT USED AT RUNTIME.
+RaymondLucyAgent in agent.py has these methods defined inline.
+This file exists for documentation. If you change agent.py's
+execute_workflow_command(), update this file too for consistency.
+
 Contains: __init__, _get_settings, get_morning_briefing, search_memories,
 tattoo_fact, detect_doctype_from_query, query_doctype_with_permissions,
 get_available_doctypes, duckduckgo_search, search_web, get_erpnext_context,

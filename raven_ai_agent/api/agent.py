@@ -1039,8 +1039,8 @@ class RaymondLucyAgent(
         if result is not None:
             return result
 
-        # Sales-to-Purchase Cycle
-        result = self._handle_sales_commands(query, query_lower)
+        # Sales-to-Purchase Cycle (pass is_confirm for ! commands)
+        result = self._handle_sales_commands(query, query_lower, is_confirm=is_confirm)
         if result is not None:
             return result
 
