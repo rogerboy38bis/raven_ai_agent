@@ -251,10 +251,9 @@ class ManufacturingMixin:
                     })
                     se.get_items()
                     
-                    # Allow zero valuation rate for items without a rate
+                    # Allow zero valuation rate for ALL items to prevent submission errors
                     for item in se.items:
-                        if not item.valuation_rate and not item.basic_rate:
-                            item.allow_zero_valuation_rate = 1
+                        item.allow_zero_valuation_rate = 1
                     
                     se.insert()
                     se.submit()
@@ -312,10 +311,9 @@ class ManufacturingMixin:
                 })
                 se.get_items()
                 
-                # Allow zero valuation rate for items without a rate
+                # Allow zero valuation rate for ALL items to prevent submission errors
                 for item in se.items:
-                    if not item.valuation_rate and not item.basic_rate:
-                        item.allow_zero_valuation_rate = 1
+                    item.allow_zero_valuation_rate = 1
                 
                 se.insert()
                 se.submit()
@@ -354,10 +352,9 @@ class ManufacturingMixin:
                 })
                 se.get_items()
                 
-                # Allow zero valuation rate for items without a rate
+                # Allow zero valuation rate for ALL items to prevent submission errors
                 for item in se.items:
-                    if not item.valuation_rate and not item.basic_rate:
-                        item.allow_zero_valuation_rate = 1
+                    item.allow_zero_valuation_rate = 1
                 
                 se.insert()
                 se.submit()
