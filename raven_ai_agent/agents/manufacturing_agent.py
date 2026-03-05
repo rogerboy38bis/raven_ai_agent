@@ -296,7 +296,8 @@ class ManufacturingAgent:
             # Use ERPNext's built-in Stock Entry creation from Work Order
             from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
 
-            se = make_stock_entry(wo_name, "Manufacture", manufacture_qty)
+            se_dict = make_stock_entry(wo_name, "Manufacture", manufacture_qty)
+            se = frappe.get_doc(se_dict)
             se.insert(ignore_permissions=True)
             se.submit()
             frappe.db.commit()
@@ -351,7 +352,8 @@ class ManufacturingAgent:
 
             from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
 
-            se = make_stock_entry(wo_name, "Material Transfer for Manufacture", transfer_qty)
+            se_dict = make_stock_entry(wo_name, "Material Transfer for Manufacture", transfer_qty)
+            se = frappe.get_doc(se_dict)
             se.insert(ignore_permissions=True)
             se.submit()
             frappe.db.commit()
