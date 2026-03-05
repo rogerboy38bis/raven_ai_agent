@@ -71,6 +71,19 @@ def _detect_ai_intent(query: str) -> str:
     if any(re.search(p, query, re.IGNORECASE) for p in pay_patterns):
         return "payment_bot"
     
+    # Task Validator / Diagnosis: diagnose, validate, audit pipeline, check payments
+    validator_patterns = [
+        r'diagnos[ei]',
+        r'validate\b',
+        r'audit\s+pipeline',
+        r'check\s+payment',
+        r'check\s+pago',
+        r'pipeline\s+health',
+        r'verify\s+(?:SO|sales\s+order)',
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in validator_patterns):
+        return "task_validator"
+    
     # Sales-specific patterns (DN, invoice, pending orders, next steps)
     sales_patterns = [
         r'(?:create|make)\s+(?:DN|delivery\s*note)',
@@ -206,6 +219,19 @@ def handle_raven_message(doc, method):
                 orch_agent = WorkflowOrchestrator()
                 response = orch_agent.process_command(query)
                 result = {"success": True, "response": response}
+            
+            # NEW: Task Validator / Diagnosis Agent
+            elif bot_name == "task_validator":
+                from raven_ai_agent.api.handlers.task_validator import TaskValidatorMixin
+                # Create a lightweight wrapper to use the mixin
+                class _ValidatorAgent(TaskValidatorMixin):
+                    pass
+                validator = _ValidatorAgent()
+                validator_result = validator._handle_validator_commands(query, query.lower())
+                if validator_result:
+                    result = {"success": True, "response": validator_result.get("message") or validator_result.get("error", "No result")}
+                else:
+                    result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
             
             # EXISTING: Sales Order Follow-up
             elif bot_name == "sales_order_follow_up":
