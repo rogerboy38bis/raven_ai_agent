@@ -1206,7 +1206,10 @@ def handle_raven_message(doc, method):
             mfg_keywords = ["work order", "create wo", "submit wo", "manufacture", "transfer material", "check material", "mfg-wo"]
             pay_keywords = ["payment", "outstanding", "unpaid", "reconcile", "acc-sinv", "acc-pay", "sinv-"]
             orch_keywords = ["pipeline status", "run full cycle", "run pipeline", "dry run", "validate so"]
-            if any(kw in q_lower for kw in orch_keywords):
+            validator_keywords = ["diagnose", "diagnosis", "validate ", "audit pipeline", "check payment", "check pago", "pipeline health", "verify so", "verify sales order"]
+            if any(kw in q_lower for kw in validator_keywords):
+                bot_name = "task_validator"
+            elif any(kw in q_lower for kw in orch_keywords):
                 bot_name = "workflow_orchestrator"
             elif any(kw in q_lower for kw in mfg_keywords):
                 bot_name = "manufacturing_bot"
@@ -1329,6 +1332,17 @@ def handle_raven_message(doc, method):
                 wf_agent = WorkflowOrchestrator(user)
                 response = wf_agent.process_command(query)
                 result = {"success": True, "response": response}
+            # NEW: Task Validator / Diagnosis
+            elif bot_name == "task_validator":
+                from raven_ai_agent.api.handlers.task_validator import TaskValidatorMixin
+                class _ValidatorAgent(TaskValidatorMixin):
+                    pass
+                validator = _ValidatorAgent()
+                validator_result = validator._handle_validator_commands(query, query.lower())
+                if validator_result:
+                    result = {"success": True, "response": validator_result.get("message") or validator_result.get("error", "No result")}
+                else:
+                    result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
             else:
                 # Try SkillRouter first for specialized skills (formulation, etc.)
                 try:
