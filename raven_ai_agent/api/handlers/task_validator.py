@@ -68,7 +68,7 @@ class TaskValidatorMixin:
         # @ai sync sales order SO-XXXXX
         # ═══════════════════════════════════════════════════════════
         if any(kw in query_lower for kw in ["sync so", "sync sales order", "fix so", "fix sales order"]):
-            so_match = re.search(r'(SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b)[\w\.]+)*|SAL-ORD-\d+-\d+)', query, re.IGNORECASE)
+            so_match = re.search(r'(SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*|SAL-ORD-\d+-\d+)', query, re.IGNORECASE)
             if so_match:
                 is_force = query.strip().startswith("!") or "!fix" in query_lower or "!sync" in query_lower
                 return self._sync_so_from_quotation(so_match.group(1), confirm=is_force)
@@ -81,7 +81,7 @@ class TaskValidatorMixin:
         # ═══════════════════════════════════════════════════════════
         if "diagnose" in query_lower or "diagnosis" in query_lower:
             qtn_match = re.search(r'(SAL-QTN-\d+-\d+)', query, re.IGNORECASE)
-            so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b)[\w\.]+)*)', query, re.IGNORECASE)
+            so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*)', query, re.IGNORECASE)
             wo_match = re.search(r'(MFG-WO-\d+)', query, re.IGNORECASE)
             
             if qtn_match:
@@ -102,7 +102,7 @@ class TaskValidatorMixin:
         # @ai validate SO-XXXXX
         # ═══════════════════════════════════════════════════════════
         if "validate" in query_lower and "pipeline" not in query_lower:
-            so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b)[\w\.]+)*)', query, re.IGNORECASE)
+            so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*)', query, re.IGNORECASE)
             qtn_match = re.search(r'(SAL-QTN-\d+-\d+)', query, re.IGNORECASE)
             
             if so_match:
@@ -136,7 +136,7 @@ class TaskValidatorMixin:
         # ═══════════════════════════════════════════════════════════
         if "check" in query_lower and ("payment" in query_lower or "pago" in query_lower):
             qtn_match = re.search(r'(SAL-QTN-\d+-\d+)', query, re.IGNORECASE)
-            so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b)[\w\.]+)*)', query, re.IGNORECASE)
+            so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*)', query, re.IGNORECASE)
             
             doc_name = None
             doc_type = None

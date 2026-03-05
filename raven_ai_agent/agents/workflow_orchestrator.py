@@ -599,7 +599,7 @@ class WorkflowOrchestrator:
         message_lower = message.lower().strip()
 
         # Extract document names
-        so_pattern = r'(SO-[\w-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b)[\w\.]+)*|SAL-ORD-[\d-]+)'
+        so_pattern = r'(SO-[\w-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*|SAL-ORD-[\d-]+)'
         so_match = re.search(so_pattern, message, re.IGNORECASE)
         so_name = so_match.group(1) if so_match else None
 
