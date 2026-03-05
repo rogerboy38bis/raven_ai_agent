@@ -444,26 +444,29 @@ class ManufacturingMixin:
                         "preview": f"📥 MATERIAL RECEIPT?\n\n  Item: {item_code}\n  Qty: {qty}\n{price_info}\n  Warehouse: {target_warehouse}\n\nSay 'confirm' or use '!' prefix to proceed. (Tip: Use `@ai !command` to skip confirmation)"
                     }
                 
-                # Look for existing batch first, create if not found
-                existing_batches = frappe.get_all("Batch",
-                    filters={"item": item_code},
-                    fields=["name"],
-                    order_by="creation desc",
-                    limit=1
-                )
+                # Only handle batches if item supports them
+                has_batch = frappe.db.get_value("Item", item_code, "has_batch_no")
+                batch_id = None
                 
-                if existing_batches:
-                    batch_id = existing_batches[0]["name"]
-                else:
-                    # Create new batch - let Frappe auto-name it (LOTE###)
-                    batch = frappe.get_doc({
-                        "doctype": "Batch",
-                        "item": item_code
-                    })
-                    batch.insert(ignore_permissions=True)
-                    batch_id = batch.name
+                if has_batch:
+                    existing_batches = frappe.get_all("Batch",
+                        filters={"item": item_code},
+                        fields=["name"],
+                        order_by="creation desc",
+                        limit=1
+                    )
+                    
+                    if existing_batches:
+                        batch_id = existing_batches[0]["name"]
+                    else:
+                        batch = frappe.get_doc({
+                            "doctype": "Batch",
+                            "item": item_code
+                        })
+                        batch.insert(ignore_permissions=True)
+                        batch_id = batch.name
                 
-                # Create Material Receipt with price
+                # Create Material Receipt
                 se = frappe.get_doc({
                     "doctype": "Stock Entry",
                     "stock_entry_type": "Material Receipt",
@@ -478,8 +481,10 @@ class ManufacturingMixin:
                     "item_code": item_code,
                     "qty": qty,
                     "t_warehouse": target_warehouse,
-                    "batch_no": batch_id
                 }
+                
+                if batch_id:
+                    item_entry["batch_no"] = batch_id
                 
                 if price:
                     item_entry["basic_rate"] = price
@@ -490,9 +495,10 @@ class ManufacturingMixin:
                 se.submit()
                 
                 total_value = qty * price if price else 0
+                batch_info = f"\n  Batch: {batch_id}" if batch_id else ""
                 return {
                     "success": True,
-                    "message": f"✅ Material Receipt created: **{se.name}**\n\n  Item: {item_code}\n  Qty: {qty}\n  Price: ${price:.2f}\n  Total: ${total_value:.2f}\n  Batch: {batch_id}\n  Warehouse: {target_warehouse}"
+                    "message": f"✅ Material Receipt created: **{se.name}**\n\n  Item: {item_code}\n  Qty: {qty}\n  Price: ${price:.2f}\n  Total: ${total_value:.2f}{batch_info}\n  Warehouse: {target_warehouse}"
                 }
             except Exception as e:
                 return {"success": False, "error": str(e)}
