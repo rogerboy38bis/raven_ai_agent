@@ -62,6 +62,20 @@ class TaskValidatorMixin:
         site_name = frappe.local.site
 
         # ═══════════════════════════════════════════════════════════
+        # SYNC/FIX: Apply quotation truth to downstream SO
+        # @ai !sync SO-XXXXX from quotation
+        # @ai !fix SO-XXXXX from quotation  
+        # @ai sync sales order SO-XXXXX
+        # ═══════════════════════════════════════════════════════════
+        if any(kw in query_lower for kw in ["sync so", "sync sales order", "fix so", "fix sales order"]):
+            so_match = re.search(r'(SO-[\w\-]+|SAL-ORD-\d+-\d+)', query, re.IGNORECASE)
+            if so_match:
+                is_force = query.strip().startswith("!") or "!fix" in query_lower or "!sync" in query_lower
+                return self._sync_so_from_quotation(so_match.group(1), confirm=is_force)
+            else:
+                return {"success": False, "error": "**Usage:** `@ai !sync SO-XXXXX from quotation`"}
+
+        # ═══════════════════════════════════════════════════════════
         # DIAGNOSE: Full pipeline diagnosis from a quotation
         # @ai diagnose SAL-QTN-XXXX
         # ═══════════════════════════════════════════════════════════
@@ -811,10 +825,243 @@ class TaskValidatorMixin:
                 msg += f"- {i}\n"
             msg += "\n"
 
-        # Summary
+        # Summary + INTELLIGENT ACTIONS
         if not issues and not warnings:
             msg += "### ✅ All checks passed — pipeline is healthy.\n"
         else:
-            msg += f"---\n**Summary:** {len(issues)} issue(s), {len(warnings)} warning(s)\n"
+            msg += f"---\n**Summary:** {len(issues)} issue(s), {len(warnings)} warning(s)\n\n"
+            
+            # Generate actionable recommendations
+            msg += "### 🤖 Recommended Actions\n"
+            
+            # If SO exists with issues, offer to sync
+            sos = pipeline.get("sales_orders", [])
+            for so in sos:
+                if so.get("issues"):
+                    so_name = so.get("so_name", "")
+                    so_status = so.get("status", "")
+                    issue_count = len(so.get("issues", []))
+                    
+                    # Check if SO is in Draft (can be modified)
+                    if so_status == "Draft":
+                        msg += (f"\n**SO [{so_name}]** has {issue_count} issue(s) vs Quotation (truth source).\n"
+                                f"The SO is in Draft — I can sync it to match the Quotation.\n\n"
+                                f"👉 Say `@ai !sync SO {so_name} from quotation` to auto-fix all mismatches\n"
+                                f"👉 Or `@ai sync SO {so_name} from quotation` to preview changes first\n")
+                    elif so_status == "Submitted":
+                        msg += (f"\n**SO [{so_name}]** has {issue_count} issue(s) but is **Submitted**.\n"
+                                f"⚠️ Cannot auto-fix a submitted SO. Options:\n"
+                                f"1. Amend the SO in ERPNext (Menu → Amend)\n"
+                                f"2. Cancel and recreate from quotation: `@ai !sales order {qtn_name}`\n")
+                    else:
+                        msg += f"\n**SO [{so_name}]** has {issue_count} issue(s). Status: {so_status}\n"
+            
+            # If no SO exists yet
+            if not sos:
+                qtn_status = pipeline.get("quotation", {}).get("status", "")
+                if qtn_status == "Draft":
+                    msg += (f"\nNo Sales Order exists yet. Next steps:\n"
+                            f"1. Review and submit the quotation: `@ai !submit quotation {qtn_name}`\n"
+                            f"2. Create SO: `@ai !sales order {qtn_name}`\n")
+                elif qtn_status == "Submitted":
+                    msg += f"\nQuotation is Submitted. Create SO: `@ai !sales order {qtn_name}`\n"
+            
+            # Pipeline progression suggestions
+            if sos and not pipeline.get("work_orders"):
+                for so in sos:
+                    if so.get("status") in ("To Deliver and Bill", "To Deliver"):
+                        msg += f"\n📦 SO is ready — create Work Order: `@ai !work order {so.get('so_name', '')}`\n"
+            
+            if pipeline.get("work_orders") and not pipeline.get("delivery_notes"):
+                for wo in pipeline["work_orders"]:
+                    if wo.get("status") == "Completed":
+                        msg += f"\n🚚 WO completed — create Delivery Note: `@ai !delivery {sos[0].get('so_name', '') if sos else ''}`\n"
+                    elif wo.get("status") == "Not Started":
+                        msg += f"\n⚙️ WO not started — transfer materials: `@ai transfer materials {wo.get('name', '')}`\n"
 
         return {"success": True, "message": msg}
+
+    # ═══════════════════════════════════════════════════════════════
+    # SYNC: Apply Quotation truth to Sales Order
+    # ═══════════════════════════════════════════════════════════════
+    def _sync_so_from_quotation(self, so_name: str, confirm: bool = False) -> Dict:
+        """Sync a Sales Order to match its source Quotation (truth source)"""
+        site_name = frappe.local.site
+        
+        try:
+            so = frappe.get_doc("Sales Order", so_name)
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Order **{so_name}** not found."}
+
+        so_link = f"https://{site_name}/app/sales-order/{so_name}"
+
+        # SO must be in Draft to modify
+        if so.docstatus != 0:
+            return {
+                "success": False,
+                "error": f"SO [{so_name}]({so_link}) is **{'Submitted' if so.docstatus == 1 else 'Cancelled'}**.\n"
+                         f"Only Draft SOs can be synced. Amend it first in ERPNext."
+            }
+
+        # Find source quotation
+        qtn_name = None
+        for item in so.items:
+            if item.prevdoc_docname:
+                qtn_name = item.prevdoc_docname
+                break
+
+        if not qtn_name:
+            return {"success": False, "error": f"SO [{so_name}]({so_link}) has no linked Quotation."}
+
+        try:
+            qtn = frappe.get_doc("Quotation", qtn_name)
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Source Quotation **{qtn_name}** not found."}
+
+        qtn_link = f"https://{site_name}/app/quotation/{qtn_name}"
+
+        # Build change plan
+        changes = []
+
+        # Header fields
+        for qtn_field, so_field, label in self.CRITICAL_FIELDS["header"]:
+            qtn_val = getattr(qtn, qtn_field, None)
+            so_val = getattr(so, so_field, None)
+            qtn_str = str(qtn_val or "").strip()
+            so_str = str(so_val or "").strip()
+            if qtn_str != so_str:
+                changes.append({
+                    "type": "header",
+                    "field": so_field,
+                    "label": label,
+                    "from": so_str or "(empty)",
+                    "to": qtn_str or "(empty)",
+                    "value": qtn_val,
+                })
+
+        # Item fields
+        for qtn_item in qtn.items:
+            matching_so_item = None
+            for so_item in so.items:
+                if so_item.item_code == qtn_item.item_code:
+                    matching_so_item = so_item
+                    break
+            if not matching_so_item:
+                continue
+
+            for qtn_field, so_field, label in self.CRITICAL_FIELDS["items"]:
+                qtn_val = getattr(qtn_item, qtn_field, None)
+                so_val = getattr(matching_so_item, so_field, None)
+                if isinstance(qtn_val, (int, float)) and isinstance(so_val, (int, float)):
+                    if abs(float(qtn_val) - float(so_val)) > 0.01:
+                        changes.append({
+                            "type": "item",
+                            "item_code": qtn_item.item_code,
+                            "field": so_field,
+                            "label": label,
+                            "from": str(so_val),
+                            "to": str(qtn_val),
+                            "value": qtn_val,
+                            "so_item_idx": matching_so_item.idx,
+                        })
+                else:
+                    qtn_str = str(qtn_val or "").strip()
+                    so_str = str(so_val or "").strip()
+                    if qtn_str != so_str:
+                        changes.append({
+                            "type": "item",
+                            "item_code": qtn_item.item_code,
+                            "field": so_field,
+                            "label": label,
+                            "from": so_str or "(empty)",
+                            "to": qtn_str or "(empty)",
+                            "value": qtn_val,
+                            "so_item_idx": matching_so_item.idx,
+                        })
+
+        # Payment schedule sync
+        schedule_change = False
+        qtn_schedule = getattr(qtn, 'payment_schedule', []) or []
+        so_schedule = getattr(so, 'payment_schedule', []) or []
+        if len(qtn_schedule) != len(so_schedule):
+            schedule_change = True
+        else:
+            for qp, sp in zip(qtn_schedule, so_schedule):
+                for qtn_field, so_field, label in self.CRITICAL_FIELDS["payment_schedule"]:
+                    qv = getattr(qp, qtn_field, None)
+                    sv = getattr(sp, so_field, None)
+                    if str(qv or "") != str(sv or ""):
+                        schedule_change = True
+                        break
+        if schedule_change:
+            changes.append({
+                "type": "payment_schedule",
+                "label": "Payment Schedule",
+                "from": f"{len(so_schedule)} row(s)",
+                "to": f"{len(qtn_schedule)} row(s) from Quotation",
+            })
+
+        if not changes:
+            return {
+                "success": True,
+                "message": f"✅ SO [{so_name}]({so_link}) already matches Quotation [{qtn_name}]({qtn_link}). No changes needed."
+            }
+
+        # ── Preview mode (no ! prefix) ──
+        if not confirm:
+            msg = f"## Sync Plan: [{so_name}]({so_link}) ← [{qtn_name}]({qtn_link})\n\n"
+            msg += f"**{len(changes)} change(s)** will be applied to match the Quotation (truth source):\n\n"
+            msg += "| # | Field | Current (SO) | New (from QTN) |\n"
+            msg += "|---|-------|-------------|----------------|\n"
+            for idx, c in enumerate(changes, 1):
+                item_prefix = f"`{c['item_code']}` " if c.get("item_code") else ""
+                msg += f"| {idx} | {item_prefix}**{c['label']}** | `{c['from']}` | `{c['to']}` |\n"
+            msg += f"\n👉 Say `@ai !sync SO {so_name} from quotation` to apply these changes\n"
+            return {"success": True, "message": msg}
+
+        # ── Execute sync ──
+        try:
+            applied = []
+
+            for c in changes:
+                if c["type"] == "header":
+                    setattr(so, c["field"], c["value"])
+                    applied.append(f"Header `{c['label']}`: `{c['from']}` → `{c['to']}`")
+
+                elif c["type"] == "item":
+                    for so_item in so.items:
+                        if so_item.idx == c.get("so_item_idx"):
+                            setattr(so_item, c["field"], c["value"])
+                            applied.append(f"Item `{c['item_code']}` `{c['label']}`: `{c['from']}` → `{c['to']}`")
+                            break
+
+                elif c["type"] == "payment_schedule":
+                    # Replace SO payment schedule with QTN's
+                    so.payment_schedule = []
+                    so.payment_terms_template = qtn.payment_terms_template
+                    for qp in qtn_schedule:
+                        so.append("payment_schedule", {
+                            "due_date": qp.due_date,
+                            "invoice_portion": qp.invoice_portion,
+                            "payment_amount": qp.payment_amount,
+                            "description": getattr(qp, 'description', ''),
+                            "payment_term": getattr(qp, 'payment_term', ''),
+                        })
+                    applied.append(f"Payment Schedule: replaced with {len(qtn_schedule)} row(s) from Quotation")
+
+            so.flags.ignore_validate = True
+            so.save()
+            frappe.db.commit()
+            frappe.clear_cache(doctype="Sales Order")
+
+            msg = f"## ✅ Synced: [{so_name}]({so_link}) ← [{qtn_name}]({qtn_link})\n\n"
+            msg += f"**{len(applied)} change(s) applied:**\n\n"
+            for a in applied:
+                msg += f"- ✅ {a}\n"
+            msg += f"\n⚠️ Hard-refresh your browser (Ctrl+Shift+R) to see changes.\n"
+            msg += f"\n👉 Re-check: `@ai diagnose {qtn_name}`\n"
+            return {"success": True, "message": msg}
+
+        except Exception as e:
+            frappe.db.rollback()
+            return {"success": False, "error": f"Sync failed: {str(e)}"}
