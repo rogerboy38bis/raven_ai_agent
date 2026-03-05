@@ -422,11 +422,11 @@ class ManufacturingMixin:
             try:
                 item_code = item_match.group(1).upper().replace("-", "_")
                 warehouse_match = re.search(r'warehouse[:\s]+([^\n,]+)', query, re.IGNORECASE)
-                qty_match = re.search(r'qty[:\s]*(\d+\.?\d*)|quantity[:\s]*(\d+\.?\d*)|(\d+\.?\d*)\s*(?:units?|pcs?|qty)', query, re.IGNORECASE)
+                qty_match = re.search(r'(?:qty|quantity|cantidad)[:\s]+(\d+\.?\d*)', query, re.IGNORECASE)
                 price_match = re.search(r'price[:\s]*\$?(\d+\.?\d*)|rate[:\s]*\$?(\d+\.?\d*)|\$(\d+\.?\d*)', query, re.IGNORECASE)
                 
                 target_warehouse = warehouse_match.group(1).strip() if warehouse_match else "FG to Sell Warehouse - AMB-W"
-                qty = float(qty_match.group(1) or qty_match.group(2) or qty_match.group(3)) if qty_match else 1
+                qty = float(qty_match.group(1)) if qty_match else 1
                 price = float(price_match.group(1) or price_match.group(2) or price_match.group(3)) if price_match else None
                 
                 # Check if item exists
