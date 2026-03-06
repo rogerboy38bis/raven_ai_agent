@@ -55,8 +55,19 @@ class PaymentAgent:
         try:
             si = frappe.get_doc("Sales Invoice", si_name)
 
-            if si.docstatus != 1:
-                return {"success": False, "error": f"Sales Invoice '{si_name}' must be submitted first."}
+            # Intelligent: if SI is Draft, auto-submit it first
+            if si.docstatus == 0:
+                try:
+                    si.submit()
+                    frappe.db.commit()
+                    si.reload()
+                except Exception as submit_err:
+                    return {
+                        "success": False,
+                        "error": f"Sales Invoice '{si_name}' is Draft. Auto-submit failed: {str(submit_err)}"
+                    }
+            elif si.docstatus == 2:
+                return {"success": False, "error": f"Sales Invoice '{si_name}' is cancelled."}
 
             if flt(si.outstanding_amount) <= 0:
                 return {
@@ -327,7 +338,9 @@ class PaymentAgent:
             return self._help_text()
 
         # ---- CREATE PAYMENT ----
-        if "create" in message_lower and si_name:
+        # Match: explicit "create" OR just having an SI name (default action for SI = create payment)
+        # Also matches: "payment from ACC-SINV-XXX", "pay ACC-SINV-XXX", "pago ACC-SINV-XXX"
+        if si_name and not any(kw in message_lower for kw in ["submit", "reconcile", "status", "estado"]):
             amount_match = re.search(r'(?:amount|monto)\s+(\d+\.?\d*)', message, re.IGNORECASE)
             amount = float(amount_match.group(1)) if amount_match else None
             mode_match = re.search(r'(?:mode|modo)\s+(.+?)(?:\s|$)', message, re.IGNORECASE)
