@@ -75,7 +75,10 @@ def fix_invoice_debit_to(invoice_name, new_debit_to):
         WHERE name = %s
     """, (new_debit_to, invoice_name))
     
-    # Also update party_account_currency to match the new account
+    # CRITICAL: party_account_currency must match the debit_to account's currency,
+    # NOT the invoice currency. For MXN Microsip accounts (1105.x), this is MXN
+    # even when the invoice is in USD. ERPNext handles the conversion via conversion_rate.
+    # Exchange rate differences at payment time go to gain/loss accounts.
     frappe.db.sql("""
         UPDATE `tabSales Invoice`
         SET party_account_currency = %s, modified = NOW()

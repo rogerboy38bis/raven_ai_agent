@@ -78,19 +78,25 @@ class SalesMixin:
         """Intelligently discover the correct debit_to (receivable) account.
         
         Follows Microsip/SAT per-customer account convention:
-        - 1105.1.x (MXN, NACIONALES) for domestic customers
-        - 1105.2.x (USD, EXTRANJEROS) for international customers
+        - 1105.1.x = NACIONALES (ALL MXN) — domestic customers
+        - 1105.2.x = EXTRANJEROS (ALL MXN) — international customers
+        
+        CRITICAL: ALL 1105.x accounts are in MXN (company currency).
+        Even for USD invoices, the receivable account is MXN.
+        ERPNext with "Allow Multi-Currency" enabled handles the conversion:
+        - Invoice in USD → GL entries in MXN using conversion_rate
+        - party_account_currency must be MXN (account currency), NOT invoice currency
+        - When payment arrives at different exchange rate → exchange gain/loss
+        
+        This function also sets party_account_currency on the si_doc to match
+        the resolved account's currency, preventing InvalidAccountCurrency errors.
         
         Resolution order:
         1. Search for a per-customer Microsip sub-account matching customer name
-           under 1105.1 (MXN) or 1105.2 (USD) based on invoice currency
         2. Fall back to ERPNext get_party_account (canonical)
-        3. Validate current debit_to is a ledger with matching currency
-        4. Search any Receivable ledger matching currency
+        3. Validate current debit_to is a valid Receivable ledger
+        4. Search any Receivable ledger in the company
         5. Check customer's last submitted SI
-        
-        Prevents Group Account errors by validating the resolved account
-        is a ledger (not a group) and matches the SI currency.
         
         Args:
             si_doc: The Sales Invoice doc (before insert)
@@ -103,8 +109,8 @@ class SalesMixin:
         customer = getattr(si_doc, 'customer', None)
         currency = getattr(si_doc, 'currency', None) or 'USD'
         
-        def _is_valid_ledger(account_name, expected_currency=None):
-            """Check if account is a valid non-group ledger, optionally matching currency."""
+        def _is_valid_ledger(account_name):
+            """Check if account is a valid non-group Receivable ledger."""
             try:
                 info = frappe.db.get_value(
                     'Account', account_name,
@@ -112,39 +118,49 @@ class SalesMixin:
                 )
                 if not info or info.is_group:
                     return False
-                if expected_currency and info.account_currency != expected_currency:
+                if info.account_type != 'Receivable':
                     return False
-                return True
+                return info
             except Exception:
                 return False
         
+        def _set_party_account_currency(account_name):
+            """Set party_account_currency on si_doc to match the account's currency.
+            
+            This is CRITICAL: party_account_currency must match the debit_to account's
+            currency, NOT the invoice currency. For MXN Microsip accounts receiving
+            USD invoices, party_account_currency = MXN.
+            """
+            try:
+                acct_currency = frappe.db.get_value('Account', account_name, 'account_currency')
+                if acct_currency:
+                    si_doc.party_account_currency = acct_currency
+            except Exception:
+                pass
+        
         # --- Strategy 1: Microsip/SAT per-customer sub-account ---
-        # Convention: 1105.1.x = NACIONALES (MXN), 1105.2.x = EXTRANJEROS (USD)
+        # Convention: 1105.1.x = NACIONALES, 1105.2.x = EXTRANJEROS
+        # ALL accounts under 1105 are MXN — even EXTRANJEROS
         # Each customer has their own ledger account named after them
         if customer and company:
             try:
-                # Determine parent group based on currency
-                # USD/foreign → search under 1105.2 EXTRANJEROS
-                # MXN/domestic → search under 1105.1 NACIONALES  
                 company_currency = frappe.db.get_value('Company', company, 'default_currency') or 'MXN'
                 
                 if currency != company_currency:
-                    # Foreign customer: search 1105.2 EXTRANJEROS sub-accounts
-                    parent_groups = ['1105.2 - EXTRANJEROS']
+                    # Foreign currency invoice → search EXTRANJEROS first, then NACIONALES
+                    parent_groups = ['1105.2 - EXTRANJEROS', '1105.1 - NACIONALES']
                 else:
-                    # Domestic customer: search 1105.1 NACIONALES sub-accounts
-                    parent_groups = ['1105.1 - NACIONALES']
+                    # Domestic currency invoice → search NACIONALES first, then EXTRANJEROS
+                    parent_groups = ['1105.1 - NACIONALES', '1105.2 - EXTRANJEROS']
                 
-                # Clean customer name for matching — strip legal suffixes for fuzzy match
+                # Clean customer name for matching — strip legal suffixes
                 customer_clean = customer.upper().strip()
-                # Remove common suffixes: SA DE CV, S.A., SA, AB, LLC, etc.
                 for suffix in [' SA DE CV', ' S DE RL DE CV', ' S.A.', ' SA', ' AB',
                                ' LLC', ' INC', ' LTD', ' GMBH', ' SRL', ' SPR']:
                     customer_clean = customer_clean.replace(suffix, '')
                 customer_clean = customer_clean.strip()
                 
                 for parent_prefix in parent_groups:
-                    # Search for per-customer account under this parent
                     sub_accounts = frappe.get_all(
                         'Account',
                         filters={
@@ -154,25 +170,23 @@ class SalesMixin:
                             'parent_account': ['like', f'{parent_prefix}%']
                         },
                         fields=['name', 'account_currency'],
-                        limit_page_length=0  # Get all
+                        limit_page_length=0
                     )
                     
-                    # Try exact-ish match: customer name appears in account name
+                    # Exact-ish match: customer name appears in account name
                     for acct in sub_accounts:
                         acct_upper = acct.name.upper()
-                        # Check if customer name (or cleaned version) is in account name
                         if customer_clean in acct_upper or customer.upper() in acct_upper:
-                            # With "Allow Multi-Currency" enabled, the account currency
-                            # doesn't need to match invoice currency — ERPNext handles
-                            # the conversion. But prefer matching currency.
+                            _set_party_account_currency(acct.name)
                             return acct.name
                     
-                    # Fuzzy: try first significant word of customer name (min 4 chars)
+                    # Fuzzy: first significant word of customer name (min 4 chars)
                     words = [w for w in customer_clean.split() if len(w) >= 4]
                     if words:
                         primary_word = words[0]
                         for acct in sub_accounts:
                             if primary_word in acct.name.upper():
+                                _set_party_account_currency(acct.name)
                                 return acct.name
             except Exception:
                 pass
@@ -181,29 +195,32 @@ class SalesMixin:
         try:
             from erpnext.accounts.party import get_party_account
             resolved = get_party_account('Customer', customer, company)
-            if resolved and _is_valid_ledger(resolved, currency):
+            if resolved and _is_valid_ledger(resolved):
+                _set_party_account_currency(resolved)
                 return resolved
         except Exception:
             pass
         
         # --- Strategy 3: Validate current debit_to ---
-        if current_debit_to and _is_valid_ledger(current_debit_to, currency):
-            return None  # Current is fine
+        if current_debit_to and _is_valid_ledger(current_debit_to):
+            _set_party_account_currency(current_debit_to)
+            return None  # Current is fine, but ensure party_account_currency is set
         
-        # --- Strategy 4: Find currency-matching Receivable ledger ---
+        # --- Strategy 4: Find any Receivable ledger in the company ---
         try:
             accounts = frappe.get_all(
                 'Account',
                 filters={
                     'company': company,
                     'account_type': 'Receivable',
-                    'account_currency': currency,
                     'is_group': 0
                 },
-                fields=['name'],
+                fields=['name', 'account_currency'],
+                order_by='account_currency asc',  # Prefer company currency (MXN)
                 limit_page_length=5
             )
             if accounts:
+                _set_party_account_currency(accounts[0].name)
                 return accounts[0].name
         except Exception:
             pass
@@ -213,11 +230,12 @@ class SalesMixin:
             try:
                 last_si = frappe.db.get_value(
                     'Sales Invoice',
-                    {'customer': customer, 'docstatus': 1, 'currency': currency},
+                    {'customer': customer, 'docstatus': 1},
                     'debit_to',
                     order_by='posting_date desc'
                 )
                 if last_si and _is_valid_ledger(last_si):
+                    _set_party_account_currency(last_si)
                     return last_si
             except Exception:
                 pass
