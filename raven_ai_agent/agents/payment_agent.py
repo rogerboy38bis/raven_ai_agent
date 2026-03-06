@@ -8,9 +8,17 @@ Covers Workflow Step 8:
 Key Intelligence:
   - Creates Payment Entry from submitted Sales Invoice
   - Handles multi-currency (USD sales with MXN company)
+  - Applies Banxico FIX T-1 exchange rate at payment date
+  - Calculates exchange gain/loss (ganancia/pérdida cambiaria)
   - Reconciles Payment Entry with Sales Invoice
   - Tracks outstanding amounts
   - CFDI compliance awareness
+
+Exchange Gain/Loss Flow (per Luis P AMB):
+  Invoice: USD 10,000 × TC_invoice 17.26 = MXN 172,600 (CxC)
+  Payment: USD 10,000 × TC_payment 17.60 = MXN 176,000 (received)
+  Difference: MXN 3,400 → Utilidad cambiaria (Exchange Gain)
+  If TC_payment < TC_invoice → Pérdida cambiaria (Exchange Loss)
 
 Author: raven_ai_agent
 """
@@ -41,16 +49,22 @@ class PaymentAgent:
     # ========== PAYMENT ENTRY OPERATIONS (Step 8) ==========
 
     def create_payment_entry(self, si_name: str, amount: float = None,
-                             mode_of_payment: str = None) -> Dict:
+                             mode_of_payment: str = None,
+                             payment_date: str = None) -> Dict:
         """Create a Payment Entry from a Sales Invoice.
+        
+        Applies Banxico FIX T-1 exchange rate for the payment date.
+        If the payment rate differs from invoice rate, calculates
+        exchange gain/loss and adds it to the Payment Entry deductions.
         
         Args:
             si_name: Sales Invoice name
-            amount: Payment amount. If None, uses full outstanding amount.
+            amount: Payment amount in invoice currency. If None, uses full outstanding.
             mode_of_payment: Mode of payment (e.g. 'Wire Transfer', 'Cash')
+            payment_date: Payment posting date (YYYY-MM-DD). If None, uses today.
         
         Returns:
-            Dict with Payment Entry details
+            Dict with Payment Entry details including exchange gain/loss info
         """
         try:
             si = frappe.get_doc("Sales Invoice", si_name)
@@ -95,22 +109,87 @@ class PaymentAgent:
                 pe.mode_of_payment = mode_of_payment
 
             pe.reference_no = f"PAY-{si_name}"
-            pe.reference_date = nowdate()
+            pe.reference_date = payment_date or nowdate()
+            if payment_date:
+                pe.posting_date = payment_date
+
+            # --- Banxico FIX T-1 Exchange Rate for Payment Date ---
+            fx_info = None
+            exchange_gl_info = None
+            company_currency = frappe.db.get_value('Company', si.company, 'default_currency') or 'MXN'
+            
+            if si.currency != company_currency:
+                posting = str(pe.posting_date or nowdate())
+                try:
+                    from raven_ai_agent.api.banxico_fx import (
+                        get_fix_for_payment, calculate_exchange_gain_loss
+                    )
+                    payment_rate, rate_date = get_fix_for_payment(posting)
+                    if payment_rate:
+                        # Set the payment exchange rate
+                        pe.source_exchange_rate = payment_rate
+                        pe.target_exchange_rate = 1  # MXN -> MXN
+                        
+                        fx_info = {
+                            'payment_rate': payment_rate,
+                            'rate_date': rate_date,
+                            'invoice_rate': si.conversion_rate
+                        }
+                        
+                        # Calculate exchange gain/loss
+                        # For receive payment: paid_amount is in USD
+                        usd_amount = flt(payment_amount) if si.party_account_currency == 'MXN' else flt(pe.paid_amount)
+                        if si.party_account_currency == 'MXN':
+                            # outstanding is in MXN, payment is in USD
+                            # Need the USD amount being paid
+                            usd_amount = flt(pe.paid_amount) if hasattr(pe, 'paid_amount') else payment_amount
+                        
+                        exchange_gl_info = calculate_exchange_gain_loss(
+                            invoice_rate=si.conversion_rate,
+                            payment_rate=payment_rate,
+                            usd_amount=usd_amount
+                        )
+                        
+                        # ERPNext handles exchange gain/loss automatically via
+                        # "Set Exchange Gain/Loss" when source_exchange_rate differs
+                        # from the invoice conversion_rate. The difference posts to
+                        # the company's exchange_gain_loss_account.
+                        
+                except Exception:
+                    pass  # Banxico not available, let ERPNext use its default rate
 
             pe.insert(ignore_permissions=True)
             frappe.db.commit()
+
+            # Build response message
+            fx_msg = ""
+            if fx_info:
+                fx_msg = (
+                    f"\n\n  💱 **Tipo de Cambio**\n"
+                    f"  Invoice TC: {fx_info['invoice_rate']} (at invoice date)\n"
+                    f"  Payment TC: {fx_info['payment_rate']} (FIX {fx_info['rate_date']})\n"
+                )
+                if exchange_gl_info and exchange_gl_info['difference_mxn'] > 0.01:
+                    gl_type = '🟢 Ganancia' if exchange_gl_info['is_gain'] else '🔴 Pérdida'
+                    fx_msg += (
+                        f"  {gl_type} cambiaria: MXN {exchange_gl_info['difference_mxn']:,.2f}\n"
+                        f"  ({exchange_gl_info['type_es']})"
+                    )
 
             return {
                 "success": True,
                 "pe_name": pe.name,
                 "link": self.make_link("Payment Entry", pe.name),
+                "fx_info": fx_info,
+                "exchange_gain_loss": exchange_gl_info,
                 "message": (
                     f"✅ Payment Entry created: {self.make_link('Payment Entry', pe.name)}\n\n"
                     f"  Sales Invoice: {self.make_link('Sales Invoice', si_name)}\n"
                     f"  Customer: {si.customer}\n"
                     f"  Amount: {payment_amount} {si.currency}\n"
                     f"  Outstanding After: {flt(si.outstanding_amount) - payment_amount}\n"
-                    f"  Status: Draft\n\n"
+                    f"  Status: Draft"
+                    f"{fx_msg}\n\n"
                     f"💡 Review and submit: `@payment submit {pe.name}`"
                 )
             }

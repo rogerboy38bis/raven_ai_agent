@@ -74,6 +74,79 @@ class SalesMixin:
         return cfdi
 
     @staticmethod
+    def _discover_conversion_rate(si_doc):
+        """Set the correct Banxico FIX T-1 exchange rate on a Sales Invoice.
+        
+        SAT/CFDI Rule (Anexo 20 Guía de Llenado):
+          - TipoCambio on CFDI de ingresos must be the FIX rate
+          - FIX is determined by Banxico at noon, published in DOF next business day
+          - For invoice date T: use FIX from T-1 (previous business day)
+        
+        If Banxico API is not available (no token configured), falls back to
+        ERPNext's Currency Exchange table or the rate already on the doc.
+        
+        Args:
+            si_doc: The Sales Invoice doc (before insert)
+        
+        Returns:
+            dict with rate info, or None if no change needed
+        """
+        currency = getattr(si_doc, 'currency', None)
+        company = getattr(si_doc, 'company', None)
+        posting_date = str(getattr(si_doc, 'posting_date', None) or '')
+        
+        if not currency or not company or not posting_date:
+            return None
+        
+        # Only applies to foreign currency invoices
+        company_currency = frappe.db.get_value('Company', company, 'default_currency') or 'MXN'
+        if currency == company_currency:
+            return None  # MXN invoice, no conversion needed
+        
+        # Try Banxico FIX T-1
+        try:
+            from raven_ai_agent.api.banxico_fx import get_fix_for_invoice
+            rate, rate_date = get_fix_for_invoice(posting_date)
+            if rate:
+                old_rate = getattr(si_doc, 'conversion_rate', None)
+                si_doc.conversion_rate = rate
+                return {
+                    'source': 'banxico_fix',
+                    'rate': rate,
+                    'rate_date': rate_date,
+                    'old_rate': old_rate,
+                    'posting_date': posting_date
+                }
+        except Exception:
+            pass  # Banxico API not available, fall through
+        
+        # Fallback: check ERPNext Currency Exchange table for T-1
+        try:
+            from datetime import datetime, timedelta
+            dt = datetime.strptime(posting_date, "%Y-%m-%d")
+            for days_back in range(1, 10):
+                check_date = (dt - timedelta(days=days_back)).strftime("%Y-%m-%d")
+                ce_rate = frappe.db.get_value(
+                    'Currency Exchange',
+                    {'date': check_date, 'from_currency': currency, 'to_currency': company_currency},
+                    'exchange_rate'
+                )
+                if ce_rate:
+                    old_rate = getattr(si_doc, 'conversion_rate', None)
+                    si_doc.conversion_rate = float(ce_rate)
+                    return {
+                        'source': 'currency_exchange_table',
+                        'rate': float(ce_rate),
+                        'rate_date': check_date,
+                        'old_rate': old_rate,
+                        'posting_date': posting_date
+                    }
+        except Exception:
+            pass
+        
+        return None  # Keep whatever rate ERPNext assigned
+
+    @staticmethod
     def _discover_debit_to(si_doc):
         """Intelligently discover the correct debit_to (receivable) account.
         
@@ -688,11 +761,16 @@ class SalesMixin:
                     correct_debit_to = self._discover_debit_to(si)
                     if correct_debit_to:
                         si.debit_to = correct_debit_to
+                    # Apply Banxico FIX T-1 exchange rate
+                    fx_info = self._discover_conversion_rate(si)
                     si.insert()
                     site_name = frappe.local.site
+                    fx_msg = ""
+                    if fx_info:
+                        fx_msg = f"\n  💱 TC: {fx_info['rate']} ({fx_info['source']}, FIX {fx_info.get('rate_date','')})"
                     return {
                         "success": True,
-                        "message": f"✅ Sales Invoice created: [{si.name}](https://{site_name}/app/sales-invoice/{si.name})\n  Customer: {si.customer}\n  Currency: {si.currency}\n  Total: {si.currency} {si.grand_total:,.2f}\n  🇲🇽 CFDI: {si.mx_payment_option} | Use: {si.mx_cfdi_use} | Pay: {si.mode_of_payment}"
+                        "message": f"✅ Sales Invoice created: [{si.name}](https://{site_name}/app/sales-invoice/{si.name})\n  Customer: {si.customer}\n  Currency: {si.currency}\n  Total: {si.currency} {si.grand_total:,.2f}\n  🇲🇽 CFDI: {si.mx_payment_option} | Use: {si.mx_cfdi_use} | Pay: {si.mode_of_payment}{fx_msg}"
                     }
                 elif so_match:
                     so_name = so_match.group(1)
@@ -718,11 +796,16 @@ class SalesMixin:
                     correct_debit_to = self._discover_debit_to(si)
                     if correct_debit_to:
                         si.debit_to = correct_debit_to
+                    # Apply Banxico FIX T-1 exchange rate
+                    fx_info = self._discover_conversion_rate(si)
                     si.insert()
                     site_name = frappe.local.site
+                    fx_msg = ""
+                    if fx_info:
+                        fx_msg = f"\n  💱 TC: {fx_info['rate']} ({fx_info['source']}, FIX {fx_info.get('rate_date','')})"
                     return {
                         "success": True,
-                        "message": f"✅ Sales Invoice created: [{si.name}](https://{site_name}/app/sales-invoice/{si.name})\n  Customer: {si.customer}\n  Currency: {si.currency}\n  Total: {si.currency} {si.grand_total:,.2f}\n  🇲🇽 CFDI: {si.mx_payment_option} | Use: {si.mx_cfdi_use} | Pay: {si.mode_of_payment}"
+                        "message": f"✅ Sales Invoice created: [{si.name}](https://{site_name}/app/sales-invoice/{si.name})\n  Customer: {si.customer}\n  Currency: {si.currency}\n  Total: {si.currency} {si.grand_total:,.2f}\n  🇲🇽 CFDI: {si.mx_payment_option} | Use: {si.mx_cfdi_use} | Pay: {si.mode_of_payment}{fx_msg}"
                     }
             except Exception as e:
                 return {"success": False, "error": str(e)}
