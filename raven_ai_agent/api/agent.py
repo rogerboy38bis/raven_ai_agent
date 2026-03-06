@@ -880,11 +880,19 @@ class RaymondLucyAgent(
             query = query.lstrip("!").strip()
             query_lower = query.lower()
         
-        # Auto-confirm for privileged users (Sales Manager, etc.)
-        privileged_roles = ["Sales Manager", "Manufacturing Manager", "Stock Manager", "Accounts Manager", "System Manager"]
-        user_roles = frappe.get_roles(self.user)
-        if any(role in user_roles for role in privileged_roles):
-            is_confirm = True
+        # Auto-confirm for privileged users ONLY on explicit confirm words,
+        # NOT on initial commands. Without !, always show preview first.
+        # This lets privileged users do:
+        #   "invoice from SO-XXX"  → preview (dry run)
+        #   "!invoice from SO-XXX" → execute immediately
+        #   "confirm"              → execute (after preview)
+        if not is_force:
+            privileged_roles = ["Sales Manager", "Manufacturing Manager", "Stock Manager", "Accounts Manager", "System Manager"]
+            user_roles = frappe.get_roles(self.user)
+            if any(role in user_roles for role in privileged_roles):
+                # Only auto-confirm if user said an explicit confirm word
+                # Don't auto-confirm the initial command
+                pass  # is_confirm stays as-is from keyword check above
         
         # Quotation patterns
         qtn_match = re.search(r'(SAL-QTN-\d+-\d+)', query, re.IGNORECASE)
