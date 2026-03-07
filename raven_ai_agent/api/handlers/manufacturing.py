@@ -11,6 +11,33 @@ from typing import Optional, Dict, List
 class ManufacturingMixin:
     """Mixin for _handle_manufacturing_commands"""
 
+    @staticmethod
+    def _resolve_bom(item_code):
+        """Smart BOM resolution: variant → template fallback (GAP-02)."""
+        # 1. Default active BOM on item
+        bom = frappe.db.get_value("BOM",
+            {"item": item_code, "is_active": 1, "is_default": 1, "docstatus": 1}, "name")
+        if bom:
+            return bom
+        # 2. Any active BOM on item
+        bom = frappe.db.get_value("BOM",
+            {"item": item_code, "is_active": 1, "docstatus": 1}, "name")
+        if bom:
+            return bom
+        # 3. If variant, try template item's default BOM
+        variant_of = frappe.db.get_value("Item", item_code, "variant_of")
+        if variant_of:
+            bom = frappe.db.get_value("BOM",
+                {"item": variant_of, "is_active": 1, "is_default": 1, "docstatus": 1}, "name")
+            if bom:
+                return bom
+            # 4. Any active BOM on template
+            bom = frappe.db.get_value("BOM",
+                {"item": variant_of, "is_active": 1, "docstatus": 1}, "name")
+            if bom:
+                return bom
+        return None
+
     def _handle_manufacturing_commands(self, query: str, query_lower: str, is_confirm: bool = False) -> Optional[Dict]:
         """Dispatched from execute_workflow_command. is_confirm=True when user uses ! prefix or has privileged role."""
         # ==================== MANUFACTURING SOP COMMANDS ====================
@@ -54,9 +81,9 @@ class ManufacturingMixin:
                     if not frappe.db.exists("Item", item_code):
                         return {"success": False, "error": f"Item '{item_code}' not found."}
                     
-                    bom = frappe.db.get_value("BOM", {"item": item_code, "is_active": 1, "is_default": 1}, "name")
+                    bom = self._resolve_bom(item_code)
                     if not bom:
-                        return {"success": False, "error": f"No active BOM found for '{item_code}'. Create a BOM first."}
+                        return {"success": False, "error": f"No active BOM found for '{item_code}' (also checked template). Create a BOM first."}
                     
                     if not is_confirm:
                         return {
