@@ -763,7 +763,8 @@ class ManufacturingAgent:
             
             item = so.items[0]
             item_code = item.item_code
-            so_qty = flt(item.qty)
+            # Sum all SO lines for the same item (SO may split across multiple rows)
+            so_qty = sum(flt(i.qty) for i in so.items if i.item_code == item_code)
             
             # Validate plan total
             plan_total = sum(flt(p.get("qty", 0)) for p in plan)
@@ -973,7 +974,8 @@ class ManufacturingAgent:
                 if each_qty > 0:
                     try:
                         so = frappe.get_doc("Sales Order", so_name)
-                        total_qty = flt(so.items[0].qty) if so.items else 0
+                        # Sum all SO items (same item may appear on multiple lines)
+                        total_qty = sum(flt(i.qty) for i in so.items) if so.items else 0
                         num_wos = int(total_qty / each_qty)
                         remainder = total_qty - (num_wos * each_qty)
                         
