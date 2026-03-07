@@ -68,16 +68,9 @@ class ManufacturingAgent:
             if not frappe.db.exists("Item", item_code):
                 return {"success": False, "error": f"Item '{item_code}' not found in ERPNext."}
 
-            # Get BOM — if not specified, use default active BOM
+            # Get BOM — if not specified, use smart resolution (variant → template fallback)
             if not bom:
-                bom = frappe.db.get_value("BOM",
-                    {"item": item_code, "is_active": 1, "is_default": 1, "docstatus": 1},
-                    "name")
-                if not bom:
-                    # Fallback: any active submitted BOM
-                    bom = frappe.db.get_value("BOM",
-                        {"item": item_code, "is_active": 1, "docstatus": 1},
-                        "name")
+                bom = self.resolve_bom(item_code)
             
             if not bom:
                 return {"success": False, "error": f"No active BOM found for item '{item_code}'. Create and submit a BOM first."}
@@ -208,10 +201,8 @@ class ManufacturingAgent:
                 item_code = item.item_code
                 qty = item.qty
 
-                # Get BOM for this item
-                item_bom = bom or frappe.db.get_value("BOM",
-                    {"item": item_code, "is_active": 1, "is_default": 1, "docstatus": 1},
-                    "name")
+                # Get BOM for this item (using variant→template fallback)
+                item_bom = bom or self.resolve_bom(item_code)
 
                 if not item_bom:
                     errors.append(f"No active default BOM for item '{item_code}'")
@@ -646,17 +637,280 @@ class ManufacturingAgent:
             if not item.source_warehouse:
                 item.source_warehouse = source_warehouse
 
+    # ========== BOM RESOLUTION (GAP-02) ==========
+
+    def resolve_bom(self, item_code: str) -> Optional[str]:
+        """Smart BOM resolution: variant → template fallback.
+        
+        Resolution order:
+        1. Default active BOM on the item itself
+        2. Any active BOM on the item
+        3. If variant, default active BOM on the template item
+        4. If variant, any active BOM on the template item
+        
+        Returns BOM name or None.
+        """
+        # 1. Default active BOM on item
+        bom = frappe.db.get_value("BOM",
+            {"item": item_code, "is_active": 1, "is_default": 1, "docstatus": 1}, "name")
+        if bom:
+            return bom
+        
+        # 2. Any active BOM on item
+        bom = frappe.db.get_value("BOM",
+            {"item": item_code, "is_active": 1, "docstatus": 1}, "name")
+        if bom:
+            return bom
+        
+        # 3. If variant, try template item
+        variant_of = frappe.db.get_value("Item", item_code, "variant_of")
+        if variant_of:
+            bom = frappe.db.get_value("BOM",
+                {"item": variant_of, "is_active": 1, "is_default": 1, "docstatus": 1}, "name")
+            if bom:
+                return bom
+            # 4. Any active BOM on template
+            bom = frappe.db.get_value("BOM",
+                {"item": variant_of, "is_active": 1, "docstatus": 1}, "name")
+            if bom:
+                return bom
+        
+        return None
+
+    # ========== NAMED BATCH CREATION (GAP-04) ==========
+
+    def create_named_batch(self, batch_name: str, item_code: str,
+                           expiry_date: str = None,
+                           manufacturing_date: str = None) -> Dict:
+        """Create a batch with a user-defined name.
+        
+        Args:
+            batch_name: The specific batch/lote name (e.g. '0803034251')
+            item_code: Item code that must have has_batch_no=1
+            expiry_date: Optional expiry date (YYYY-MM-DD)
+            manufacturing_date: Optional manufacturing date
+        """
+        try:
+            if not frappe.db.exists("Item", item_code):
+                return {"success": False, "error": f"Item '{item_code}' not found."}
+            
+            has_batch = frappe.db.get_value("Item", item_code, "has_batch_no")
+            if not has_batch:
+                return {"success": False, "error": f"Item '{item_code}' does not have batch tracking enabled."}
+            
+            # Check if batch already exists
+            if frappe.db.exists("Batch", batch_name):
+                existing_item = frappe.db.get_value("Batch", batch_name, "item")
+                if existing_item == item_code:
+                    return {
+                        "success": True,
+                        "batch_name": batch_name,
+                        "message": f"✅ Batch **{batch_name}** already exists for item {item_code}"
+                    }
+                else:
+                    return {"success": False, "error": f"Batch '{batch_name}' exists but belongs to item '{existing_item}', not '{item_code}'."}
+            
+            batch_data = {
+                "doctype": "Batch",
+                "batch_id": batch_name,
+                "item": item_code,
+            }
+            if expiry_date:
+                batch_data["expiry_date"] = expiry_date
+            if manufacturing_date:
+                batch_data["manufacturing_date"] = manufacturing_date
+            
+            batch = frappe.get_doc(batch_data)
+            batch.insert(ignore_permissions=True)
+            frappe.db.commit()
+            
+            return {
+                "success": True,
+                "batch_name": batch.name,
+                "message": (
+                    f"✅ Batch created: **{batch.name}**\n\n"
+                    f"  Item: {item_code}\n"
+                    f"  Batch ID: {batch_name}"
+                    + (f"\n  Expiry: {expiry_date}" if expiry_date else "")
+                    + (f"\n  Mfg Date: {manufacturing_date}" if manufacturing_date else "")
+                )
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Error creating batch: {str(e)}"}
+
+    # ========== MULTI-WO PLAN (GAP-03) ==========
+
+    def create_wo_plan(self, so_name: str, plan: List[Dict]) -> Dict:
+        """Create multiple Work Orders from a single SO with custom qty/lote splits.
+        
+        Args:
+            so_name: Sales Order name
+            plan: List of dicts with keys:
+                - qty (float): Quantity for this WO
+                - batch_name (str, optional): Lote/batch to assign
+                - bom (str, optional): Override BOM
+        
+        Returns:
+            Dict with all created WOs
+        """
+        try:
+            so = frappe.get_doc("Sales Order", so_name)
+            if so.docstatus != 1:
+                return {"success": False, "error": f"Sales Order '{so_name}' must be submitted first."}
+            
+            if not so.items:
+                return {"success": False, "error": f"Sales Order '{so_name}' has no items."}
+            
+            item = so.items[0]
+            item_code = item.item_code
+            so_qty = flt(item.qty)
+            
+            # Validate plan total
+            plan_total = sum(flt(p.get("qty", 0)) for p in plan)
+            
+            created_wos = []
+            errors = []
+            
+            for idx, wo_spec in enumerate(plan):
+                wo_qty = flt(wo_spec.get("qty", 0))
+                if wo_qty <= 0:
+                    errors.append(f"WO{idx+1}: Invalid qty {wo_qty}")
+                    continue
+                
+                batch_name = wo_spec.get("batch_name") or wo_spec.get("lote")
+                wo_bom = wo_spec.get("bom")
+                
+                # Resolve BOM
+                if not wo_bom:
+                    wo_bom = self.resolve_bom(item_code)
+                
+                if not wo_bom:
+                    errors.append(f"WO{idx+1}: No BOM found for '{item_code}'")
+                    continue
+                
+                # Create named batch if specified and doesn't exist
+                if batch_name:
+                    has_batch = frappe.db.get_value("Item", item_code, "has_batch_no")
+                    if has_batch and not frappe.db.exists("Batch", batch_name):
+                        batch_result = self.create_named_batch(batch_name, item_code)
+                        if not batch_result["success"]:
+                            errors.append(f"WO{idx+1}: Batch error — {batch_result['error']}")
+                
+                # Create WO
+                result = self.create_work_order(
+                    item_code=item_code,
+                    qty=wo_qty,
+                    bom=wo_bom,
+                    sales_order=so_name,
+                    project=so.project if hasattr(so, "project") else None,
+                    use_multi_level_bom=0
+                )
+                
+                if result["success"]:
+                    wo_info = {
+                        "wo_name": result["wo_name"],
+                        "qty": wo_qty,
+                        "bom": wo_bom,
+                        "batch": batch_name or "—",
+                        "link": result["link"]
+                    }
+                    
+                    # Store batch assignment as custom field if available
+                    if batch_name:
+                        try:
+                            wo_doc = frappe.get_doc("Work Order", result["wo_name"])
+                            if hasattr(wo_doc, "custom_lote"):
+                                wo_doc.custom_lote = batch_name
+                                wo_doc.save(ignore_permissions=True)
+                        except Exception:
+                            pass  # custom field may not exist yet
+                    
+                    created_wos.append(wo_info)
+                else:
+                    errors.append(f"WO{idx+1}: {result.get('error', 'Unknown error')}")
+            
+            if created_wos:
+                msg = f"🏭 **WO Plan for {self.make_link('Sales Order', so_name)}**\n\n"
+                msg += f"  SO Qty: {so_qty} | Plan Total: {plan_total}"
+                if abs(plan_total - so_qty) > 0.01:
+                    msg += f" ⚠️ (difference: {plan_total - so_qty:+.1f})"
+                msg += "\n\n"
+                msg += "| # | Work Order | Qty | Lote | BOM |\n"
+                msg += "|---|-----------|-----|------|-----|\n"
+                for idx, wo in enumerate(created_wos):
+                    msg += f"| {idx+1} | {wo['link']} | {wo['qty']} | {wo['batch']} | {wo['bom']} |\n"
+                
+                if errors:
+                    msg += f"\n⚠️ Errors:\n" + "\n".join(f"  • {e}" for e in errors)
+                
+                msg += f"\n\n💡 Next: `@ai submit all WOs for {so_name}`"
+                
+                frappe.db.commit()
+                return {"success": True, "work_orders": created_wos, "errors": errors, "message": msg}
+            else:
+                return {"success": False, "error": "No Work Orders created.\n" + "\n".join(errors)}
+        
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Order '{so_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": f"Error creating WO plan: {str(e)}"}
+
+    # ========== SHOW WORK ORDERS (ARCH-03 fix) ==========
+
+    def show_work_orders(self, so_name: str = None, item_code: str = None) -> str:
+        """List active work orders, optionally filtered by SO or item."""
+        try:
+            filters = {"docstatus": ["<", 2]}
+            if so_name:
+                filters["sales_order"] = so_name
+            if item_code:
+                filters["production_item"] = ["like", f"%{item_code}%"]
+            
+            work_orders = frappe.get_list("Work Order",
+                filters=filters,
+                fields=["name", "production_item", "qty", "produced_qty", 
+                        "status", "planned_start_date", "sales_order",
+                        "material_transferred_for_manufacturing"],
+                order_by="modified desc",
+                limit=20
+            )
+            
+            if not work_orders:
+                filter_desc = ""
+                if so_name:
+                    filter_desc = f" for {so_name}"
+                elif item_code:
+                    filter_desc = f" for item {item_code}"
+                return f"No active work orders found{filter_desc}."
+            
+            msg = "📋 **ACTIVE WORK ORDERS**\n\n"
+            msg += "| Work Order | Product | Qty | Transferred | Status | SO |\n"
+            msg += "|------------|---------|-----|-------------|--------|-----|\n"
+            for wo in work_orders:
+                progress = f"{wo.produced_qty or 0}/{wo.qty}"
+                transferred = wo.material_transferred_for_manufacturing or 0
+                wo_link = self.make_link("Work Order", wo.name)
+                so_ref = wo.sales_order or "—"
+                msg += f"| {wo_link} | {wo.production_item[:30]} | {progress} | {transferred} | {wo.status} | {so_ref} |\n"
+            
+            return msg
+        except Exception as e:
+            return f"❌ Error listing work orders: {str(e)}"
+
     # ========== MAIN COMMAND HANDLER ==========
 
     def process_command(self, message: str) -> str:
         """Process incoming Raven command and return formatted response.
         
         Commands:
+            @manufacturing show work orders [for SO-NAME | for ITEM]
             @manufacturing create wo [item] qty [qty] bom [bom]
             @manufacturing create wo from so [SO-NAME]
+            @manufacturing create wo plan for [SO-NAME] ...
+            @manufacturing create batch [NAME] for [ITEM]
             @manufacturing submit wo [WO-NAME]
             @manufacturing manufacture [WO-NAME] qty [qty]
-            @manufacturing transfer materials [WO-NAME]
+            @manufacturing transfer materials [WO-NAME] [batch BATCH]
             @manufacturing status [WO-NAME]
             @manufacturing check materials [WO-NAME]
             @manufacturing help
@@ -669,7 +923,7 @@ class ManufacturingAgent:
         wo_name = wo_match.group(1) if wo_match else None
 
         # Extract Sales Order name
-        so_pattern = r'(SO-[\w-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*|SAL-ORD-[\d-]+)'
+        so_pattern = r'(SO-[\w-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b|each\b|plan\b)[\w\.]+)*|SAL-ORD-[\d-]+)'
         so_match = re.search(so_pattern, message, re.IGNORECASE)
         so_name = so_match.group(1) if so_match else None
 
@@ -677,8 +931,80 @@ class ManufacturingAgent:
         if "help" in message_lower or "capabilities" in message_lower:
             return self._help_text()
 
+        # ---- SHOW / LIST WORK ORDERS (ARCH-03 fix) ----
+        if ("show work order" in message_lower or "list work order" in message_lower 
+                or "mis ordenes" in message_lower or "show wo" in message_lower):
+            return self.show_work_orders(so_name=so_name)
+
+        # ---- CREATE NAMED BATCH (GAP-04) ----
+        if "create batch" in message_lower:
+            # @ai create batch 0803034251 for ITEM-CODE [expiry 2027-03-07]
+            batch_match = re.search(r'create\s+batch\s+([\w-]+)', message, re.IGNORECASE)
+            item_match = re.search(r'(?:for|item)\s+([\S]+)', message, re.IGNORECASE)
+            expiry_match = re.search(r'expiry\s+([\d-]+)', message, re.IGNORECASE)
+            mfg_date_match = re.search(r'mfg[_-]?date\s+([\d-]+)', message, re.IGNORECASE)
+            
+            if not batch_match:
+                return "❌ Specify batch name. Example: `@ai create batch 0803034251 for 0803-VARIANT`"
+            if not item_match:
+                return "❌ Specify item. Example: `@ai create batch 0803034251 for 0803-VARIANT`"
+            
+            batch_name = batch_match.group(1).strip()
+            item_code = item_match.group(1).strip()
+            expiry = expiry_match.group(1) if expiry_match else None
+            mfg_date = mfg_date_match.group(1) if mfg_date_match else None
+            
+            result = self.create_named_batch(batch_name, item_code, 
+                                              expiry_date=expiry,
+                                              manufacturing_date=mfg_date)
+            return result.get("message", result.get("error", "Unknown error"))
+
+        # ---- CREATE WO PLAN (GAP-03) ----
+        # Format: @ai create wo plan for SO-00763: WO1 qty 1055 lote 0803034251, WO2 qty 600 lote 0803080241
+        # Or: @ai wo plan SO-00763 each 500
+        if ("wo plan" in message_lower or "work order plan" in message_lower) and so_name:
+            plan = []
+            
+            # Check for "each QTY" shortcut: splits SO qty into equal WOs
+            each_match = re.search(r'each\s+(\d+\.?\d*)\s*(?:kg)?', message, re.IGNORECASE)
+            if each_match:
+                each_qty = flt(each_match.group(1))
+                if each_qty > 0:
+                    try:
+                        so = frappe.get_doc("Sales Order", so_name)
+                        total_qty = flt(so.items[0].qty) if so.items else 0
+                        num_wos = int(total_qty / each_qty)
+                        remainder = total_qty - (num_wos * each_qty)
+                        
+                        for i in range(num_wos):
+                            plan.append({"qty": each_qty})
+                        if remainder > 0:
+                            plan.append({"qty": remainder})
+                    except Exception as e:
+                        return f"❌ Error reading SO: {str(e)}"
+            else:
+                # Parse detailed plan: WO1 qty 1055 lote ABC, WO2 qty 600 lote DEF
+                wo_specs = re.findall(
+                    r'(?:WO\d*)?\s*qty\s+(\d+\.?\d*)(?:\s+(?:lote|batch)\s+([\w-]+))?',
+                    message, re.IGNORECASE
+                )
+                for spec in wo_specs:
+                    entry = {"qty": flt(spec[0])}
+                    if spec[1]:
+                        entry["lote"] = spec[1]
+                    plan.append(entry)
+            
+            if not plan:
+                return (
+                    "❌ Could not parse WO plan. Examples:\n\n"
+                    f"`@ai wo plan {so_name} each 500`\n"
+                    f"`@ai wo plan {so_name}: qty 1055 lote ABC, qty 600 lote DEF`"
+                )
+            
+            result = self.create_wo_plan(so_name, plan)
+            return result.get("message", result.get("error", "Unknown error"))
+
         # ---- CREATE WO FROM SO (Step 4) ----
-        # Match: "create wo from so", "work order from SO-XXX", "wo from so", etc.
         has_wo_keyword = ("wo" in message_lower or "work order" in message_lower)
         has_so_ref = ("from so" in message_lower or "from sales" in message_lower or so_name is not None)
         if has_wo_keyword and has_so_ref and ("create" in message_lower or so_name is not None):
@@ -744,22 +1070,30 @@ class ManufacturingAgent:
         return (
             "🏭 **Manufacturing Agent — Commands**\n\n"
             "**Work Order Creation**\n"
-            "`@manufacturing create wo for [ITEM] qty [QTY]` — Create WO from default BOM\n"
-            "`@manufacturing create wo for [ITEM] qty [QTY] bom [BOM-NAME]` — Create WO with specific BOM\n"
-            "`@manufacturing create wo from so [SO-NAME]` — Create WO linked to Sales Order\n\n"
+            "`@ai create wo for [ITEM] qty [QTY]` — Create WO (variant→template BOM auto-resolve)\n"
+            "`@ai create wo for [ITEM] qty [QTY] bom [BOM-NAME]` — Create WO with specific BOM\n"
+            "`@ai create wo from so [SO-NAME]` — Create WO linked to Sales Order\n\n"
+            "**Multi-WO Plan (GAP-03)**\n"
+            "`@ai wo plan [SO-NAME] each 500` — Split SO into multiple WOs of 500 each\n"
+            "`@ai wo plan [SO-NAME]: qty 1055 lote ABC, qty 600 lote DEF` — Custom split with batches\n\n"
+            "**Batch Management (GAP-04)**\n"
+            "`@ai create batch [NAME] for [ITEM]` — Create named batch/lote\n"
+            "`@ai create batch [NAME] for [ITEM] expiry 2027-12-31` — With expiry date\n\n"
             "**Work Order Actions**\n"
-            "`@manufacturing submit wo [WO-NAME]` — Submit Work Order\n"
-            "`@manufacturing transfer materials [WO-NAME]` — Transfer materials to WIP\n"
-            "`@manufacturing manufacture [WO-NAME]` — Create Stock Entry (Manufacture)\n"
-            "`@manufacturing manufacture [WO-NAME] qty [QTY]` — Partial manufacture\n\n"
-            "**Status & Checks**\n"
-            "`@manufacturing status [WO-NAME]` — Detailed WO status with linked docs\n"
-            "`@manufacturing check materials [WO-NAME]` — Verify material availability\n\n"
+            "`@ai submit wo [WO-NAME]` — Submit Work Order\n"
+            "`@ai transfer materials [WO-NAME]` — Transfer materials to WIP\n"
+            "`@ai manufacture [WO-NAME]` — Create Stock Entry (Manufacture)\n"
+            "`@ai manufacture [WO-NAME] qty [QTY]` — Partial manufacture\n\n"
+            "**Status & Listing**\n"
+            "`@ai show work orders` — List active work orders (ARCH-03)\n"
+            "`@ai show work orders for [SO-NAME]` — Filter by Sales Order\n"
+            "`@ai status [WO-NAME]` — Detailed WO status with linked docs\n"
+            "`@ai check materials [WO-NAME]` — Verify material availability\n\n"
             "**Example (Full Cycle)**\n"
             "```\n"
-            "@manufacturing create wo for 0307 qty 150 bom BOM-0307-005\n"
-            "@manufacturing submit wo MFG-WO-03726\n"
-            "@manufacturing transfer materials MFG-WO-03726\n"
-            "@manufacturing manufacture MFG-WO-03726\n"
+            "@ai create wo for 0307 qty 150 bom BOM-0307-005\n"
+            "@ai submit wo MFG-WO-03726\n"
+            "@ai transfer materials MFG-WO-03726\n"
+            "@ai manufacture MFG-WO-03726\n"
             "```"
         )
