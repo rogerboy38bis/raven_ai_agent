@@ -130,20 +130,16 @@ def _auto_assign_batches(dn_doc):
         total_needed = sum(flt(it.qty) for it in items)
         
         # Find available batches with stock (FIFO by expiry)
+        # ERPNext v16 uses Serial and Batch Bundle — Batch.batch_qty is maintained automatically
         batches = frappe.db.sql("""
-            SELECT sle.batch_no, b.expiry_date,
-                   SUM(sle.actual_qty) as batch_qty
-            FROM `tabStock Ledger Entry` sle
-            JOIN `tabBatch` b ON b.name = sle.batch_no
-            WHERE sle.item_code = %s
-              AND sle.warehouse = %s
-              AND sle.is_cancelled = 0
-              AND b.disabled = 0
-              AND (b.expiry_date IS NULL OR b.expiry_date >= CURDATE())
-            GROUP BY sle.batch_no
-            HAVING batch_qty > 0
-            ORDER BY COALESCE(b.expiry_date, '9999-12-31') ASC
-        """, (item_code, warehouse), as_dict=True)
+            SELECT name as batch_no, batch_qty, expiry_date
+            FROM `tabBatch`
+            WHERE item = %s
+              AND disabled = 0
+              AND batch_qty > 0
+              AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+            ORDER BY COALESCE(expiry_date, '9999-12-31') ASC
+        """, (item_code,), as_dict=True)
         
         if not batches:
             issues.append(
@@ -198,14 +194,14 @@ def _preflight_delivery_check(so_doc):
         
         warehouse = item.warehouse or "FG to Sell Warehouse - AMB-W"
         if item_meta.get("has_batch_no"):
+            # ERPNext v16: Batch.batch_qty is the available qty
             batch_stock = frappe.db.sql("""
-                SELECT COALESCE(SUM(sle.actual_qty), 0) as total_qty
-                FROM `tabStock Ledger Entry` sle
-                JOIN `tabBatch` b ON b.name = sle.batch_no
-                WHERE sle.item_code = %s AND sle.warehouse = %s
-                  AND sle.is_cancelled = 0 AND b.disabled = 0
-                  AND (b.expiry_date IS NULL OR b.expiry_date >= CURDATE())
-            """, (item_code, warehouse), as_dict=True)
+                SELECT COALESCE(SUM(batch_qty), 0) as total_qty
+                FROM `tabBatch`
+                WHERE item = %s
+                  AND disabled = 0
+                  AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+            """, (item_code,), as_dict=True)
             available = flt(batch_stock[0].total_qty) if batch_stock else 0
             if available < qty_needed:
                 warnings.append(
