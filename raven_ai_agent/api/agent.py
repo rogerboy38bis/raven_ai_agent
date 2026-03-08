@@ -1126,6 +1126,10 @@ class RaymondLucyAgent(
         # === FIX: Cache LLM-path commands requiring confirmation ===
         # Commands that fall through to LLM path (not structured workflows) also need
         # to be cached when they suggest LEVEL 2+ autonomy, so "confirm" can replay them
+        is_confirm = any(word in query_lower for word in ["confirm", "yes", "proceed", "do it", "execute", "si", "confirmar"])
+        if query.startswith("!"):
+            is_confirm = True
+        
         if suggested_autonomy >= 2 and not is_confirm:
             cache_key = f"pending_confirm:{self.user}:{channel_id}"
             existing = frappe.cache().get_value(cache_key)
