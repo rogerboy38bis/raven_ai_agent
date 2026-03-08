@@ -1156,10 +1156,13 @@ class RaymondLucyAgent(
         # Commands that fall through to LLM path (not structured workflows) also need
         # to be cached when they suggest LEVEL 2+ autonomy, so "confirm" can replay them
         is_confirm = any(word in query_lower for word in ["confirm", "yes", "proceed", "do it", "execute", "si", "confirmar"])
+        
+        # With ! prefix, execute directly - skip confirmation flow entirely
         if query.startswith("!"):
             is_confirm = True
-        
-        if suggested_autonomy >= 2 and not is_confirm:
+            # Don't cache for ! commands - execute immediately
+        elif suggested_autonomy >= 2 and not is_confirm:
+            # Cache only for non-! commands that need confirmation
             cache_key = f"pending_confirm:{self.user}:{channel_id}"
             existing = frappe.cache().get_value(cache_key)
             if not existing:
@@ -1184,8 +1187,12 @@ class RaymondLucyAgent(
             messages.extend(conversation_history[-10:])  # Last 10 messages
         
         # Add current query with autonomy context
+        # Skip autonomy warning when ! prefix is used (already confirmed)
         autonomy_warning = ""
-        if suggested_autonomy >= 2:
+        if query.startswith("!"):
+            # With ! prefix, tell LLM to execute directly
+            autonomy_warning = "\n\n✅ EXECUTE DIRECTLY - User has confirmed with ! prefix. Perform the action without asking for confirmation."
+        elif suggested_autonomy >= 2:
             autonomy_warning = f"\n\n⚠️ This query suggests LEVEL {suggested_autonomy} autonomy. Please confirm before executing any changes. (Tip: Use `@ai !command` to skip confirmation)"
         
         messages.append({"role": "user", "content": query + autonomy_warning})
