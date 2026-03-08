@@ -1308,10 +1308,45 @@ def handle_raven_message(doc, method):
             query = plain_text[3:].strip()
             # Detect intent to route to specialized agents
             q_lower = query.lower()
-            mfg_keywords = ["work order", "create wo", "submit wo", "manufacture", "transfer material", "check material", "mfg-wo", "wo plan", "create batch", "show work order", "list work order", "mis ordenes", "show wo", "mfg status", "mfg dashboard", "manufacturing status", "manufacturing dashboard", "finish", "!finish", "no_transfer"]
-            pay_keywords = ["payment", "outstanding", "unpaid", "reconcile", "acc-sinv", "acc-pay", "sinv-"]
-            orch_keywords = ["pipeline status", "run full cycle", "run pipeline", "dry run", "validate so"]
-            validator_keywords = ["diagnose", "diagnosis", "validate ", "audit pipeline", "check payment", "check pago", "pipeline health", "verify so", "verify sales order", "sync so", "fix so", "sync sales order", "fix sales order", "!sync", "!fix"]
+            
+            # Enhanced keyword lists for better distribution
+            # Priority: Most specific first
+            mfg_keywords = [
+                # Manufacturing operations
+                "work order", "create wo", "submit wo", "manufacture", 
+                "transfer material", "check material", "mfg-wo", "wo plan", 
+                "create batch", "show work order", "list work order", 
+                "mis ordenes", "show wo", "mfg status", "mfg dashboard", 
+                "manufacturing status", "manufacturing dashboard", 
+                "finish work order", "complete work order",
+                # Material and stock
+                "material receipt", "material issue", "stock entry",
+                "job card", "production plan", "bom creator",
+                # Quality and inspection
+                "quality check", "quality inspection", "qc pass", "qc fail"
+            ]
+            pay_keywords = [
+                # Payment operations
+                "payment", "outstanding", "unpaid", "reconcile", 
+                "acc-sinv", "acc-pay", "sinv-", "purchase invoice",
+                "sales invoice", "payment entry", "make payment",
+                "receive payment", "payment received"
+            ]
+            orch_keywords = [
+                # Workflow orchestration
+                "pipeline status", "run full cycle", "run pipeline", 
+                "dry run", "validate so", "full cycle", "complete workflow"
+            ]
+            validator_keywords = [
+                # Validation/diagnostics
+                "diagnose", "diagnosis", "validate ", "audit pipeline", 
+                "check payment", "check pago", "pipeline health", 
+                "verify so", "verify sales order", "sync so", "fix so", 
+                "sync sales order", "fix sales order", "!sync", "!fix",
+                "audit bom", "check bom", "validate bom"
+            ]
+            
+            # Route by priority (more specific first)
             if any(kw in q_lower for kw in validator_keywords):
                 bot_name = "task_validator"
             elif any(kw in q_lower for kw in orch_keywords):
@@ -1392,7 +1427,7 @@ def handle_raven_message(doc, method):
             return
         
         user = doc.owner
-        frappe.logger().info(f"[AI Agent] Processing query from {user}: {query}")
+        frappe.logger().info(f"[AI Agent] Routing: {bot_name} | User: {user} | Query: {query[:50]}...")
         
         # Use ignore_permissions flag instead of switching user (avoids logout issue)
         original_ignore = frappe.flags.ignore_permissions
