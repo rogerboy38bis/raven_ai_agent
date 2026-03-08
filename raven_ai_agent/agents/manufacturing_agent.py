@@ -289,6 +289,9 @@ class ManufacturingAgent:
                     "error": f"Requested qty ({manufacture_qty}) exceeds remaining ({remaining_qty})."
                 }
 
+            # Save state before operations for GAP-05 resilience check
+            produced_before = flt(wo.produced_qty)
+
             # GAP-05: Auto-transfer materials if not yet transferred
             transfer_msg = ""
             if not skip_transfer:
@@ -334,6 +337,33 @@ class ManufacturingAgent:
         except frappe.DoesNotExistError:
             return {"success": False, "error": f"Work Order '{wo_name}' not found."}
         except Exception as e:
+            # GAP-05 resilience: check if operation actually succeeded despite exception
+            # ERPNext sometimes raises warnings (e.g. batch/serial) after commit
+            try:
+                wo.reload()
+                if flt(wo.produced_qty) > flt(produced_before):
+                    # Operation succeeded despite the exception
+                    # Find the SEs that were created
+                    new_ses = frappe.get_all("Stock Entry",
+                        filters={"work_order": wo_name, "docstatus": 1,
+                                 "stock_entry_type": ["in", ["Manufacture", "Material Transfer for Manufacture"]]},
+                        fields=["name", "stock_entry_type"],
+                        order_by="creation desc", limit=2)
+                    se_links = ", ".join(self.make_link("Stock Entry", se.name) for se in new_ses)
+                    return {
+                        "success": True,
+                        "message": (
+                            f"{transfer_msg}"
+                            f"\u2705 Manufacture completed (with warning): {se_links}\n\n"
+                            f"  Work Order: {self.make_link('Work Order', wo_name)}\n"
+                            f"  Item: {wo.production_item}\n"
+                            f"  Qty Manufactured: {flt(wo.produced_qty) - flt(produced_before)}\n"
+                            f"  Status: {wo.status}\n\n"
+                            f"\u26a0\ufe0f Warning: {str(e)[:150]}"
+                        )
+                    }
+            except Exception:
+                pass  # If reload also fails, return original error
             return {"success": False, "error": f"Error creating manufacture entry: {str(e)}"}
 
     def create_material_transfer(self, wo_name: str, qty: float = None) -> Dict:
@@ -363,6 +393,7 @@ class ManufacturingAgent:
                 }
 
             transfer_qty = flt(qty) if qty else remaining_transfer
+            transferred_before = flt(wo.material_transferred_for_manufacturing)
 
             from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
 
@@ -387,6 +418,28 @@ class ManufacturingAgent:
         except frappe.DoesNotExistError:
             return {"success": False, "error": f"Work Order '{wo_name}' not found."}
         except Exception as e:
+            # Resilience: check if transfer actually succeeded despite exception
+            try:
+                wo.reload()
+                if flt(wo.material_transferred_for_manufacturing) > flt(transferred_before):
+                    new_se = frappe.get_all("Stock Entry",
+                        filters={"work_order": wo_name, "docstatus": 1,
+                                 "stock_entry_type": "Material Transfer for Manufacture"},
+                        fields=["name"], order_by="creation desc", limit=1)
+                    se_name = new_se[0].name if new_se else "unknown"
+                    return {
+                        "success": True,
+                        "se_name": se_name,
+                        "link": self.make_link("Stock Entry", se_name),
+                        "message": (
+                            f"✅ Material Transfer created (with warning): {self.make_link('Stock Entry', se_name)}\n\n"
+                            f"  Work Order: {self.make_link('Work Order', wo_name)}\n"
+                            f"  Transferred: {flt(wo.material_transferred_for_manufacturing) - flt(transferred_before)}\n"
+                            f"  ⚠️ Warning: {str(e)[:150]}"
+                        )
+                    }
+            except Exception:
+                pass
             return {"success": False, "error": f"Error creating material transfer: {str(e)}"}
 
     # ========== STATUS & INTELLIGENCE ==========
