@@ -1,7 +1,7 @@
 {
  "actions": [],
  "autoname": "format:IOT-SR-{####}",
- "creation": "2026-02-26 00:00:00.000000",
+ "creation": "2026-02-26 00:00:00",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -13,6 +13,11 @@
   "humidity",
   "pressure",
   "light_level",
+  "resistance",
+  "raw_adc",
+  "millivolts",
+  "soil_moisture",
+  "soil_dry",
   "section_location",
   "location",
   "latitude",
@@ -28,26 +33,25 @@
   {
    "fieldname": "sensor_id",
    "fieldtype": "Data",
-   "label": "Sensor ID",
-   "reqd": 1,
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "unique": 0
+   "label": "Sensor ID",
+   "reqd": 1
   },
   {
    "fieldname": "sensor_type",
    "fieldtype": "Select",
-   "label": "Sensor Type",
-   "options": "\nDHT11\nDHT22\nBMP280\nBME280\nDS18B20\nMQ-2\nPIR\nUltrasonic\nLight\nSoil Moisture\nOther",
-   "reqd": 1,
    "in_list_view": 1,
-   "in_standard_filter": 1
+   "in_standard_filter": 1,
+   "label": "Sensor Type",
+   "options": "\nDHT11\nDHT22\nBMP280\nBME280\nDS18B20\nMQ-2\nFord Temperature\nPIR\nUltrasonic\nLight\nSoil Moisture\nOther",
+   "reqd": 1
   },
   {
    "fieldname": "device_name",
    "fieldtype": "Data",
-   "label": "Device Name",
-   "in_list_view": 1
+   "in_list_view": 1,
+   "label": "Device Name"
   },
   {
    "fieldname": "section_readings",
@@ -57,28 +61,28 @@
   {
    "fieldname": "temperature",
    "fieldtype": "Float",
+   "in_list_view": 1,
    "label": "Temperature (C)",
-   "precision": 2,
-   "in_list_view": 1
+   "precision": "2"
   },
   {
    "fieldname": "humidity",
    "fieldtype": "Float",
+   "in_list_view": 1,
    "label": "Humidity (%)",
-   "precision": 2,
-   "in_list_view": 1
+   "precision": "2"
   },
   {
    "fieldname": "pressure",
    "fieldtype": "Float",
    "label": "Pressure (hPa)",
-   "precision": 2
+   "precision": "2"
   },
   {
    "fieldname": "light_level",
    "fieldtype": "Float",
    "label": "Light Level (lux)",
-   "precision": 2
+   "precision": "2"
   },
   {
    "fieldname": "section_location",
@@ -94,13 +98,13 @@
    "fieldname": "latitude",
    "fieldtype": "Float",
    "label": "Latitude",
-   "precision": 6
+   "precision": "6"
   },
   {
    "fieldname": "longitude",
    "fieldtype": "Float",
    "label": "Longitude",
-   "precision": 6
+   "precision": "6"
   },
   {
    "fieldname": "section_status",
@@ -108,12 +112,12 @@
    "label": "Status"
   },
   {
+   "default": "Active",
    "fieldname": "status",
    "fieldtype": "Select",
+   "in_standard_filter": 1,
    "label": "Status",
-   "options": "\nActive\nInactive\nError\nMaintenance",
-   "default": "Active",
-   "in_standard_filter": 1
+   "options": "\nActive\nInactive\nError\nMaintenance"
   },
   {
    "fieldname": "reading_timestamp",
@@ -124,7 +128,7 @@
    "fieldname": "battery_level",
    "fieldtype": "Float",
    "label": "Battery Level (%)",
-   "precision": 1
+   "precision": "1"
   },
   {
    "fieldname": "signal_strength",
@@ -135,37 +139,59 @@
    "fieldname": "notes",
    "fieldtype": "Small Text",
    "label": "Notes"
+  },
+  {
+   "fieldname": "resistance",
+   "fieldtype": "Float",
+   "label": "Resistance (Ohm)"
+  },
+  {
+   "fieldname": "raw_adc",
+   "fieldtype": "Int",
+   "label": "Raw ADC"
+  },
+  {
+   "fieldname": "millivolts",
+   "fieldtype": "Float",
+   "label": "Millivolts"
+  },
+  {
+   "fieldname": "soil_moisture",
+   "fieldtype": "Int",
+   "label": "Soil Moisture"
+  },
+  {
+   "default": "0",
+   "fieldname": "soil_dry",
+   "fieldtype": "Check",
+   "label": "Soil Dry"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-26 00:00:00.000000",
- "modified_by": "Administrator",
+ "modified": "2026-03-08 14:37:19.845281",
+ "modified_by": "fcrm@amb-wellness.com",
  "module": "Raven AI Agent",
  "name": "IoT Sensor Reading",
- "naming_rule": "Expression",
+ "naming_rule": "Expression (old style)",
  "owner": "Administrator",
  "permissions": [
   {
-   "role": "System Manager",
-   "read": 1,
-   "write": 1,
    "create": 1,
    "delete": 1,
-   "submit": 0,
-   "cancel": 0,
-   "amend": 0
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
   },
   {
-   "role": "All",
    "read": 1,
-   "write": 0,
-   "create": 0,
-   "delete": 0
+   "role": "All"
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
+ "states": [],
  "title_field": "sensor_id",
  "track_changes": 1
 }
