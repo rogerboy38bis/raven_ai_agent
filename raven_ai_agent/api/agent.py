@@ -149,7 +149,7 @@ class RaymondLucyAgent(
         if workflow_result:
             # With ! prefix, execute directly without confirmation
             if is_force:
-                if workflow_result.get("requires_confirmation"):
+                if workflow_result.get("requires_confirmation") or workflow_result.get("preview"):
                     workflow_result = self.execute_workflow_command(clean_query, channel_id=channel_id, confirm=True)
 
                 if workflow_result.get("success"):
@@ -168,13 +168,13 @@ class RaymondLucyAgent(
                     }
 
             # Without ! prefix - show preview for confirmation
-            if workflow_result.get("requires_confirmation"):
+            if workflow_result.get("requires_confirmation") or workflow_result.get("preview"):
                 cache_key = f"pending_confirm:{self.user}:{channel_id}"
                 frappe.cache().set_value(cache_key, query, expires_in_sec=300)
                 frappe.logger().info(f"[Workflow] Stored pending command for confirm: {query}")
                 return {
                     "success": True,
-                    "response": f"[CONFIDENCE: HIGH] [AUTONOMY: LEVEL 2]\n\n{workflow_result['preview']}",
+                    "response": f"[CONFIDENCE: HIGH] [AUTONOMY: LEVEL 2]\n\n{workflow_result.get('preview') or workflow_result.get('message', 'Ready to execute. Use ! to confirm.')}",
                     "autonomy_level": 2,
                     "context_used": {"workflow": True}
                 }
