@@ -97,8 +97,28 @@ def auto_assign_batches(dn_doc) -> Dict:
                     remaining_in_batch = flt(batches[batch_idx].get("batch_qty", 0))
             
             if batch_idx < len(batches):
-                item.batch_no = batches[batch_idx]["batch_no"]
-                item.use_serial_batch_fields = 1
+                batch_no = batches[batch_idx]["batch_no"]
+                # ERPNext v16: Try creating Serial and Batch Bundle (SBB)
+                try:
+                    sbb = frappe.get_doc({
+                        "doctype": "Serial and Batch Bundle",
+                        "item_code": item.item_code,
+                        "warehouse": item.warehouse,
+                        "type_of_transaction": "Outward",
+                        "voucher_type": dn_doc.doctype,
+                        "entries": [{
+                            "batch_no": batch_no,
+                            "qty": qty_needed * -1,  # Outward = negative
+                            "warehouse": item.warehouse,
+                        }]
+                    })
+                    sbb.insert(ignore_permissions=True)
+                    item.serial_and_batch_bundle = sbb.name
+                    item.use_serial_batch_fields = 0
+                except Exception:
+                    # Fallback: use legacy batch_no field (older v16 / v15 compat)
+                    item.batch_no = batch_no
+                    item.use_serial_batch_fields = 1
                 remaining_in_batch -= qty_needed
                 assigned += 1
             else:
