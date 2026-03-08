@@ -779,6 +779,12 @@ class SalesMixin:
                         si.debit_to = correct_debit_to
                     # Apply Banxico FIX T-1 exchange rate (uses posting_date for lookup)
                     fx_info = self._discover_conversion_rate(si)
+                    # Set mx_product_service_key per item (CFDI 4.0 mandatory)
+                    for item in si.items:
+                        if not item.get("mx_product_service_key"):
+                            psk = frappe.db.get_value("Item", item.item_code, "mx_product_service_key")
+                            if psk:
+                                item.mx_product_service_key = psk
                     si.insert()
                     site_name = frappe.local.site
                     fx_msg = ""
@@ -820,6 +826,12 @@ class SalesMixin:
                         si.debit_to = correct_debit_to
                     # Apply Banxico FIX T-1 exchange rate (uses posting_date for lookup)
                     fx_info = self._discover_conversion_rate(si)
+                    # Set mx_product_service_key per item (CFDI 4.0 mandatory)
+                    for item in si.items:
+                        if not item.get("mx_product_service_key"):
+                            psk = frappe.db.get_value("Item", item.item_code, "mx_product_service_key")
+                            if psk:
+                                item.mx_product_service_key = psk
                     si.insert()
                     site_name = frappe.local.site
                     fx_msg = ""
