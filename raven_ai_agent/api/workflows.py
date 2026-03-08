@@ -304,12 +304,16 @@ class WorkflowExecutor:
             from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
             si = make_sales_invoice(so_name)
             
-            # Apply CFDI fields
+            # Apply ALL CFDI fields (mode_of_payment + mx_payment_option + mx_cfdi_use)
+            # make_sales_invoice returns a Document — use .update() then setattr()
+            # to ensure custom Link fields are set even if not in initial meta
             cfdi = _resolve_mx_cfdi_fields(so.customer, so.payment_terms_template)
-            if hasattr(si, "mx_payment_option"):
-                si.mx_payment_option = cfdi["mx_payment_option"]
-            if hasattr(si, "mx_cfdi_use"):
-                si.mx_cfdi_use = cfdi["mx_cfdi_use"]
+            try:
+                si.update(cfdi)
+            except Exception:
+                pass
+            for field, value in cfdi.items():
+                setattr(si, field, value)
             
             si.insert(ignore_permissions=True)
             frappe.db.commit()
@@ -341,12 +345,14 @@ class WorkflowExecutor:
             from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
             si = make_sales_invoice(dn_name)
             
-            # Apply CFDI
+            # Apply ALL CFDI fields (mode_of_payment + mx_payment_option + mx_cfdi_use)
             cfdi = _resolve_mx_cfdi_fields(dn.customer)
-            if hasattr(si, "mx_payment_option"):
-                si.mx_payment_option = cfdi["mx_payment_option"]
-            if hasattr(si, "mx_cfdi_use"):
-                si.mx_cfdi_use = cfdi["mx_cfdi_use"]
+            try:
+                si.update(cfdi)
+            except Exception:
+                pass
+            for field, value in cfdi.items():
+                setattr(si, field, value)
             
             si.insert(ignore_permissions=True)
             frappe.db.commit()
