@@ -1,6 +1,6 @@
 """
 Raymond-Lucy AI Agent Core
-Phase 2 Optimization: Split from monolithic agent.py (1563 lines → ~250 lines core)
+Phase 2+3: Split from monolithic agent.py + Quality Management System
 
 Module map:
   agent_prompts.py   — SYSTEM_PROMPT, CAPABILITIES_LIST (199 lines)
@@ -8,6 +8,9 @@ Module map:
   context_builder.py — ContextMixin: doctype detection, web search, ERPNext context (471 lines)
   command_router.py  — CommandRouterMixin: autonomy + workflow dispatch (245 lines)
   agent.py (this)    — RaymondLucyAgent class composition + API entry points (~280 lines)
+
+Phase 3 additions:
+  handlers/quality_management.py — QualityManagementMixin: NC, CAPA, SOP, Audit, KPI, Training (736 lines)
 
 Backward compatibility:
   - All @frappe.whitelist() endpoints preserved
@@ -28,13 +31,14 @@ from raven_ai_agent.api.memory_manager import MemoryMixin
 from raven_ai_agent.api.context_builder import ContextMixin
 from raven_ai_agent.api.command_router import CommandRouterMixin
 
-# Import handler mixins (unchanged from Phase 1)
+# Import handler mixins (Phase 1 + Phase 3 QMS)
 from raven_ai_agent.api.handlers import (
     ManufacturingMixin,
     BOMMixin,
     WebSearchMixin,
     SalesMixin,
     QuotationMixin,
+    QualityManagementMixin,
 )
 
 
@@ -47,6 +51,7 @@ class RaymondLucyAgent(
     WebSearchMixin,
     SalesMixin,
     QuotationMixin,
+    QualityManagementMixin,
 ):
     """
     Raymond-Lucy AI Agent - ERPNext AI Assistant
@@ -61,6 +66,7 @@ class RaymondLucyAgent(
     - WebSearchMixin: Direct web search (53 lines)
     - SalesMixin: Sales-to-Purchase cycle (477 lines)
     - QuotationMixin: Quotation fix + update + TDS (415 lines)
+    - QualityManagementMixin: NC, CAPA, SOP, Audit, KPI, Training (736 lines) [Phase 3]
     """
 
     def __init__(self, user: str):
