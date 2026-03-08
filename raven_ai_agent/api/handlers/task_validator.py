@@ -98,6 +98,63 @@ class TaskValidatorMixin:
                 }
 
         # ═══════════════════════════════════════════════════════════
+        # VALIDATE BOM: Check and fix BOM issues
+        # @ai validate BOM-XXXX
+        # @ai audit bom BOM-XXXX
+        # @ai check bom BOM-XXXX
+        # ═══════════════════════════════════════════════════════════
+        if ("validate" in query_lower or "audit" in query_lower or "check" in query_lower) and "bom" in query_lower and "pipeline" not in query_lower:
+            bom_match = re.search(r'(BOM-[^\s]+)', query, re.IGNORECASE)
+            item_match = re.search(r'(?:for|item)\s+(\d{4})', query, re.IGNORECASE)
+            
+            if bom_match:
+                bom_name = bom_match.group(1)
+                try:
+                    from raven_ai_agent.api.bom_helpers import validate_and_fix_bom
+                    result = validate_and_fix_bom(bom_name, auto_fix=True)
+                    if result.get("success"):
+                        msg = f"✅ **BOM Validation: {bom_name}**\n\n"
+                        msg += result.get("message", "Validation complete.")
+                        if result.get("fixes"):
+                            msg += "\n\n**Fixes Applied:**\n"
+                            for fix in result["fixes"]:
+                                msg += f"  - {fix}\n"
+                        if result.get("warnings"):
+                            msg += "\n\n**Warnings:**\n"
+                            for w in result["warnings"]:
+                                msg += f"  - ⚠️ {w}\n"
+                        return {"success": True, "message": msg}
+                    else:
+                        return {"success": False, "error": result.get("error", "BOM validation failed")}
+                except ImportError:
+                    return {"success": False, "error": "BOM validation module not available"}
+                except Exception as e:
+                    return {"success": False, "error": f"BOM validation error: {str(e)}"}
+            elif item_match:
+                item_code = item_match.group(1)
+                # Find default BOM for item
+                try:
+                    default_bom = frappe.db.get_value("BOM", {"item": item_code, "is_active": 1, "is_default": 1, "docstatus": 1}, "name")
+                    if not default_bom:
+                        default_bom = frappe.db.get_value("BOM", {"item": ["like", f"%{item_code}%"], "is_active": 1, "docstatus": 1}, "name")
+                    
+                    if default_bom:
+                        from raven_ai_agent.api.bom_helpers import validate_and_fix_bom
+                        result = validate_and_fix_bom(default_bom, auto_fix=True)
+                        msg = f"✅ **BOM Validation for Item {item_code}** (BOM: {default_bom})\n\n"
+                        msg += result.get("message", "Validation complete.")
+                        return {"success": True, "message": msg}
+                    else:
+                        return {"success": False, "error": f"No active BOM found for item {item_code}"}
+                except Exception as e:
+                    return {"success": False, "error": f"BOM lookup error: {str(e)}"}
+            else:
+                return {
+                    "success": False,
+                    "error": "**Usage:** `@ai validate BOM-XXXX` or `@ai validate bom for 0302`"
+                }
+
+        # ═══════════════════════════════════════════════════════════
         # VALIDATE: Check SO against source quotation
         # @ai validate SO-XXXXX
         # ═══════════════════════════════════════════════════════════
