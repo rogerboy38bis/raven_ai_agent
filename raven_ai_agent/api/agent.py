@@ -957,10 +957,14 @@ class RaymondLucyAgent(
         if so_match and any(word in query_lower for word in ["delivery", "ship", "deliver"]):
             return executor.create_delivery_note_from_sales_order(so_match.group(1).upper(), confirm=is_confirm)
         
-        # Invoice from Delivery Note
+        # Invoice from Delivery Note (direct DN reference)
         dn_match = re.search(r'(MAT-DN-\d+-\d+|DN-\d+)', query, re.IGNORECASE)
         if dn_match and "invoice" in query_lower:
             return executor.create_invoice_from_delivery_note(dn_match.group(1).upper(), confirm=is_confirm)
+        
+        # Invoice from Sales Order (finds linked DN, then creates invoice)
+        if so_match and any(word in query_lower for word in ["invoice", "factura", "bill"]):
+            return executor.create_invoice_from_sales_order(so_match.group(1).upper(), confirm=is_confirm)
         
         # Workflow status
         if "workflow status" in query_lower or "track" in query_lower:
