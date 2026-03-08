@@ -172,13 +172,27 @@ class QualityManagementMixin:
     # Non-Conformity
     # ══════════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _sanitize_name(text: str, max_len: int = 140) -> str:
+        """Truncate and clean text for ERPNext name/subject fields"""
+        # Take only the first line
+        text = text.split('\n')[0].strip()
+        # Remove any trailing bot/menu artifacts
+        for stop in ['Ready to test', 'Would you like', '1.', '2.', '3.', '\n']:
+            idx = text.find(stop)
+            if idx > 0:
+                text = text[:idx].strip()
+        if len(text) > max_len:
+            text = text[:max_len - 3].strip() + '...'
+        return text or "Untitled"
+
     def _create_non_conformance(self, query: str, is_confirm: bool) -> Dict:
         """Create a Non Conformance record"""
         import re
 
         # Extract subject from query
         subject_match = re.search(r'(?:create nc|log nc|crear no conformidad)\s+(.+)', query, re.IGNORECASE)
-        subject = subject_match.group(1).strip() if subject_match else "New Non-Conformance"
+        subject = self._sanitize_name(subject_match.group(1)) if subject_match else "New Non-Conformance"
 
         # Get first quality procedure for linking
         procedures = frappe.get_list("Quality Procedure", limit=1, fields=["name"])
@@ -315,7 +329,7 @@ class QualityManagementMixin:
         import re
 
         # Try to extract NC reference
-        nc_match = re.search(r'(?:for|para)\s+(NC-\d+|[\w-]+)', query, re.IGNORECASE)
+        nc_match = re.search(r'(?:for|para)\s+(QA-NC-\d+|NC-\d+|[\w-]+)', query, re.IGNORECASE)
         nc_ref = nc_match.group(1) if nc_match else None
 
         if not is_confirm:
@@ -359,7 +373,7 @@ class QualityManagementMixin:
         import re
 
         name_match = re.search(r'(?:create sop|create procedure|crear sop)\s+(.+)', query, re.IGNORECASE)
-        proc_name = name_match.group(1).strip() if name_match else "New SOP"
+        proc_name = self._sanitize_name(name_match.group(1)) if name_match else "New SOP"
 
         if not is_confirm:
             preview = f"📋 **Create Quality Procedure?**\n"
@@ -449,7 +463,7 @@ class QualityManagementMixin:
         import re
 
         name_match = re.search(r'(?:create audit|crear auditoría)\s+(.+)', query, re.IGNORECASE)
-        audit_name = name_match.group(1).strip() if name_match else "Internal Audit"
+        audit_name = self._sanitize_name(name_match.group(1)) if name_match else "Internal Audit"
 
         if not is_confirm:
             preview = f"📅 **Create Internal Audit?**\n"
@@ -617,7 +631,7 @@ class QualityManagementMixin:
         import re
 
         name_match = re.search(r'(?:create training|crear capacitación)\s+(.+)', query, re.IGNORECASE)
-        prog_name = name_match.group(1).strip() if name_match else "New Training Program"
+        prog_name = self._sanitize_name(name_match.group(1)) if name_match else "New Training Program"
 
         if not is_confirm:
             preview = f"📚 **Create Training Program?**\n"
