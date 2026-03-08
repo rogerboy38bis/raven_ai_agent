@@ -859,9 +859,9 @@ class RaymondLucyAgent(
         # Default to Level 1 (read-only)
         return 1
     
-    def execute_workflow_command(self, query: str, channel_id: str = "") -> Optional[Dict]:
+    def execute_workflow_command(self, query: str, channel_id: str = "", confirm: bool = False) -> Optional[Dict]:
         """Parse and execute workflow commands"""
-        frappe.logger().info(f"[Workflow] Checking query: {query}, WORKFLOWS_ENABLED: {WORKFLOWS_ENABLED}")
+        frappe.logger().info(f"[Workflow] Checking query: {query}, confirm: {confirm}, WORKFLOWS_ENABLED: {WORKFLOWS_ENABLED}")
         
         if not WORKFLOWS_ENABLED:
             frappe.logger().info("[Workflow] Workflows disabled")
@@ -875,7 +875,11 @@ class RaymondLucyAgent(
         # When user says "confirm", we replay the stored command with is_confirm=True.
         cache_key = f"pending_confirm:{self.user}:{channel_id}"
         
-        is_confirm = any(word in query_lower for word in ["confirm", "yes", "proceed", "do it", "execute"])
+        # If confirm parameter is passed (from ! prefix), use it directly
+        if confirm:
+            is_confirm = True
+        else:
+            is_confirm = any(word in query_lower for word in ["confirm", "yes", "proceed", "do it", "execute"])
         
         # If user said "confirm" and we have a pending command, replay it
         if is_confirm and query_lower.strip() in ["confirm", "yes", "proceed", "do it", "execute", "si", "confirmar"]:
@@ -887,9 +891,9 @@ class RaymondLucyAgent(
                 query_lower = query.lower()
                 # is_confirm stays True
         
-        # Force mode with ! prefix (like sudo)
+        # Force mode with ! prefix (like sudo) - only if confirm param not already set
         is_force = query.startswith("!")
-        if is_force:
+        if is_force and not confirm:
             is_confirm = True
             query = query.lstrip("!").strip()
             query_lower = query.lower()
@@ -1095,8 +1099,33 @@ class RaymondLucyAgent(
         suggested_autonomy = self.determine_autonomy(query)
         
         # Try workflow command first (Level 2/3 operations)
-        workflow_result = self.execute_workflow_command(query, channel_id=channel_id)
+        is_force = query.startswith("!")
+        clean_query = query.lstrip("!").strip() if is_force else query
+        
+        workflow_result = self.execute_workflow_command(clean_query, channel_id=channel_id)
         if workflow_result:
+            # With ! prefix, execute directly without confirmation
+            if is_force:
+                if workflow_result.get("requires_confirmation"):
+                    # Re-call with confirm=True to execute directly
+                    workflow_result = self.execute_workflow_command(clean_query, channel_id=channel_id, confirm=True)
+                
+                if workflow_result.get("success"):
+                    return {
+                        "success": True,
+                        "response": f"[CONFIDENCE: HIGH] [AUTONOMY: LEVEL 2]\n\n{workflow_result.get('message', 'Operation completed.')}",
+                        "autonomy_level": 2,
+                        "context_used": {"workflow": True}
+                    }
+                elif workflow_result.get("error"):
+                    return {
+                        "success": False,
+                        "response": f"[CONFIDENCE: HIGH] [AUTONOMY: LEVEL 2]\n\n❌ Error: {workflow_result['error']}",
+                        "autonomy_level": 2,
+                        "context_used": {"workflow": True}
+                    }
+            
+            # Without ! prefix - show preview for confirmation
             if workflow_result.get("requires_confirmation"):
                 # Store the original command for later "confirm" replay
                 cache_key = f"pending_confirm:{self.user}:{channel_id}"
