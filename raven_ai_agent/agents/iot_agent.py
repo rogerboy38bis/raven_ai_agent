@@ -82,7 +82,10 @@ class IoTAgent:
                 out += f"\n\n_Generated in {dur:.1f}s_"
             return {"success": True, "response": out}
         except requests.exceptions.ConnectionError:
-            return {"success": False, "error": "Ollama service not running. Check IoT Ollama Settings."}
+            return {"success": False, "error": f"⚠️ Ollama service is offline at `{self.ollama_url}`.\n\n"
+                    f"To start Ollama on the VPS:\n"
+                    f"```\nsudo systemctl start ollama\n# or\nollama serve &\n```\n\n"
+                    f"Configure URL in **IoT Ollama Settings** if running on a different host."}
         except requests.exceptions.Timeout:
             return {"success": False, "error": f"Ollama timed out after {self.timeout}s (CPU-only mode can be slow)."}
         except Exception as e:
