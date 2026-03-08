@@ -626,9 +626,14 @@ class QualityManagementMixin:
             return {"requires_confirmation": True, "preview": preview}
 
         try:
+            # Get default company
+            company = frappe.defaults.get_user_default("company") or frappe.db.get_single_value("Global Defaults", "default_company")
+
             prog_doc = frappe.get_doc({
                 "doctype": "Training Program",
-                "name1": prog_name,  # ERPNext uses name1 for Training Program
+                "training_program": prog_name,
+                "company": company,
+                "description": f"Training program: {prog_name}. Created via AI Agent.",
             })
             prog_doc.insert(ignore_permissions=True)
             frappe.db.commit()
