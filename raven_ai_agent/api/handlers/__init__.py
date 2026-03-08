@@ -7,6 +7,7 @@ from .bom import BOMMixin
 from .web_search import WebSearchMixin
 from .sales import SalesMixin
 from .quotation import QuotationMixin
+from .quality_management import QualityManagementMixin
 
 __all__ = [
     "ManufacturingMixin",
@@ -14,4 +15,5 @@ __all__ = [
     "WebSearchMixin",
     "SalesMixin",
     "QuotationMixin",
+    "QualityManagementMixin",
 ]
