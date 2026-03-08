@@ -174,7 +174,7 @@ class RaymondLucyAgent(
                 frappe.logger().info(f"[Workflow] Stored pending command for confirm: {query}")
                 return {
                     "success": True,
-                    "response": f"[CONFIDENCE: HIGH] [AUTONOMY: LEVEL 2]\n\n{workflow_result.get('preview') or workflow_result.get('message', 'Ready to execute. Use ! to confirm.')}",
+                    "response": f"[CONFIDENCE: HIGH] [AUTONOMY: LEVEL 2]\n\n{workflow_result.get('message') or workflow_result.get('preview', 'Ready to execute. Use ! to confirm.')}",
                     "autonomy_level": 2,
                     "context_used": {"workflow": True}
                 }
