@@ -603,6 +603,105 @@ class WorkflowExecutor:
     
     # ========== SALES INVOICE ==========
     
+    def create_invoice_from_sales_order(self, so_name: str, confirm: bool = False) -> Dict:
+        """Create Sales Invoice from Sales Order — finds linked DN first.
+        
+        Flow: SO → find DN → create Invoice from DN
+        If no DN exists, prompts to create one first.
+        If DN exists but is Draft, submits it first.
+        """
+        try:
+            so = frappe.get_doc("Sales Order", so_name)
+            if so.docstatus != 1:
+                return {"success": False, "error": f"Sales Order must be submitted first"}
+            
+            # Find linked Delivery Notes
+            dn_items = frappe.get_all("Delivery Note Item",
+                filters={"against_sales_order": so_name, "docstatus": ["!=", 2]},
+                fields=["parent"],
+                group_by="parent")
+            
+            if not dn_items:
+                return {
+                    "success": False,
+                    "error": (
+                        f"No Delivery Note found for {so_name}.\n"
+                        f"Create one first: `@ai !delivery from {so_name}`"
+                    )
+                }
+            
+            dn_name = dn_items[0].parent
+            dn = frappe.get_doc("Delivery Note", dn_name)
+            
+            # If DN is Draft, submit it first
+            if dn.docstatus == 0:
+                if not confirm:
+                    return {
+                        "success": True,
+                        "requires_confirmation": True,
+                        "preview": (
+                            f"**Invoice from {so_name}**\n\n"
+                            f"Found DN: {dn_name} (Draft)\n"
+                            f"Will submit DN first, then create Sales Invoice.\n\n"
+                            f"Use `!invoice from {so_name}` to execute."
+                        )
+                    }
+                # Submit the DN
+                dn.submit()
+                frappe.db.commit()
+            
+            # Check for existing invoice
+            existing_inv = frappe.db.get_value("Sales Invoice Item",
+                {"delivery_note": dn_name, "docstatus": ["!=", 2]}, "parent")
+            if existing_inv:
+                return {
+                    "success": True,
+                    "message": (
+                        f"Sales Invoice already exists: **{existing_inv}**\n"
+                        f"Link: {self.make_link('Sales Invoice', existing_inv)}"
+                    ),
+                    "invoice": existing_inv,
+                    "link": self.make_link("Sales Invoice", existing_inv)
+                }
+            
+            if not confirm:
+                return {
+                    "success": True,
+                    "requires_confirmation": True,
+                    "preview": (
+                        f"**Create Sales Invoice from {so_name}?**\n\n"
+                        f"Delivery Note: {self.make_link('Delivery Note', dn_name)} (Submitted)\n"
+                        f"Customer: {so.customer_name}\n"
+                        f"Total: {so.grand_total}\n\n"
+                        f"Use `!invoice from {so_name}` to execute."
+                    )
+                }
+            
+            # Create invoice from DN
+            from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
+            inv = make_sales_invoice(dn_name)
+            inv.flags.ignore_permissions = True
+            inv.insert()
+            frappe.db.commit()
+            
+            return {
+                "success": True,
+                "message": (
+                    f"\u2705 Sales Invoice **{inv.name}** created\n\n"
+                    f"  From DN: {self.make_link('Delivery Note', dn_name)}\n"
+                    f"  Sales Order: {self.make_link('Sales Order', so_name)}\n"
+                    f"  Customer: {so.customer_name}\n"
+                    f"  Total: {so.grand_total}\n"
+                    f"  Link: {self.make_link('Sales Invoice', inv.name)}"
+                ),
+                "invoice": inv.name,
+                "link": self.make_link("Sales Invoice", inv.name)
+            }
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Order '{so_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def create_invoice_from_delivery_note(self, dn_name: str, confirm: bool = False) -> Dict:
         """Create Sales Invoice from Delivery Note"""
         try:
