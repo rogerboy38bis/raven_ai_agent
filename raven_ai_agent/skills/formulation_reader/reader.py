@@ -140,6 +140,28 @@ class BlendSimulationResult:
 # Golden Number Parsing (from spec section 4.1)
 # ===========================================
 
+# Plant code mapping: numeric to name (updated March 2026)
+PLANT_CODE_MAP = {
+    '1': 'Mix',
+    '2': 'Dry',
+    '3': 'Juice',
+    '4': 'Laboratory',
+    '5': 'Formulated'
+}
+
+def get_plant_name(plant_code: str) -> str:
+    """
+    Convert numeric plant code to plant name.
+    
+    Args:
+        plant_code: Single character plant code (1-5)
+        
+    Returns:
+        Plant name (Mix, Dry, Juice, Laboratory, Formulated)
+    """
+    return PLANT_CODE_MAP.get(plant_code, plant_code)
+
+
 def parse_golden_number(item_code: str) -> Optional[Dict[str, Any]]:
     """
     Parse golden number components from item code.
@@ -149,7 +171,7 @@ def parse_golden_number(item_code: str) -> Optional[Dict[str, Any]]:
         - Product Code: 0617
         - Folio: 027 (production sequence number)
         - Year: 23 -> 2023
-        - Plant: 1 (Mix=1, Dry=2, Juice=3, Lab=4, Formulated=5)
+        - Plant: Mix, Dry, Juice, Laboratory, Formulated
     
     Args:
         item_code: Item code string (e.g., 'ITEM_0617027231')
@@ -168,17 +190,18 @@ def parse_golden_number(item_code: str) -> Optional[Dict[str, Any]]:
         product = code[0:4]      # First 4 chars
         folio = int(code[4:7])   # Next 3 chars
         year = int(code[7:9])    # Next 2 chars
-        plant = code[9]          # Last char
+        plant_code = code[9]     # Last char
         
         fefo_key = year * 1000 + folio
         full_year = 2000 + year
+        plant_name = get_plant_name(plant_code)
         
         return {
             'product': product,
             'folio': folio,
             'year': year,
             'full_year': full_year,
-            'plant': plant,
+            'plant': plant_name,
             'fefo_key': fefo_key
         }
     except (ValueError, IndexError):

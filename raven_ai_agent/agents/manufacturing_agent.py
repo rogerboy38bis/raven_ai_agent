@@ -1233,7 +1233,7 @@ class ManufacturingAgent:
         if "create batch" in message_lower:
             # @ai create batch 0803034251 for ITEM-CODE [expiry 2027-03-07]
             batch_match = re.search(r'create\s+batch\s+([\w-]+)', message, re.IGNORECASE)
-            item_match = re.search(r'(?:for|item)\s+(.+?)(?:\s+qty\b|\s+bom\b|\s+expiry\b|\s+mfg|$)', message, re.IGNORECASE)
+            item_match = re.search(r'(?:for|item)\s+(.+?)(?:\s+qty\b|\s+bom\b|\s+expiry\b|\s+mfg\b|\s+each\b|\s+from\b|$)', message, re.IGNORECASE)
             expiry_match = re.search(r'expiry\s+([\d-]+)', message, re.IGNORECASE)
             mfg_date_match = re.search(r'mfg[_-]?date\s+([\d-]+)', message, re.IGNORECASE)
             
@@ -1321,7 +1321,7 @@ class ManufacturingAgent:
 
         # ---- CREATE WO (Step 1) ----
         if "create" in message_lower and ("wo" in message_lower or "work order" in message_lower):
-            item_match = re.search(r'(?:for|item|para)\s+(.+?)(?:\s+qty\b|\s+bom\b|\s+from\b|$)', message, re.IGNORECASE)
+            item_match = re.search(r'(?:for|item|para)\s+(.+?)(?:\s+qty\b|\s+bom\b|\s+from\b|\s+each\b|$)', message, re.IGNORECASE)
             qty_match = re.search(r'(?:qty|quantity|cantidad)\s+(\d+\.?\d*)', message, re.IGNORECASE)
             bom_match = re.search(r'bom\s+(BOM-[\w-]+)', message, re.IGNORECASE)
 

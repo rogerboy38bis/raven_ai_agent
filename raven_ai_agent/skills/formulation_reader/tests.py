@@ -59,13 +59,13 @@ class TestParseGoldenNumber(unittest.TestCase):
     
     def test_parse_different_plants(self):
         """Test parsing items from different plants."""
-        # Mix=1, Dry=2, Juice=3, Lab=4, Formulated=5
+        # Mix, Dry, Juice, Laboratory, Formulated
         test_cases = [
-            ('ITEM_0617027231', '1'),  # Mix
-            ('ITEM_0617027232', '2'),  # Dry
-            ('ITEM_0617027233', '3'),  # Juice
-            ('ITEM_0617027234', '4'),  # Lab
-            ('ITEM_0617027235', '5'),  # Formulated
+            ('ITEM_0617027231', 'Mix'),  # Mix
+            ('ITEM_0617027232', 'Dry'),  # Dry
+            ('ITEM_0617027233', 'Juice'),  # Juice
+            ('ITEM_0617027234', 'Laboratory'),  # Lab
+            ('ITEM_0617027235', 'Formulated'),  # Formulated
         ]
         
         for item_code, expected_plant in test_cases:
