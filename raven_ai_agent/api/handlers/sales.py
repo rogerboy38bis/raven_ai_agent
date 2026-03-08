@@ -765,10 +765,16 @@ class SalesMixin:
                     
                     from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
                     si_dict = make_sales_invoice(dn_name)
+                    # Inject CFDI fields into dict BEFORE creating doc
+                    # (si.set() on custom Link fields can silently fail)
+                    if hasattr(si_dict, 'update'):
+                        si_dict.update(cfdi_fields)
+                    elif isinstance(si_dict, dict):
+                        si_dict.update(cfdi_fields)
                     si = frappe.get_doc(si_dict)
-                    # Apply discovered Mexico CFDI fields
+                    # Belt-and-suspenders: also set via attribute assignment
                     for field, value in cfdi_fields.items():
-                        si.set(field, value)
+                        setattr(si, field, value)
                     # Apply custom posting_date if provided (migration scenario)
                     if custom_posting_date:
                         si.set_posting_time = 1
@@ -812,10 +818,16 @@ class SalesMixin:
                     
                     from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
                     si_dict = make_sales_invoice(so_name)
+                    # Inject CFDI fields into dict BEFORE creating doc
+                    # (si.set() on custom Link fields can silently fail)
+                    if hasattr(si_dict, 'update'):
+                        si_dict.update(cfdi_fields)
+                    elif isinstance(si_dict, dict):
+                        si_dict.update(cfdi_fields)
                     si = frappe.get_doc(si_dict)
-                    # Apply discovered Mexico CFDI fields
+                    # Belt-and-suspenders: also set via attribute assignment
                     for field, value in cfdi_fields.items():
-                        si.set(field, value)
+                        setattr(si, field, value)
                     # Apply custom posting_date if provided (migration scenario)
                     if custom_posting_date:
                         si.set_posting_time = 1
@@ -848,3 +860,4 @@ class SalesMixin:
         # ==================== END SALES-TO-PURCHASE CYCLE SOP ====================
 
         return None
+
