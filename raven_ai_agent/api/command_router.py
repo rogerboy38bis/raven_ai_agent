@@ -1,6 +1,6 @@
 """
 Command Router - Autonomy + Workflow Command Dispatch
-Split from agent.py - Phase 2 Optimization + Phase 3 Quality Management
+Split from agent.py - Phase 2 Optimization + Phase 3 Quality Management + Phase 4 Analytics
 
 Contains: CommandRouterMixin with autonomy determination and workflow command execution.
 """
@@ -25,9 +25,10 @@ class CommandRouterMixin:
         if any(word in query_lower for word in ["delete", "cancel", "submit", "create invoice", "payment"]):
             return 3
 
-        # Level 2 keywords (modifications/workflow + quality management)
+        # Level 2 keywords (modifications/workflow + quality management + analytics)
         if any(word in query_lower for word in ["update", "change", "modify", "set", "add", "convert", "create", "confirm",
-                                                  "quality", "calidad", "nc", "capa", "sop", "audit", "training"]):
+                                                  "quality", "calidad", "nc", "capa", "sop", "audit", "training",
+                                                  "dashboard", "tablero", "trend", "report", "reporte", "alert", "alerta"]):
             return 2
 
         # Default to Level 1 (read-only)
@@ -244,6 +245,11 @@ class CommandRouterMixin:
 
         # Phase 3: Quality Management System
         result = self._handle_quality_commands(query, query_lower, is_confirm=is_confirm)
+        if result is not None:
+            return result
+
+        # Phase 4: Analytics & Reporting
+        result = self._handle_analytics_commands(query, query_lower, is_confirm=is_confirm)
         if result is not None:
             return result
 
