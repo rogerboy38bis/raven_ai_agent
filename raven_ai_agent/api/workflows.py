@@ -94,6 +94,169 @@ def idempotency_check(doctype: str, filters: Dict) -> Optional[str]:
 
 
 # =============================================================================
+# SMART HELPERS — Batch, Stock, CFDI (Phase 5 Intelligence)
+# =============================================================================
+
+def _auto_assign_batches(dn_doc):
+    """Auto-assign batch numbers to DN items that require them (FIFO by expiry).
+    
+    For items with has_batch_no=1, finds the best available batch in the
+    target warehouse using FIFO (earliest expiry first) and assigns it.
+    """
+    from collections import defaultdict
+    
+    items_needing_batch = []
+    for item in dn_doc.items:
+        if item.batch_no:
+            continue
+        item_meta = frappe.get_cached_value("Item", item.item_code,
+            ["has_batch_no", "has_serial_no"], as_dict=True)
+        if item_meta and item_meta.get("has_batch_no"):
+            items_needing_batch.append(item)
+    
+    if not items_needing_batch:
+        return {"assigned": 0, "issues": []}
+    
+    assigned = 0
+    issues = []
+    
+    # Group by (item_code, warehouse) for efficient batch lookup
+    groups = defaultdict(list)
+    for item in items_needing_batch:
+        key = (item.item_code, item.warehouse)
+        groups[key].append(item)
+    
+    for (item_code, warehouse), items in groups.items():
+        total_needed = sum(flt(it.qty) for it in items)
+        
+        # Find available batches with stock (FIFO by expiry)
+        batches = frappe.db.sql("""
+            SELECT sle.batch_no, b.expiry_date,
+                   SUM(sle.actual_qty) as batch_qty
+            FROM `tabStock Ledger Entry` sle
+            JOIN `tabBatch` b ON b.name = sle.batch_no
+            WHERE sle.item_code = %s
+              AND sle.warehouse = %s
+              AND sle.is_cancelled = 0
+              AND b.disabled = 0
+              AND (b.expiry_date IS NULL OR b.expiry_date >= CURDATE())
+            GROUP BY sle.batch_no
+            HAVING batch_qty > 0
+            ORDER BY COALESCE(b.expiry_date, '9999-12-31') ASC
+        """, (item_code, warehouse), as_dict=True)
+        
+        if not batches:
+            issues.append(
+                f"No batch with stock for {item_code} in {warehouse} (need {total_needed})"
+            )
+            continue
+        
+        batch_idx = 0
+        remaining_in_batch = flt(batches[0].batch_qty) if batches else 0
+        
+        for item in items:
+            qty_needed = flt(item.qty)
+            while batch_idx < len(batches) and remaining_in_batch <= 0:
+                batch_idx += 1
+                if batch_idx < len(batches):
+                    remaining_in_batch = flt(batches[batch_idx].batch_qty)
+            
+            if batch_idx < len(batches):
+                item.batch_no = batches[batch_idx].batch_no
+                item.use_serial_batch_fields = 1
+                remaining_in_batch -= qty_needed
+                assigned += 1
+            else:
+                issues.append(
+                    f"Insufficient batch stock for {item_code} row {item.idx}"
+                )
+    
+    return {"assigned": assigned, "issues": issues}
+
+
+def _preflight_delivery_check(so_doc):
+    """Pre-flight validation before creating DN.
+    Checks stock availability, batch requirements, QI requirements.
+    """
+    warnings = []
+    blockers = []
+    
+    for item in so_doc.items:
+        item_code = item.item_code
+        qty_needed = flt(item.qty) - flt(item.delivered_qty)
+        if qty_needed <= 0:
+            continue
+        
+        item_meta = frappe.get_cached_value("Item", item_code,
+            ["has_batch_no", "has_serial_no",
+             "inspection_required_before_delivery"], as_dict=True)
+        if not item_meta:
+            continue
+        
+        if item_meta.get("inspection_required_before_delivery"):
+            warnings.append(f"Item {item_code}: Quality Inspection required before delivery")
+        
+        warehouse = item.warehouse or "FG to Sell Warehouse - AMB-W"
+        if item_meta.get("has_batch_no"):
+            batch_stock = frappe.db.sql("""
+                SELECT COALESCE(SUM(sle.actual_qty), 0) as total_qty
+                FROM `tabStock Ledger Entry` sle
+                JOIN `tabBatch` b ON b.name = sle.batch_no
+                WHERE sle.item_code = %s AND sle.warehouse = %s
+                  AND sle.is_cancelled = 0 AND b.disabled = 0
+                  AND (b.expiry_date IS NULL OR b.expiry_date >= CURDATE())
+            """, (item_code, warehouse), as_dict=True)
+            available = flt(batch_stock[0].total_qty) if batch_stock else 0
+            if available < qty_needed:
+                warnings.append(
+                    f"Item {item_code}: Batch stock {available} < needed {qty_needed} in {warehouse}"
+                )
+        else:
+            bin_qty = frappe.db.get_value("Bin",
+                {"item_code": item_code, "warehouse": warehouse}, "actual_qty") or 0
+            if flt(bin_qty) < qty_needed:
+                warnings.append(
+                    f"Item {item_code}: Stock {bin_qty} < needed {qty_needed} in {warehouse}"
+                )
+    
+    return {"warnings": warnings, "blockers": blockers}
+
+
+def _resolve_mx_cfdi_fields(customer, payment_terms_template=None):
+    """Resolve Mexico CFDI fields for Sales Invoice.
+    
+    Business rules:
+    - PUE = Pay in advance (Pago en Una sola Exhibicion)
+    - PPD = Credit terms like 30 days (Pago en Parcialidades o Diferido)
+    - CFDI Use: G01 for goods, G03 default
+    - Mode of Payment: Wire Transfer default
+    """
+    result = {
+        "mx_payment_option": "PPD",
+        "mx_cfdi_use": "G01",
+        "mode_of_payment": "Wire Transfer"
+    }
+    
+    pue_keywords = ["advance", "anticipad", "prepaid", "antes", "previo", "adelant"]
+    ppd_keywords = ["days", "dias", "credit", "credito", "net ", "after"]
+    
+    terms_str = (payment_terms_template or "").lower()
+    customer_terms = (frappe.db.get_value("Customer", customer, "payment_terms") or "").lower()
+    terms_str += " " + customer_terms
+    
+    if any(kw in terms_str for kw in pue_keywords):
+        result["mx_payment_option"] = "PUE"
+    elif any(kw in terms_str for kw in ppd_keywords):
+        result["mx_payment_option"] = "PPD"
+    
+    cust_cfdi = frappe.db.get_value("Customer", customer, "mx_cfdi_use")
+    if cust_cfdi:
+        result["mx_cfdi_use"] = cust_cfdi
+    
+    return result
+
+
+# =============================================================================
 # BOM AUTOMATION FUNCTIONS (from amb_w_tds/api/bom_automation.py)
 # =============================================================================
 
@@ -561,61 +724,101 @@ class WorkflowExecutor:
     # ========== DELIVERY NOTE ==========
     
     def create_delivery_note_from_sales_order(self, so_name: str, confirm: bool = False) -> Dict:
-        """Create Delivery Note from Sales Order"""
+        """Create Delivery Note from Sales Order - SMART version.
+        
+        Handles: pre-flight validation, auto batch assignment (FIFO),
+        QI warnings, actionable error messages.
+        """
         try:
             from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
             
             so = frappe.get_doc("Sales Order", so_name)
             
             if so.docstatus != 1:
-                return {"success": False, "error": f"Sales Order must be submitted first"}
+                return {"success": False, "error": "Sales Order must be submitted first"}
             
-            # Check for existing DN
-            existing_dn = frappe.db.get_value("Delivery Note Item", {"against_sales_order": so_name}, "parent")
+            # Check for existing DN (not cancelled)
+            existing_dn = frappe.db.get_value("Delivery Note Item",
+                {"against_sales_order": so_name, "docstatus": ["!=", 2]}, "parent")
             if existing_dn:
+                dn_status = frappe.db.get_value("Delivery Note", existing_dn, "docstatus")
+                status_label = "Draft" if dn_status == 0 else "Submitted" if dn_status == 1 else "Cancelled"
                 return {
                     "success": True,
-                    "message": f"Delivery Note already exists: {existing_dn}",
+                    "message": f"Delivery Note already exists: **{existing_dn}** ({status_label})",
                     "delivery_note": existing_dn,
                     "link": self.make_link("Delivery Note", existing_dn)
                 }
             
+            # Pre-flight check
+            preflight = _preflight_delivery_check(so)
+            warnings_text = ""
+            if preflight["warnings"]:
+                warnings_text = "\n".join(preflight["warnings"])
+            if preflight["blockers"]:
+                return {
+                    "success": False,
+                    "error": "Cannot create DN:\n" + "\n".join(preflight["blockers"])
+                }
+            
             if not confirm:
+                preview = f"**Create Delivery Note from {so_name}?**\n"
+                preview += f"Customer: {so.customer_name}\n"
+                preview += f"Items: {len(so.items)} lines, {so.total_qty} qty\n"
+                if warnings_text:
+                    preview += f"\n{warnings_text}\n"
+                preview += f"\nUse `!delivery from {so_name}` to execute."
                 return {
                     "success": True,
                     "requires_confirmation": True,
-                    "preview": f"**Create Delivery Note from {so_name}?**"
+                    "preview": preview
                 }
             
+            # Create the DN
             dn = make_delivery_note(so_name)
             dn.flags.ignore_permissions = True
             dn.insert()
+            
+            # Smart: Auto-assign batches (FIFO by expiry)
+            batch_result = _auto_assign_batches(dn)
+            batch_msg = ""
+            if batch_result["assigned"] > 0:
+                dn.save()
+                batch_msg = f"\n\U0001F4E6 Auto-assigned batches to {batch_result['assigned']} items"
+            if batch_result["issues"]:
+                batch_msg += "\n\u26A0\uFE0F Batch issues: " + "; ".join(batch_result["issues"])
+            
             frappe.db.commit()
             
             return {
                 "success": True,
-                "message": f"✅ Delivery Note **{dn.name}** created",
+                "message": (
+                    f"\u2705 Delivery Note **{dn.name}** created (Draft)"
+                    f"{batch_msg}\n"
+                    f"Link: {self.make_link('Delivery Note', dn.name)}"
+                ),
                 "delivery_note": dn.name,
                 "link": self.make_link("Delivery Note", dn.name)
             }
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            error_msg = str(e)
+            suggestions = self._get_error_suggestions(error_msg, so_name)
+            return {"success": False, "error": f"{error_msg}{suggestions}"}
     
     # ========== SALES INVOICE ==========
     
     def create_invoice_from_sales_order(self, so_name: str, confirm: bool = False) -> Dict:
-        """Create Sales Invoice from Sales Order — finds linked DN first.
+        """Create Sales Invoice from Sales Order - SMART version.
         
-        Flow: SO → find DN → create Invoice from DN
-        If no DN exists, prompts to create one first.
-        If DN exists but is Draft, submits it first.
+        Flow: SO -> find DN -> auto-assign batches -> submit DN -> create Invoice
+        Handles: batch assignment, Mexico CFDI fields, actionable errors.
         """
         try:
             so = frappe.get_doc("Sales Order", so_name)
             if so.docstatus != 1:
-                return {"success": False, "error": f"Sales Order must be submitted first"}
+                return {"success": False, "error": "Sales Order must be submitted first"}
             
-            # Find linked Delivery Notes
+            # Find linked Delivery Notes (not cancelled)
             dn_items = frappe.get_all("Delivery Note Item",
                 filters={"against_sales_order": so_name, "docstatus": ["!=", 2]},
                 fields=["parent"],
@@ -633,7 +836,7 @@ class WorkflowExecutor:
             dn_name = dn_items[0].parent
             dn = frappe.get_doc("Delivery Note", dn_name)
             
-            # If DN is Draft, submit it first
+            # If DN is Draft, try to auto-fix and submit
             if dn.docstatus == 0:
                 if not confirm:
                     return {
@@ -642,11 +845,18 @@ class WorkflowExecutor:
                         "preview": (
                             f"**Invoice from {so_name}**\n\n"
                             f"Found DN: {dn_name} (Draft)\n"
-                            f"Will submit DN first, then create Sales Invoice.\n\n"
+                            f"Will auto-assign batches, submit DN, then create Invoice.\n\n"
                             f"Use `!invoice from {so_name}` to execute."
                         )
                     }
+                
+                # Smart: Auto-assign batches before submit
+                batch_result = _auto_assign_batches(dn)
+                if batch_result["assigned"] > 0:
+                    dn.save()
+                
                 # Submit the DN
+                dn.flags.ignore_permissions = True
                 dn.submit()
                 frappe.db.commit()
             
@@ -681,6 +891,17 @@ class WorkflowExecutor:
             from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
             inv = make_sales_invoice(dn_name)
             inv.flags.ignore_permissions = True
+            
+            # Smart: Auto-populate Mexico CFDI fields
+            cfdi = _resolve_mx_cfdi_fields(
+                so.customer,
+                payment_terms_template=so.payment_terms_template
+            )
+            inv.mx_payment_option = cfdi["mx_payment_option"]
+            inv.mx_cfdi_use = cfdi["mx_cfdi_use"]
+            if not inv.mode_of_payment:
+                inv.mode_of_payment = cfdi["mode_of_payment"]
+            
             inv.insert()
             frappe.db.commit()
             
@@ -692,6 +913,7 @@ class WorkflowExecutor:
                     f"  Sales Order: {self.make_link('Sales Order', so_name)}\n"
                     f"  Customer: {so.customer_name}\n"
                     f"  Total: {so.grand_total}\n"
+                    f"  Payment: {cfdi['mx_payment_option']} | CFDI: {cfdi['mx_cfdi_use']}\n"
                     f"  Link: {self.make_link('Sales Invoice', inv.name)}"
                 ),
                 "invoice": inv.name,
@@ -700,20 +922,23 @@ class WorkflowExecutor:
         except frappe.DoesNotExistError:
             return {"success": False, "error": f"Sales Order '{so_name}' not found."}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            error_msg = str(e)
+            suggestions = self._get_error_suggestions(error_msg, so_name)
+            return {"success": False, "error": f"{error_msg}{suggestions}"}
 
     def create_invoice_from_delivery_note(self, dn_name: str, confirm: bool = False) -> Dict:
-        """Create Sales Invoice from Delivery Note"""
+        """Create Sales Invoice from Delivery Note - SMART version."""
         try:
             from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
             
             dn = frappe.get_doc("Delivery Note", dn_name)
             
             if dn.docstatus != 1:
-                return {"success": False, "error": f"Delivery Note must be submitted first"}
+                return {"success": False, "error": "Delivery Note must be submitted first"}
             
-            # Check for existing invoice
-            existing_inv = frappe.db.get_value("Sales Invoice Item", {"delivery_note": dn_name}, "parent")
+            # Check for existing invoice (not cancelled)
+            existing_inv = frappe.db.get_value("Sales Invoice Item",
+                {"delivery_note": dn_name, "docstatus": ["!=", 2]}, "parent")
             if existing_inv:
                 return {
                     "success": True,
@@ -731,18 +956,41 @@ class WorkflowExecutor:
             
             inv = make_sales_invoice(dn_name)
             inv.flags.ignore_permissions = True
+            
+            # Smart: Auto-populate Mexico CFDI fields
+            so_name = None
+            for item in dn.items:
+                if item.against_sales_order:
+                    so_name = item.against_sales_order
+                    break
+            
+            payment_terms = None
+            if so_name:
+                payment_terms = frappe.db.get_value("Sales Order", so_name, "payment_terms_template")
+            
+            cfdi = _resolve_mx_cfdi_fields(dn.customer, payment_terms_template=payment_terms)
+            inv.mx_payment_option = cfdi["mx_payment_option"]
+            inv.mx_cfdi_use = cfdi["mx_cfdi_use"]
+            if not inv.mode_of_payment:
+                inv.mode_of_payment = cfdi["mode_of_payment"]
+            
             inv.insert()
             frappe.db.commit()
             
             return {
                 "success": True,
-                "message": f"✅ Sales Invoice **{inv.name}** created",
+                "message": (
+                    f"\u2705 Sales Invoice **{inv.name}** created\n"
+                    f"  Payment: {cfdi['mx_payment_option']} | CFDI: {cfdi['mx_cfdi_use']}\n"
+                    f"  Link: {self.make_link('Sales Invoice', inv.name)}"
+                ),
                 "invoice": inv.name,
                 "link": self.make_link("Sales Invoice", inv.name)
             }
         except Exception as e:
-            return {"success": False, "error": str(e)}
-
+            error_msg = str(e)
+            suggestions = self._get_error_suggestions(error_msg, dn_name)
+            return {"success": False, "error": f"{error_msg}{suggestions}"}
 
 # =============================================================================
 # MODULE-LEVEL CONVENIENCE FUNCTIONS (Sudo Mode - No Confirmation)
