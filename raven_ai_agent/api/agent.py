@@ -12,6 +12,9 @@ Module map:
 Phase 3 additions:
   handlers/quality_management.py — QualityManagementMixin: NC, CAPA, SOP, Audit, KPI, Training (736 lines)
 
+Phase 4 additions:
+  handlers/analytics.py — AnalyticsMixin: Dashboards, Trends, Reports, Alerts (943 lines)
+
 Backward compatibility:
   - All @frappe.whitelist() endpoints preserved
   - RaymondLucyAgent class still importable from this module
@@ -39,6 +42,7 @@ from raven_ai_agent.api.handlers import (
     SalesMixin,
     QuotationMixin,
     QualityManagementMixin,
+    AnalyticsMixin,
 )
 
 
@@ -52,6 +56,7 @@ class RaymondLucyAgent(
     SalesMixin,
     QuotationMixin,
     QualityManagementMixin,
+    AnalyticsMixin,
 ):
     """
     Raymond-Lucy AI Agent - ERPNext AI Assistant
@@ -67,6 +72,7 @@ class RaymondLucyAgent(
     - SalesMixin: Sales-to-Purchase cycle (477 lines)
     - QuotationMixin: Quotation fix + update + TDS (415 lines)
     - QualityManagementMixin: NC, CAPA, SOP, Audit, KPI, Training (736 lines) [Phase 3]
+    - AnalyticsMixin: Dashboards, Trends, Reports, Alerts (943 lines) [Phase 4]
     """
 
     def __init__(self, user: str):
@@ -294,6 +300,19 @@ def handle_raven_message(doc, method):
             # Detect intent to route to specialized agents
             q_lower = query.lower()
 
+            # Phase 4: Analytics commands route to RaymondLucyAgent (default)
+            analytics_keywords = [
+                "dashboard", "tablero", "trend", "tendencia",
+                "report daily", "report weekly", "report monthly",
+                "reporte diario", "reporte semanal", "reporte mensual",
+                "alerts status", "alerts check", "alerts configure",
+                "alerta", "executive overview", "resumen ejecutivo",
+                "financial snapshot", "quality metric", "kpi dashboard"
+            ]
+            is_analytics = any(kw in q_lower for kw in analytics_keywords)
+            if is_analytics:
+                bot_name = "sales_order_bot"  # Routes to RaymondLucyAgent which has AnalyticsMixin
+
             # Enhanced keyword lists for better distribution
             mfg_keywords = [
                 "work order", "create wo", "submit wo", "manufacture",
@@ -324,8 +343,10 @@ def handle_raven_message(doc, method):
                 "audit bom", "check bom", "validate bom"
             ]
 
-            # Route by priority (more specific first)
-            if any(kw in q_lower for kw in validator_keywords):
+            # Route by priority (more specific first) — skip if analytics already matched
+            if is_analytics:
+                pass  # Already set to sales_order_bot → RaymondLucyAgent
+            elif any(kw in q_lower for kw in validator_keywords):
                 bot_name = "task_validator"
             elif any(kw in q_lower for kw in orch_keywords):
                 bot_name = "workflow_orchestrator"
