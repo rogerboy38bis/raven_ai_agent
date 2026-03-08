@@ -250,14 +250,19 @@ class ManufacturingAgent:
 
     # ========== STOCK ENTRY OPERATIONS (Steps 2, 5) ==========
 
-    def create_stock_entry_manufacture(self, wo_name: str, qty: float = None) -> Dict:
+    def create_stock_entry_manufacture(self, wo_name: str, qty: float = None,
+                                         skip_transfer: bool = False) -> Dict:
         """Create a Stock Entry of type 'Manufacture' from a Work Order (Steps 2 & 5).
+        
+        GAP-05: Auto-creates material transfer if not yet done, then manufactures.
+        Use skip_transfer=True (via @ai !finish no_transfer) to skip auto-transfer.
         
         Consumes raw materials from WIP and produces finished goods into FG warehouse.
         
         Args:
             wo_name: Work Order name (e.g. 'MFG-WO-03726')
             qty: Quantity to manufacture. If None, uses full WO qty minus already manufactured.
+            skip_transfer: If True, skip auto-transfer step.
         
         Returns:
             Dict with Stock Entry details
@@ -284,6 +289,23 @@ class ManufacturingAgent:
                     "error": f"Requested qty ({manufacture_qty}) exceeds remaining ({remaining_qty})."
                 }
 
+            # GAP-05: Auto-transfer materials if not yet transferred
+            transfer_msg = ""
+            if not skip_transfer:
+                remaining_transfer = flt(wo.qty) - flt(wo.material_transferred_for_manufacturing)
+                if remaining_transfer > 0:
+                    transfer_result = self.create_material_transfer(wo_name, manufacture_qty)
+                    if transfer_result.get("success"):
+                        transfer_msg = (
+                            f"📦 Auto-Transfer: {self.make_link('Stock Entry', transfer_result.get('se_name', ''))}\n"
+                            f"  Materials transferred to WIP: {manufacture_qty} Kg\n\n"
+                        )
+                        # Reload WO after transfer
+                        wo.reload()
+                    else:
+                        # Transfer failed — still try to manufacture (materials may be in WIP already)
+                        transfer_msg = f"⚠️ Auto-transfer skipped: {transfer_result.get('error', 'unknown')}\n\n"
+
             # Use ERPNext's built-in Stock Entry creation from Work Order
             from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
 
@@ -299,6 +321,7 @@ class ManufacturingAgent:
                 "link": self.make_link("Stock Entry", se.name),
                 "wo_link": self.make_link("Work Order", wo_name),
                 "message": (
+                    f"{transfer_msg}"
                     f"✅ Stock Entry (Manufacture) created: {self.make_link('Stock Entry', se.name)}\n\n"
                     f"  Work Order: {self.make_link('Work Order', wo_name)}\n"
                     f"  Item: {wo.production_item}\n"
@@ -738,10 +761,114 @@ class ManufacturingAgent:
         except Exception as e:
             return {"success": False, "error": f"Error creating batch: {str(e)}"}
 
+    # ========== SO ALLOCATION CHECK (GAP-03) ==========
+
+    def get_so_allocation(self, so_name: str) -> Dict:
+        """Get current WO allocation status for a Sales Order.
+        
+        Returns dict with:
+            - so_qty: Total SO quantity
+            - allocated_qty: Sum of all non-cancelled WO qty for this SO
+            - remaining_qty: so_qty - allocated_qty
+            - work_orders: List of existing WOs with details
+            - fully_allocated: bool
+        """
+        try:
+            so = frappe.get_doc("Sales Order", so_name)
+            if so.docstatus != 1:
+                return {"success": False, "error": f"Sales Order '{so_name}' must be submitted first."}
+            
+            # Sum SO qty (same item may appear on multiple lines)
+            item_code = so.items[0].item_code if so.items else None
+            so_qty = sum(flt(i.qty) for i in so.items if i.item_code == item_code) if item_code else 0
+            
+            # Get all non-cancelled WOs linked to this SO
+            existing_wos = frappe.get_all("Work Order",
+                filters={"sales_order": so_name, "docstatus": ["!=", 2]},
+                fields=["name", "production_item", "qty", "produced_qty",
+                        "material_transferred_for_manufacturing", "status",
+                        "bom_no", "planned_start_date"],
+                order_by="creation asc"
+            )
+            
+            allocated_qty = sum(flt(wo.qty) for wo in existing_wos)
+            remaining_qty = flt(so_qty) - flt(allocated_qty)
+            
+            return {
+                "success": True,
+                "item_code": item_code,
+                "so_qty": so_qty,
+                "allocated_qty": allocated_qty,
+                "remaining_qty": remaining_qty,
+                "fully_allocated": remaining_qty <= 0,
+                "work_orders": existing_wos
+            }
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Order '{so_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def show_so_allocation_dashboard(self, so_name: str) -> str:
+        """Show a rich allocation dashboard when SO is fully/partially allocated (GAP-03)."""
+        alloc = self.get_so_allocation(so_name)
+        if not alloc.get("success"):
+            return f"❌ {alloc.get('error', 'Unknown error')}"
+        
+        so_link = self.make_link("Sales Order", so_name)
+        msg = f"📊 **WO Allocation Dashboard — {so_link}**\n\n"
+        msg += f"  Item: {alloc['item_code']}\n"
+        msg += f"  SO Total: {alloc['so_qty']} Kg\n"
+        msg += f"  Allocated: {alloc['allocated_qty']} Kg\n"
+        msg += f"  Remaining: {alloc['remaining_qty']} Kg\n"
+        
+        if alloc['fully_allocated']:
+            msg += f"  Status: ✅ **FULLY ALLOCATED**\n\n"
+        else:
+            msg += f"  Status: 🔶 **PARTIALLY ALLOCATED** ({alloc['remaining_qty']} Kg available)\n\n"
+        
+        # WO breakdown table
+        wos = alloc.get("work_orders", [])
+        if wos:
+            msg += "| # | Work Order | Qty | Produced | Transferred | Status |\n"
+            msg += "|---|-----------|-----|----------|-------------|--------|\n"
+            for idx, wo in enumerate(wos):
+                wo_link = self.make_link("Work Order", wo.name)
+                produced = flt(wo.produced_qty)
+                transferred = flt(wo.material_transferred_for_manufacturing)
+                msg += f"| {idx+1} | {wo_link} | {wo.qty} | {produced} | {transferred} | {wo.status} |\n"
+            msg += f"\n  **Total WO Qty: {alloc['allocated_qty']} Kg**\n"
+        else:
+            msg += "  No Work Orders found for this SO.\n"
+        
+        # Pending actions
+        pending_submit = [wo for wo in wos if wo.status == "Draft"]
+        pending_transfer = [wo for wo in wos if wo.status in ("Not Started", "Submitted") and flt(wo.material_transferred_for_manufacturing) < flt(wo.qty)]
+        pending_manufacture = [wo for wo in wos if wo.status == "In Process" and flt(wo.produced_qty) < flt(wo.qty)]
+        
+        if pending_submit or pending_transfer or pending_manufacture:
+            msg += "\n**⏳ Pending Actions:**\n"
+            if pending_submit:
+                msg += f"  • {len(pending_submit)} WO(s) need submission\n"
+            if pending_transfer:
+                msg += f"  • {len(pending_transfer)} WO(s) need material transfer\n"
+            if pending_manufacture:
+                msg += f"  • {len(pending_manufacture)} WO(s) need manufacture completion\n"
+        
+        if alloc['fully_allocated'] and all(wo.status == "Completed" for wo in wos):
+            msg += "\n🎉 **All WOs completed!** Ready for Delivery Note."
+        elif not alloc['fully_allocated']:
+            msg += f"\n💡 Create more WOs: `@ai wo plan {so_name} each 500`"
+        
+        return msg
+
     # ========== MULTI-WO PLAN (GAP-03) ==========
 
     def create_wo_plan(self, so_name: str, plan: List[Dict]) -> Dict:
         """Create multiple Work Orders from a single SO with custom qty/lote splits.
+        
+        GAP-03 Smart: Checks existing allocation before creating. If SO is fully
+        allocated, shows dashboard instead of error. If partially allocated, only
+        creates WOs for remaining capacity.
         
         Args:
             so_name: Sales Order name
@@ -766,8 +893,45 @@ class ManufacturingAgent:
             # Sum all SO lines for the same item (SO may split across multiple rows)
             so_qty = sum(flt(i.qty) for i in so.items if i.item_code == item_code)
             
+            # GAP-03: Check existing allocation before creating
+            alloc = self.get_so_allocation(so_name)
+            if alloc.get("success") and alloc.get("fully_allocated"):
+                # SO is fully allocated — show dashboard instead of error
+                dashboard = self.show_so_allocation_dashboard(so_name)
+                return {"success": True, "message": dashboard, "fully_allocated": True}
+            
+            # If partially allocated, cap plan to remaining capacity
+            remaining_capacity = alloc.get("remaining_qty", so_qty) if alloc.get("success") else so_qty
+            
             # Validate plan total
             plan_total = sum(flt(p.get("qty", 0)) for p in plan)
+            
+            if plan_total > remaining_capacity + 0.01:
+                # Auto-trim plan to remaining capacity
+                trimmed_plan = []
+                running_total = 0
+                for p in plan:
+                    p_qty = flt(p.get("qty", 0))
+                    if running_total + p_qty <= remaining_capacity + 0.01:
+                        trimmed_plan.append(p)
+                        running_total += p_qty
+                    elif running_total < remaining_capacity:
+                        # Partial last WO
+                        remainder = remaining_capacity - running_total
+                        if remainder > 0:
+                            trimmed_p = dict(p)
+                            trimmed_p["qty"] = remainder
+                            trimmed_plan.append(trimmed_p)
+                            running_total += remainder
+                        break
+                    else:
+                        break
+                plan = trimmed_plan
+                plan_total = sum(flt(p.get("qty", 0)) for p in plan)
+                
+                if not plan:
+                    dashboard = self.show_so_allocation_dashboard(so_name)
+                    return {"success": True, "message": dashboard, "fully_allocated": True}
             
             created_wos = []
             errors = []
@@ -898,6 +1062,80 @@ class ManufacturingAgent:
         except Exception as e:
             return f"❌ Error listing work orders: {str(e)}"
 
+    # ========== MANUFACTURING STATUS DASHBOARD (GAP-06) ==========
+
+    def mfg_status_dashboard(self, so_name: str = None) -> str:
+        """Manufacturing Status Dashboard (GAP-06).
+        
+        If so_name provided, shows detailed dashboard for that SO.
+        Otherwise, shows overview of all active SOs with WOs.
+        """
+        try:
+            if so_name:
+                # Detailed dashboard for specific SO
+                return self.show_so_allocation_dashboard(so_name)
+            
+            # Overview: All SOs that have active WOs
+            active_wos = frappe.get_all("Work Order",
+                filters={"docstatus": ["!=", 2], "sales_order": ["is", "set"]},
+                fields=["name", "production_item", "qty", "produced_qty",
+                        "material_transferred_for_manufacturing", "status",
+                        "sales_order"],
+                order_by="sales_order asc, creation asc",
+                limit=100
+            )
+            
+            if not active_wos:
+                return "🏭 **Manufacturing Dashboard**\n\nNo active Work Orders linked to Sales Orders."
+            
+            # Group by SO
+            so_groups = {}
+            for wo in active_wos:
+                so = wo.sales_order
+                if so not in so_groups:
+                    so_groups[so] = []
+                so_groups[so].append(wo)
+            
+            msg = "🏭 **Manufacturing Dashboard — All Active Orders**\n\n"
+            msg += f"  {len(so_groups)} Sales Orders | {len(active_wos)} Work Orders\n\n"
+            msg += "| Sales Order | WOs | Total Qty | Produced | Status |\n"
+            msg += "|------------|-----|-----------|----------|--------|\n"
+            
+            for so_name_key, wos in so_groups.items():
+                so_link = self.make_link("Sales Order", so_name_key)
+                total_qty = sum(flt(w.qty) for w in wos)
+                total_produced = sum(flt(w.produced_qty) for w in wos)
+                wo_count = len(wos)
+                
+                # Determine overall status
+                statuses = set(w.status for w in wos)
+                if statuses == {"Completed"}:
+                    overall = "✅ Completed"
+                elif "In Process" in statuses:
+                    overall = "🟡 In Process"
+                elif "Not Started" in statuses:
+                    overall = "🟠 Not Started"
+                elif "Draft" in statuses:
+                    overall = "⚪ Draft"
+                else:
+                    overall = ", ".join(statuses)
+                
+                msg += f"| {so_link} | {wo_count} | {total_qty} | {total_produced} | {overall} |\n"
+            
+            # Summary counts
+            all_completed = sum(1 for wo in active_wos if wo.status == "Completed")
+            in_process = sum(1 for wo in active_wos if wo.status == "In Process")
+            not_started = sum(1 for wo in active_wos if wo.status == "Not Started")
+            draft = sum(1 for wo in active_wos if wo.status == "Draft")
+            
+            msg += f"\n**Summary:** {all_completed} completed, {in_process} in process, {not_started} not started, {draft} draft\n"
+            msg += f"\n💡 Detail: `@ai mfg status SO-XXXXX` for specific SO dashboard"
+            
+            return msg
+            
+        except Exception as e:
+            return f"❌ Error generating dashboard: {str(e)}"
+
     # ========== MAIN COMMAND HANDLER ==========
 
     def process_command(self, message: str) -> str:
@@ -976,8 +1214,18 @@ class ManufacturingAgent:
                         so = frappe.get_doc("Sales Order", so_name)
                         # Sum all SO items (same item may appear on multiple lines)
                         total_qty = sum(flt(i.qty) for i in so.items) if so.items else 0
-                        num_wos = int(total_qty / each_qty)
-                        remainder = total_qty - (num_wos * each_qty)
+                        
+                        # GAP-03: Use remaining capacity, not total SO qty
+                        alloc = self.get_so_allocation(so_name)
+                        if alloc.get("success"):
+                            if alloc.get("fully_allocated"):
+                                return self.show_so_allocation_dashboard(so_name)
+                            available_qty = alloc.get("remaining_qty", total_qty)
+                        else:
+                            available_qty = total_qty
+                        
+                        num_wos = int(available_qty / each_qty)
+                        remainder = available_qty - (num_wos * each_qty)
                         
                         for i in range(num_wos):
                             plan.append({"qty": each_qty})
@@ -1040,12 +1288,20 @@ class ManufacturingAgent:
             result = self.submit_work_order(wo_name)
             return result.get("message", result.get("error", "Unknown error"))
 
+        # ---- MFG STATUS DASHBOARD (GAP-06) ----
+        if ("mfg status" in message_lower or "mfg dashboard" in message_lower
+                or "manufacturing status" in message_lower
+                or "manufacturing dashboard" in message_lower):
+            return self.mfg_status_dashboard(so_name=so_name)
+
         # ---- MANUFACTURE / FINISH (Steps 2, 5) ----
+        # GAP-05: Support "!finish no_transfer" to skip auto-transfer
+        skip_transfer = "no_transfer" in message_lower or "no transfer" in message_lower
         if ("manufacture" in message_lower or "finish" in message_lower
                 or "produce" in message_lower) and wo_name:
             qty_match = re.search(r'(?:qty|quantity|cantidad)\s+(\d+\.?\d*)', message, re.IGNORECASE)
             qty = float(qty_match.group(1)) if qty_match else None
-            result = self.create_stock_entry_manufacture(wo_name, qty)
+            result = self.create_stock_entry_manufacture(wo_name, qty, skip_transfer=skip_transfer)
             return result.get("message", result.get("error", "Unknown error"))
 
         # ---- TRANSFER MATERIALS ----
@@ -1076,17 +1332,22 @@ class ManufacturingAgent:
             "`@ai create wo for [ITEM] qty [QTY]` — Create WO (variant→template BOM auto-resolve)\n"
             "`@ai create wo for [ITEM] qty [QTY] bom [BOM-NAME]` — Create WO with specific BOM\n"
             "`@ai create wo from so [SO-NAME]` — Create WO linked to Sales Order\n\n"
-            "**Multi-WO Plan (GAP-03)**\n"
-            "`@ai wo plan [SO-NAME] each 500` — Split SO into multiple WOs of 500 each\n"
-            "`@ai wo plan [SO-NAME]: qty 1055 lote ABC, qty 600 lote DEF` — Custom split with batches\n\n"
+            "**Smart WO Plan (GAP-03)**\n"
+            "`@ai wo plan [SO-NAME] each 500` — Split remaining SO qty into WOs of 500 each\n"
+            "`@ai wo plan [SO-NAME]: qty 1055 lote ABC, qty 600 lote DEF` — Custom split with batches\n"
+            "_Smart: auto-detects existing allocation, shows dashboard if fully allocated, trims plan to remaining capacity_\n\n"
             "**Batch Management (GAP-04)**\n"
             "`@ai create batch [NAME] for [ITEM]` — Create named batch/lote\n"
             "`@ai create batch [NAME] for [ITEM] expiry 2027-12-31` — With expiry date\n\n"
             "**Work Order Actions**\n"
             "`@ai submit wo [WO-NAME]` — Submit Work Order\n"
             "`@ai transfer materials [WO-NAME]` — Transfer materials to WIP\n"
-            "`@ai manufacture [WO-NAME]` — Create Stock Entry (Manufacture)\n"
-            "`@ai manufacture [WO-NAME] qty [QTY]` — Partial manufacture\n\n"
+            "`@ai manufacture [WO-NAME]` — Auto-transfer + Manufacture (GAP-05)\n"
+            "`@ai manufacture [WO-NAME] qty [QTY]` — Partial manufacture\n"
+            "`@ai !finish [WO-NAME] no_transfer` — Manufacture without auto-transfer\n\n"
+            "**Manufacturing Dashboard (GAP-06)**\n"
+            "`@ai mfg status` — Overview of all SOs with WO status\n"
+            "`@ai mfg status [SO-NAME]` — Detailed dashboard for specific SO\n\n"
             "**Status & Listing**\n"
             "`@ai show work orders` — List active work orders (ARCH-03)\n"
             "`@ai show work orders for [SO-NAME]` — Filter by Sales Order\n"
@@ -1094,9 +1355,9 @@ class ManufacturingAgent:
             "`@ai check materials [WO-NAME]` — Verify material availability\n\n"
             "**Example (Full Cycle)**\n"
             "```\n"
-            "@ai create wo for 0307 qty 150 bom BOM-0307-005\n"
+            "@ai wo plan SO-00763 each 500\n"
             "@ai submit wo MFG-WO-03726\n"
-            "@ai transfer materials MFG-WO-03726\n"
             "@ai manufacture MFG-WO-03726\n"
+            "@ai mfg status SO-00763\n"
             "```"
         )
