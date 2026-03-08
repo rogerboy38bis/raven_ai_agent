@@ -1254,7 +1254,7 @@ def handle_raven_message(doc, method):
             query = plain_text[3:].strip()
             # Detect intent to route to specialized agents
             q_lower = query.lower()
-            mfg_keywords = ["work order", "create wo", "submit wo", "manufacture", "transfer material", "check material", "mfg-wo", "wo plan", "create batch", "show work order", "list work order", "mis ordenes", "show wo"]
+            mfg_keywords = ["work order", "create wo", "submit wo", "manufacture", "transfer material", "check material", "mfg-wo", "wo plan", "create batch", "show work order", "list work order", "mis ordenes", "show wo", "mfg status", "mfg dashboard", "manufacturing status", "manufacturing dashboard", "finish", "!finish", "no_transfer"]
             pay_keywords = ["payment", "outstanding", "unpaid", "reconcile", "acc-sinv", "acc-pay", "sinv-"]
             orch_keywords = ["pipeline status", "run full cycle", "run pipeline", "dry run", "validate so"]
             validator_keywords = ["diagnose", "diagnosis", "validate ", "audit pipeline", "check payment", "check pago", "pipeline health", "verify so", "verify sales order", "sync so", "fix so", "sync sales order", "fix sales order", "!sync", "!fix"]
