@@ -129,14 +129,10 @@ class CommandRouterMixin:
         if so_match and any(word in query_lower for word in ["delivery", "ship", "deliver"]):
             return executor.create_delivery_note_from_sales_order(so_match.group(1).upper(), confirm=is_confirm)
 
-        # Invoice from Delivery Note (direct DN reference)
-        dn_match = re.search(r'(MAT-DN-\d+-\d+|DN-\d+)', query, re.IGNORECASE)
-        if dn_match and "invoice" in query_lower:
-            return executor.create_invoice_from_delivery_note(dn_match.group(1).upper(), confirm=is_confirm)
-
-        # Invoice from Sales Order
-        if so_match and any(word in query_lower for word in ["invoice", "factura", "bill"]):
-            return executor.create_invoice_from_sales_order(so_match.group(1).upper(), confirm=is_confirm)
+        # Invoice from DN / SO — now handled by _handle_sales_commands() in
+        # sales.py which has full CFDI support: mode_of_payment, debit_to,
+        # Banxico FIX rate, mx_product_service_key, party_account_currency,
+        # custom posting_date. Falls through to dispatch at ~line 237.
 
         # Workflow status
         if "workflow status" in query_lower or "track" in query_lower:
