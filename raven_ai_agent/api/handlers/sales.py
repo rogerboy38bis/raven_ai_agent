@@ -12,6 +12,61 @@ class SalesMixin:
     """Mixin for _handle_sales_commands"""
 
     @staticmethod
+    def _resolve_pue_ppd(payment_terms_template):
+        """Determine PUE vs PPD by reading the Payment Terms Template schedule.
+        
+        Smart logic (BUG16+BUG17 fix):
+        1. PRIMARY: Read the Payment Terms Template's payment_schedule child rows.
+           - If ALL rows have credit_days == 0 → PUE (immediate/advance payment)
+           - If ANY row has credit_days > 0 → PPD (credit/deferred)
+        2. FALLBACK: If template not found or DB error, use keyword matching on name.
+        3. DEFAULT: PPD (safer — allows payment complement).
+        
+        This correctly handles cases like "45 DAYS NET CASH" (has credit_days=45 → PPD)
+        and "T/T After Reception of the goods" (has credit_days=100 → PPD) that keyword
+        matching alone would misclassify.
+        
+        Returns: 'PUE' or 'PPD'
+        """
+        if not payment_terms_template:
+            return 'PPD'  # No terms = default PPD
+        
+        # --- PRIMARY: Read actual credit_days from payment_schedule ---
+        try:
+            schedule_rows = frappe.get_all(
+                'Payment Terms Template Detail',
+                filters={'parent': payment_terms_template},
+                fields=['credit_days'],
+                order_by='idx asc'
+            )
+            if schedule_rows:
+                # If ALL rows have credit_days == 0, it's immediate payment → PUE
+                # If ANY row has credit_days > 0, it's credit → PPD
+                max_days = max(int(row.get('credit_days') or 0) for row in schedule_rows)
+                if max_days == 0:
+                    return 'PUE'
+                else:
+                    return 'PPD'
+        except Exception:
+            pass  # Fall through to keyword matching
+        
+        # --- FALLBACK: Keyword matching on template name ---
+        pt_lower = payment_terms_template.lower()
+        pue_keywords = ['advance', 'anticipad', 'contado', 'immediate', 'inmediato',
+                        'pue', 'prepaid', 'adelant', 'previo', 'antes']
+        ppd_keywords = ['days', 'dias', 'credit', 'credito', 'net ', 'parcialidad',
+                        'diferido', 'ppd', 'after', 'reception', 'recepcion',
+                        'delivery', 'entrega']
+        
+        if any(kw in pt_lower for kw in pue_keywords):
+            return 'PUE'
+        elif any(kw in pt_lower for kw in ppd_keywords):
+            return 'PPD'
+        
+        # --- DEFAULT: PPD (safer) ---
+        return 'PPD'
+
+    @staticmethod
     def _discover_mx_cfdi_fields(source_doc):
         """Intelligently discover Mexico CFDI fields for Sales Invoice.
         
@@ -20,28 +75,16 @@ class SalesMixin:
         - mx_cfdi_use: From customer's last invoice, or G01 (goods) default
         - mode_of_payment: From customer's last invoice, or Wire Transfer default
         
+        PUE/PPD logic reads the Payment Terms Template's actual credit_days
+        from the payment_schedule child table (not just keyword matching).
+        
         Returns dict of field:value to set on the SI before insert.
         """
         cfdi = {}
         
-        # --- 1. Payment Option: PUE vs PPD based on payment terms ---
+        # --- 1. Payment Option: PUE vs PPD based on payment terms schedule ---
         payment_terms = getattr(source_doc, 'payment_terms_template', '') or ''
-        pt_lower = payment_terms.lower()
-        
-        # PUE = advance, immediate, anticipado, contado, cash
-        # PPD = credit, days, parcialidades, diferido
-        pue_keywords = ['advance', 'anticipad', 'contado', 'cash', 'immediate', 'inmediato', 'pue', 'prepaid', 'adelant', 'previo', 'antes']
-        ppd_keywords = ['days', 'dias', 'credit', 'credito', 'net ', 'parcialidad', 'diferido', 'ppd',
-                        'after', 'reception', 'recepcion', 'delivery', 'entrega']
-        
-        if any(kw in pt_lower for kw in pue_keywords):
-            cfdi['mx_payment_option'] = 'PUE'
-        elif any(kw in pt_lower for kw in ppd_keywords):
-            cfdi['mx_payment_option'] = 'PPD'
-        else:
-            # BUG16 fix: Default to PPD (safer — PUE is the special case for advance only)
-            # PPD allows deferred payment complement; PUE requires full payment proof at invoice time
-            cfdi['mx_payment_option'] = 'PPD'
+        cfdi['mx_payment_option'] = SalesMixin._resolve_pue_ppd(payment_terms)
         
         # --- 2. Discover CFDI Use + Mode of Payment from customer's last invoice ---
         customer = getattr(source_doc, 'customer', None)
