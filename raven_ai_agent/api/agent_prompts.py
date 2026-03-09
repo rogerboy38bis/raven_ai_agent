@@ -254,6 +254,43 @@ CAPABILITIES_LIST = """
 
 ---
 
+### 🤖 IoT Bot (@iot) - Raspberry Pi AI
+
+Use `@iot` for direct Ollama AI access on Raspberry Pi:
+
+| Command | Description |
+|---------|-------------|
+| `@iot ask <prompt>` | Ask Ollama AI |
+| `@iot status` | Ollama service status |
+| `@iot models` | List available models |
+| `@iot pull <model>` | Pull a new model |
+| `@iot sysinfo` | VPS/RPi system info |
+| `@iot <anything>` | Direct AI query |
+
+---
+
+### 📡 IoT Sensor Manager - RPi Bots L01-L30
+
+**Supported Sensors:** Temperature (DHT22), Humidity, Motion (HC-SR501), Light (BH1750)
+
+| Command | Description |
+|---------|-------------|
+| `@ai sensor status` | All sensors status |
+| `@ai temperature L01` | Temperature from bot L01 |
+| `@ai humidity L05` | Humidity from bot L05 |
+| `@ai motion L10` | Motion detection on L10 |
+| `@ai sensor history L02` | Historical readings |
+| `@ai sensor alert` | Active sensor alerts |
+| `@ai read sensor L03` | Read all sensors on L03 |
+| `@ai bot L07 status` | Full status for bot L07 |
+
+**Sensor Thresholds:**
+- Temperature: 15-35°C (Warning), <5°C or >45°C (Critical)
+- Humidity: 20-80% (Warning), <10% or >95% (Critical)
+- Light: 50-800 lux (Warning)
+
+---
+
 ### 📊 Phase 4: Advanced Analytics (Coming Soon)
 
 - Dashboard Widgets for Raven
