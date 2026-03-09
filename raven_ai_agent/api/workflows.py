@@ -170,8 +170,12 @@ class WorkflowExecutor:
             if qtn.docstatus != 1:
                 return {"success": False, "error": f"Quotation must be submitted first."}
             
-            existing = idempotency_check("Sales Order", {"quotation": quotation_name, "docstatus": ["!=", 2]})
-            if existing:
+            # v16: Quotation link is on SO Item child table (prevdoc_docname), not SO parent
+            existing_items = frappe.get_all("Sales Order Item",
+                filters={"prevdoc_docname": quotation_name, "docstatus": ["!=", 2]},
+                fields=["parent"], group_by="parent", limit=1)
+            if existing_items:
+                existing = existing_items[0].parent
                 return {"success": True, "name": existing, "already_existed": True,
                         "message": f"Sales Order {existing} already exists for this quotation",
                         "link": self.make_link("Sales Order", existing)}
@@ -208,6 +212,10 @@ class WorkflowExecutor:
             if self.dry_run:
                 return {"success": True, "dry_run": True,
                         "message": f"[DRY RUN] Would submit {so_name}"}
+            
+            # BUG 14 fix: Auto-resolve invalid customer_address before submit
+            self._fix_customer_address(doc)
+            
             doc.submit()
             frappe.db.commit()
             return {"success": True, "name": so_name,
@@ -215,6 +223,61 @@ class WorkflowExecutor:
                     "link": self.make_link("Sales Order", so_name)}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    # --- Address Resolution Helper ---
+
+    def _fix_customer_address(self, doc) -> None:
+        """Auto-resolve invalid customer_address / shipping_address_name.
+        
+        ERPNext v16 stores addresses via Dynamic Link. If the SO references
+        a stale address name that no longer exists, look up valid addresses
+        from the Dynamic Link table and replace the bad reference.
+        """
+        for addr_field in ["customer_address", "shipping_address_name"]:
+            addr_name = getattr(doc, addr_field, None)
+            if not addr_name:
+                continue
+            # Check if the referenced address actually exists
+            if frappe.db.exists("Address", addr_name):
+                continue
+            # Address doesn't exist — resolve from Dynamic Link
+            addr_type = "Billing" if "customer" in addr_field else "Shipping"
+            valid = frappe.get_all("Address",
+                filters=[
+                    ["Dynamic Link", "link_doctype", "=", "Customer"],
+                    ["Dynamic Link", "link_name", "=", doc.customer],
+                    ["address_type", "=", addr_type],
+                ],
+                fields=["name"],
+                order_by="is_primary_address desc, creation desc",
+                limit=1)
+            if not valid:
+                # Try any address type as fallback
+                valid = frappe.get_all("Address",
+                    filters=[
+                        ["Dynamic Link", "link_doctype", "=", "Customer"],
+                        ["Dynamic Link", "link_name", "=", doc.customer],
+                    ],
+                    fields=["name"],
+                    order_by="is_primary_address desc, creation desc",
+                    limit=1)
+            if valid:
+                old_addr = addr_name
+                new_addr = valid[0].name
+                setattr(doc, addr_field, new_addr)
+                doc.save(ignore_permissions=True)
+                frappe.logger().info(
+                    f"[Address Fix] {doc.doctype} {doc.name}: "
+                    f"{addr_field} '{old_addr}' -> '{new_addr}'"
+                )
+            else:
+                # No valid address found — clear the bad reference
+                setattr(doc, addr_field, None)
+                doc.save(ignore_permissions=True)
+                frappe.logger().warning(
+                    f"[Address Fix] {doc.doctype} {doc.name}: "
+                    f"Cleared invalid {addr_field} '{addr_name}' (no valid address found)"
+                )
 
     # --- Delivery Note Operations (with Smart features) ---
 
