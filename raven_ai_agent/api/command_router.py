@@ -130,11 +130,11 @@ class CommandRouterMixin:
 
         # Submit Sales Order
         if so_match and "submit" in query_lower and "sales order" in query_lower:
-            return executor.submit_sales_order(so_match.group(1).upper(), confirm=is_confirm)
+            return executor.submit_sales_order(so_match.group(1), confirm=is_confirm)
 
         # Sales Order to Work Order
         if so_match and "work order" in query_lower:
-            return executor.create_work_orders_from_sales_order(so_match.group(1).upper(), confirm=is_confirm)
+            return executor.create_work_orders_from_sales_order(so_match.group(1), confirm=is_confirm)
 
         # Stock Entry for Work Order
         wo_match = re.search(r'(MFG-WO-\d+|LOTE-\d+|P-VTA-\d+|WO-[^\s]+)', query, re.IGNORECASE)
@@ -143,7 +143,7 @@ class CommandRouterMixin:
 
         # Delivery Note from Sales Order
         if so_match and any(word in query_lower for word in ["delivery", "ship", "deliver"]):
-            return executor.create_delivery_note_from_sales_order(so_match.group(1).upper(), confirm=is_confirm)
+            return executor.create_delivery_note_from_sales_order(so_match.group(1), confirm=is_confirm)
 
         # Invoice from DN / SO — now handled by _handle_sales_commands() in
         # sales.py which has full CFDI support: mode_of_payment, debit_to,
