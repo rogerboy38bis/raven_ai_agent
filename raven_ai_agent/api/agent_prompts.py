@@ -78,9 +78,15 @@ When showing documents:
 [Sources: Document names queried]
 """
 
-CAPABILITIES_LIST = """## 🤖 AI Agent Capabilities
+CAPABILITIES_LIST = """
+## 🤖 AMB AI Agent Capabilities
 
-**Available Bots:**
+**Latest Update:** March 2026 | **Version:** 2.0
+
+---
+
+### 📋 Available Bots
+
 | Bot | Purpose |
 |-----|---------|
 | `@ai` | General ERPNext operations, manufacturing, sales, purchasing |
@@ -88,66 +94,99 @@ CAPABILITIES_LIST = """## 🤖 AI Agent Capabilities
 | `@rnd_bot` | R&D/Formulation research, innovation tracking |
 | `@bom_creator` | BOM Creator automation |
 
-### 📊 ERPNext Data Access
-- `@ai show my quotations` - View your quotations, sales orders, work orders
-- `@ai show pending deliveries` - Delivery notes, stock levels, inventory
-- `@ai best selling items` - Sales analytics and reports
-- `@ai TDS resolution for [item]` - Tax and compliance info
+---
 
-### 🌐 Web Research
-- `@ai search [topic]` - Web search for any topic
-- `@ai find suppliers for [product]` - Find manufacturers/suppliers
-- `@ai extract from [URL]` - Extract data from any website
-- `@ai who are the players in [market]` - Market research
+### 🏭 Manufacturing & Production
 
-### 📝 Create ERPNext Records
-- `@ai create supplier [name]` - Create basic supplier
-- `@ai create supplier [name] with address` - Search web & create with address
-- `@ai save this research` - Cache research to AI Memory
-
-### 🔧 Workflows (Level 2-3)
-- `@ai convert quotation [name] to sales order` - Document conversion
-- `@ai create work order for [item]` - Manufacturing workflows
-- `!command` - Force execute without confirmation
-
-### 🏭 Manufacturing SOP (Work Order → Finished Goods)
-
-**Workflow:** Create WO → Submit → Issue Materials → Job Cards → Complete → FG Entry
-
-**Work Order Management:**
+#### Work Order Management
 - `@ai show work orders` - List active work orders
 - `@ai create work order for [item] qty [n]` - Create new work order
 - `@ai submit work order [WO]` - Submit/start work order
-- `@ai material status for [WO]` - Check component availability
+- `@ai material status for [WO]` - Check component availability (Red/Green zone)
 - `@ai reserve stock for [WO]` - Reserve materials for work order
 
-**Production Execution:**
+#### Production Execution
 - `@ai issue materials for [WO]` - Transfer materials to WIP warehouse
 - `@ai show job cards for [WO]` - List operations (linked to Project Tasks)
 - `@ai update progress for [WO] qty [n]` - Report production progress
 - `@ai finish work order [WO]` - Complete production & receive FG
 
-**Quality & Costing:**
-- `@ai quality check` - Show recent Quality Inspections
-- `@ai show BOM cost report` - Compare estimated vs actual costs
-- `@ai troubleshoot` - Manufacturing troubleshooting guide
-
-**Stock Entry Management:**
-- `@ai material receipt [ITEM] qty [n] price $[x]` - Create Material Receipt with price
+#### Stock Entry Management
+- `@ai material receipt [ITEM] qty [n] price $[x]` - Create Material Receipt
 - `@ai convert [STE] to material receipt` - Convert draft to Material Receipt
 - `@ai verify stock entries` - Check submitted vs draft entries
 - `@ai check stock ledger` - Show recent stock ledger entries
 - `@ai list batches` - Show recently created batches
 
-**Project Task ↔ BOM Operation Mapping:**
-Job Cards auto-generated from BOM Operations align with Project Template tasks:
-- TASK-00008: Recepción → TASK-00010: Molienda → TASK-00011: Prensado
-- TASK-00012: Decolorado → TASK-00013: Filtrado → TASK-00023: Secado Spray
+---
 
-### 🔄 Sales-to-Purchase Cycle SOP
+### ✅ Quality Management System (QMS)
+
+| Command | Description |
+|---------|-------------|
+| `@ai quality setup status` | View QMS configuration and status |
+| `@ai quality create nc <subject>` | Create Non-Conformance report |
+| `@ai quality create training <name>` | Create Training Program |
+| `@ai quality create audit <subject>` | Create Internal Audit |
+| `@ai quality check` | Show recent Quality Inspections |
+
+**Verified Working (March 2026):**
+- ✅ Non-Conformance: QA-NC-00020
+- ✅ Internal Audit: QA-MEET-26-03-08
+- ✅ Training Program: GMP Basics
+
+---
+
+### 📦 BOM & Batch Management (amb_w_tds)
+
+#### BOM Tracking Commands
+- `@ai bom health` - Run BOM hierarchy health check
+- `@ai bom inspect <BOM>` - Inspect specific BOM structure
+- `@ai bom status <ITEM>` - Get BOM status for an item
+- `@ai bom issues` - List all known BOM issues
+- `@ai validate bom <BOM>` - Validate BOM structure and components
+
+#### Serial/Batch Tracking
+- `@ai serial health` - Overall serial system health check
+- `@ai serial status <SERIAL>` - Get status of specific serial number
+- `@ai serial batch <BATCH>` - List all serials in a batch
+
+#### BOM Creator
+- `@ai show bom [NAME]` - View BOM or BOM Creator details
+- `@ai !submit bom BOM-XXXX` - Submit BOM Creator to generate BOMs
+- `@ai validate bom BOM-XXXX` - Validate BOM Creator before submission
+- `@ai create bom from tds [TDS-NAME]` - Create BOM Creator from TDS
+- `@ai create bom for batch LOTE-XXXX` - Create BOM for a Batch AMB
+
+---
+
+### 🏢 Warehouse Management (rnd_warehouse_management)
+
+| Command | Description |
+|---------|-------------|
+| `@ai warehouse status` | Overall warehouse status and utilization |
+| `@ai check zone for WO-XXXX` | Check Red/Green zone status for Work Order |
+| `@ai stock balance [ITEM]` | Show current stock levels |
+| `@ai show stock entry [SE]` | Details of a specific Stock Entry |
+
+**SAP Movement Types:**
+- **261 (FrontFlush)** - Goods Issue for Production
+- **311 (BackFlush)** - Transfer for Kitting with dual-signature
+
+---
+
+### 🔄 Sales-to-Purchase Cycle
+
 - `@ai show opportunities` - List sales opportunities
 - `@ai create opportunity for [customer]` - Create new sales opportunity
 - `@ai check inventory for [SO]` - Check item availability for Sales Order
+- `@ai show quotations` - View your quotations
+- `@ai show sales orders` - View your sales orders
+- `@ai show pending deliveries` - Delivery notes, stock levels
+- `@ai create delivery note for [SO]` - Ship items to customer
+- `@ai create sales invoice for [SO/DN]` - Invoice the customer
+
+**Purchase Cycle:**
 - `@ai create material request for [SO]` - Create Material Request from SO
 - `@ai show material requests` - List pending material requests
 - `@ai create rfq from [MR]` - Create Request for Quotation
@@ -155,44 +194,83 @@ Job Cards auto-generated from BOM Operations align with Project Template tasks:
 - `@ai show supplier quotations` - List supplier quotations
 - `@ai create po from [SQ]` - Create Purchase Order from Supplier Quotation
 - `@ai receive goods for [PO]` - Create Purchase Receipt
-- `@ai create purchase invoice for [PO]` - Bill against Purchase Order
-- `@ai create delivery note for [SO]` - Ship items to customer
-- `@ai create sales invoice for [SO/DN]` - Invoice the customer
 
-### 📦 Sales Order Follow-up Bot
-Use `@sales_order_follow_up` for dedicated SO tracking:
-- `@sales_order_follow_up pending` - List all pending Sales Orders
-- `@sales_order_follow_up status [SO]` - Detailed SO status
-- `@sales_order_follow_up check inventory [SO]` - Check stock availability
-- `@sales_order_follow_up next steps [SO]` - Recommended actions
-- `@sales_order_follow_up track [SO]` - Full purchase cycle tracking
+---
 
-### 📋 BOM Management
-- `@ai show bom BOM-XXXX` - View all items, operations, costs
-- `@ai !cancel bom BOM-XXXX` - Cancel submitted BOM
-- `@ai !revert bom BOM-XXXX to draft` - Reset cancelled BOM to draft
-- `@ai check bom for [item]` - Check BOM label status
-- `@ai fix bom for [item]` - Auto-fix missing labels
-- `@ai force fix bom BOM-XXX label LBLXXX` - Force SQL insert
+### 🌐 Web Research & External Data
 
-### 🏗️ BOM Creator
-- `@ai show bom [NAME]` - View BOM or BOM Creator details
-- `@ai !submit bom BOM-XXXX` - Submit BOM Creator to generate BOMs
-- `@ai validate bom BOM-XXXX` - Validate BOM Creator before submission
-- `@ai create bom from tds [TDS-NAME]` - Create BOM Creator from TDS
-- `@ai create bom for batch LOTE-XXXX` - Create BOM for a Batch AMB
+- `@ai search [topic]` - Web search for any topic
+- `@ai find suppliers for [product]` - Find manufacturers/suppliers
+- `@ai extract from [URL]` - Extract data from any website
+- `@ai who are the players in [market]` - Market research
+
+---
+
+### 📝 Create ERPNext Records
+
+- `@ai create supplier [name]` - Create basic supplier
+- `@ai create supplier [name] with address` - Search web & create with address
+- `@ai save this research` - Cache research to AI Memory
+
+---
+
+### 🔧 Workflows (Level 2-3 Autonomy)
+
+| Command | Description |
+|---------|-------------|
+| `!command` | Force execute without confirmation |
+| `@ai convert quotation [name] to sales order` | Document conversion |
+| `@ai create work order for [item]` | Manufacturing workflows |
+
+**Autonomy Levels:**
+- **Level 1 (Copilot):** Read-only queries, suggestions
+- **Level 2 (Command):** Execute with confirmation
+- **Level 3 (Agent):** Multi-step autonomous workflows
+
+---
 
 ### 📄 Document Actions
+
 - `@ai !submit Sales Order SO-XXXX` - Submit sales order
 - `@ai !submit Work Order MFG-WO-XXXX` - Submit work order
 - `@ai unlink sales order from MFG-WO-XXXX` - Remove SO link from WO
-- `@ai !fix quotation SAL-QTN-XXXX` - Fix cancelled quotation (revert to draft)
-- `@ai !fix quotation from SAL-QTN-XXXX to SAL-QTN-YYYY` - Batch fix range
-- `@ai !update quotation SAL-QTN-XXXX item ITEM-CODE` - Update quotation item & TDS
+- `@ai !cancel bom BOM-XXXX` - Cancel submitted BOM
+- `@ai !revert bom BOM-XXXX to draft` - Reset cancelled BOM to draft
+- `@ai !fix quotation SAL-QTN-XXXX` - Fix cancelled quotation
+- `@ai !update quotation SAL-QTN-XXXX item ITEM-CODE` - Update quotation item
+
+---
+
+### 🎯 Skills (AI-Powered)
+
+| Skill | Description |
+|-------|-------------|
+| **Formulation Reader** | Parse and validate formulation data from BOMs |
+| **Formulation Orchestrator** | Optimize batch selection (FEFO/Cost balancing) |
+| **Formulation Advisor** | Production batch selection recommendations |
+| **Browser** | Web automation and data extraction |
+| **IoT Sensors** | Temperature, humidity, motion monitoring |
+| **Skill Creator** | Create new custom skills |
+
+---
+
+### 📊 Phase 4: Advanced Analytics (Coming Soon)
+
+- Dashboard Widgets for Raven
+- Smart Aggregations (AI-powered data summarization)
+- Scheduled Reports (automated generation & distribution)
+- Alert Rules Engine (configurable business alerts)
+
+---
 
 ### ℹ️ Help
+
 - `@ai help` or `@ai capabilities` - Show this list
 - `@ai what can you do` - Show capabilities
+
+---
+
+**Note:** Always use `@ai !command` format in Raven channels. Commands with `!` prefix execute directly without confirmation.
 
 Type your question and I'll help!
 """
