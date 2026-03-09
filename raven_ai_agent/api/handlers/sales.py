@@ -30,18 +30,18 @@ class SalesMixin:
         
         # PUE = advance, immediate, anticipado, contado, cash
         # PPD = credit, days, parcialidades, diferido
-        pue_keywords = ['advance', 'anticipad', 'contado', 'cash', 'immediate', 'inmediato', 'pue']
-        ppd_keywords = ['days', 'dias', 'credit', 'credito', 'net ', 'parcialidad', 'diferido', 'ppd']
+        pue_keywords = ['advance', 'anticipad', 'contado', 'cash', 'immediate', 'inmediato', 'pue', 'prepaid', 'adelant', 'previo', 'antes']
+        ppd_keywords = ['days', 'dias', 'credit', 'credito', 'net ', 'parcialidad', 'diferido', 'ppd',
+                        'after', 'reception', 'recepcion', 'delivery', 'entrega']
         
         if any(kw in pt_lower for kw in pue_keywords):
             cfdi['mx_payment_option'] = 'PUE'
         elif any(kw in pt_lower for kw in ppd_keywords):
             cfdi['mx_payment_option'] = 'PPD'
         else:
-            # Check payment_schedule for credit_days > 0
-            schedule = getattr(source_doc, 'payment_schedule', [])
-            has_credit = any(getattr(row, 'credit_days', 0) > 0 for row in schedule)
-            cfdi['mx_payment_option'] = 'PPD' if has_credit else 'PUE'
+            # BUG16 fix: Default to PPD (safer — PUE is the special case for advance only)
+            # PPD allows deferred payment complement; PUE requires full payment proof at invoice time
+            cfdi['mx_payment_option'] = 'PPD'
         
         # --- 2. Discover CFDI Use + Mode of Payment from customer's last invoice ---
         customer = getattr(source_doc, 'customer', None)
