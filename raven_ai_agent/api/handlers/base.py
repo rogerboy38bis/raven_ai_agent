@@ -692,16 +692,27 @@ class BaseMixin:
             frappe.logger().info(f"[Workflow] Creating SO from {qtn_match.group(1)}, confirm={is_confirm}")
             return executor.create_sales_order_from_quotation(qtn_match.group(1).upper(), confirm=is_confirm)
         
-        # Sales Order patterns - supports SAL-ORD-YYYY-NNNNN and SO-XXXXX-NAME formats
-        so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*)', query, re.IGNORECASE)
+        # Sales Order patterns — BUG15 fix: match SO-NNNNN prefix, resolve full name via DB
+        so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-\d{3,5})', query, re.IGNORECASE)
+        if so_match:
+            _so_prefix = so_match.group(1).upper()
+            _so_full = frappe.db.get_value("Sales Order",
+                {"name": ["like", f"{_so_prefix}%"], "docstatus": ["!=", 2]}, "name")
+            if _so_full:
+                class SOMatch:
+                    def __init__(self, name):
+                        self._name = name
+                    def group(self, n=0):
+                        return self._name
+                so_match = SOMatch(_so_full)
         
         # Submit Sales Order
         if so_match and "submit" in query_lower and "sales order" in query_lower:
-            return executor.submit_sales_order(so_match.group(1).upper(), confirm=is_confirm)
+            return executor.submit_sales_order(so_match.group(1), confirm=is_confirm)
         
         # Sales Order to Work Order
         if so_match and "work order" in query_lower:
-            return executor.create_work_orders_from_sales_order(so_match.group(1).upper(), confirm=is_confirm)
+            return executor.create_work_orders_from_sales_order(so_match.group(1), confirm=is_confirm)
         
         # Stock Entry for Work Order
         wo_match = re.search(r'(MFG-WO-\d+|LOTE-\d+|P-VTA-\d+|WO-[^\s]+)', query, re.IGNORECASE)
@@ -710,7 +721,7 @@ class BaseMixin:
         
         # Delivery Note from Sales Order
         if so_match and any(word in query_lower for word in ["delivery", "ship", "deliver"]):
-            return executor.create_delivery_note_from_sales_order(so_match.group(1).upper(), confirm=is_confirm)
+            return executor.create_delivery_note_from_sales_order(so_match.group(1), confirm=is_confirm)
         
         # Invoice from Delivery Note
         dn_match = re.search(r'(MAT-DN-\d+-\d+|DN-\d+)', query, re.IGNORECASE)
