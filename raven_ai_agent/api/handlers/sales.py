@@ -377,7 +377,19 @@ class SalesMixin:
                     return {"success": False, "error": str(e)}
         
         # Check Inventory for Sales Order
-        so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*)', query, re.IGNORECASE)
+        # BUG15 fix: match SO-NNNNN prefix, resolve full name via DB
+        so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-\d{3,5})', query, re.IGNORECASE)
+        if so_match:
+            _so_prefix = so_match.group(1).upper()
+            _so_full = frappe.db.get_value("Sales Order",
+                {"name": ["like", f"{_so_prefix}%"], "docstatus": ["!=", 2]}, "name")
+            if _so_full:
+                class SOMatch:
+                    def __init__(self, name):
+                        self._name = name
+                    def group(self, n=0):
+                        return self._name
+                so_match = SOMatch(_so_full)
         if so_match and ("check inventory" in query_lower or "verificar inventario" in query_lower or "disponibilidad" in query_lower):
             try:
                 so_name = so_match.group(1)
