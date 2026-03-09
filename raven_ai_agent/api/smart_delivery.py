@@ -17,7 +17,7 @@ from frappe.utils import flt
 
 # =============================================================================
 # AUTO-ASSIGN BATCHES (FIFO by expiry)
-# ERPNext v16: Uses Batch.batch_qty (Serial and Batch Bundle model)
+# ERPNext v16: Batch.batch_qty is STALE (always 0). Use SBB entries.
 # =============================================================================
 
 def auto_assign_batches(dn_doc) -> Dict:
@@ -70,15 +70,28 @@ def auto_assign_batches(dn_doc) -> Dict:
             from raven_ai_agent.api.cache_layer import get_available_batches
             batches = get_available_batches(item_code, warehouse)
         except ImportError:
+            # v16 SBB-based fallback: sum qty from Serial and Batch Entry
             batches = frappe.db.sql("""
-                SELECT name as batch_no, batch_qty, expiry_date
-                FROM `tabBatch`
-                WHERE item = %s
-                  AND disabled = 0
-                  AND batch_qty > 0
-                  AND (expiry_date IS NULL OR expiry_date >= CURDATE())
-                ORDER BY COALESCE(expiry_date, '9999-12-31') ASC
-            """, (item_code,), as_dict=True)
+                SELECT
+                    sbe.batch_no,
+                    SUM(sbe.qty) AS batch_qty,
+                    b.expiry_date
+                FROM `tabSerial and Batch Entry` sbe
+                INNER JOIN `tabSerial and Batch Bundle` sbb
+                    ON sbe.parent = sbb.name
+                INNER JOIN `tabBatch` b
+                    ON sbe.batch_no = b.name
+                WHERE sbb.item_code = %s
+                  AND sbb.docstatus = 1
+                  AND sbe.is_cancelled = 0
+                  AND sbe.batch_no IS NOT NULL
+                  AND sbe.warehouse = %s
+                  AND b.disabled = 0
+                  AND (b.expiry_date IS NULL OR b.expiry_date >= CURDATE())
+                GROUP BY sbe.batch_no, b.expiry_date
+                HAVING SUM(sbe.qty) > 0
+                ORDER BY COALESCE(b.expiry_date, '9999-12-31') ASC
+            """, (item_code, warehouse), as_dict=True)
         
         if not batches:
             issues.append(
@@ -115,16 +128,8 @@ def auto_assign_batches(dn_doc) -> Dict:
                     sbb.insert(ignore_permissions=True)
                     item.serial_and_batch_bundle = sbb.name
                     item.use_serial_batch_fields = 0
-                    frappe.logger().info(
-                        f"[SmartDelivery] SBB {sbb.name} created for {item.item_code} "
-                        f"batch={batch_no} qty={qty_needed}"
-                    )
-                except Exception as sbb_err:
+                except Exception:
                     # Fallback: use legacy batch_no field (older v16 / v15 compat)
-                    frappe.logger().warning(
-                        f"[SmartDelivery] SBB creation failed for {item.item_code} "
-                        f"batch={batch_no}: {str(sbb_err)[:200]}. Using legacy batch_no."
-                    )
                     item.batch_no = batch_no
                     item.use_serial_batch_fields = 1
                 remaining_in_batch -= qty_needed
@@ -182,13 +187,22 @@ def preflight_delivery_check(so_doc) -> Dict:
                 batches = get_available_batches(item_code, warehouse)
                 available = sum(flt(b.get("batch_qty", 0)) for b in batches)
             else:
+                # v16 SBB-based fallback: sum qty from Serial and Batch Entry
                 batch_stock = frappe.db.sql("""
-                    SELECT COALESCE(SUM(batch_qty), 0) as total_qty
-                    FROM `tabBatch`
-                    WHERE item = %s
-                      AND disabled = 0
-                      AND (expiry_date IS NULL OR expiry_date >= CURDATE())
-                """, (item_code,), as_dict=True)
+                    SELECT COALESCE(SUM(sbe.qty), 0) AS total_qty
+                    FROM `tabSerial and Batch Entry` sbe
+                    INNER JOIN `tabSerial and Batch Bundle` sbb
+                        ON sbe.parent = sbb.name
+                    INNER JOIN `tabBatch` b
+                        ON sbe.batch_no = b.name
+                    WHERE sbb.item_code = %s
+                      AND sbb.docstatus = 1
+                      AND sbe.is_cancelled = 0
+                      AND sbe.batch_no IS NOT NULL
+                      AND sbe.warehouse = %s
+                      AND b.disabled = 0
+                      AND (b.expiry_date IS NULL OR b.expiry_date >= CURDATE())
+                """, (item_code, warehouse), as_dict=True)
                 available = flt(batch_stock[0].total_qty) if batch_stock else 0
             
             if available < qty_needed:
