@@ -43,7 +43,7 @@ def log_decision(field: str, value: str, tier: int, reason: str,
     Returns:
         Dict with decision details
     """
-    tier_labels = {1: "Document", 2: "Template DB", 3: "Keywords", 4: "Default"}
+    tier_labels = {0: "QTN Traceback", 1: "Document", 2: "Template DB", 3: "Keywords", 4: "Default"}
     decision = {
         "field": field,
         "value": value,
@@ -593,13 +593,26 @@ def validate_pipeline(quotation_name: str) -> Dict:
                 "currency": si.currency
             }
             
-            # CFDI validation
+            # CFDI validation — passes SO as source_doc.
+            # Tier 0 inside resolve_pue_ppd() will trace SO→QTN automatically.
             cfdi_expected = resolve_mx_cfdi_fields(source_doc=so)
+            
+            # BUG 22: Include QTN credit_days reference in audit output
+            qtn_credit_info = ""
+            try:
+                qtn_sched = getattr(qtn, 'payment_schedule', []) or []
+                if qtn_sched:
+                    qtn_max_cd = _get_max_credit_days(qtn_sched)
+                    qtn_credit_info = f"QTN {qtn.name} credit_days={qtn_max_cd}"
+            except Exception:
+                pass
+            
             results["cfdi"] = {
                 "expected_payment_option": cfdi_expected["mx_payment_option"],
                 "actual_payment_option": getattr(si, "mx_payment_option", ""),
                 "expected_cfdi_use": cfdi_expected["mx_cfdi_use"],
                 "actual_cfdi_use": getattr(si, "mx_cfdi_use", ""),
+                "qtn_credit_days": qtn_credit_info,
                 "audit": [
                     f"{d['tier_label']}: {d['reason']}" 
                     for d in cfdi_expected.get("_audit", [])
@@ -662,6 +675,9 @@ def format_pipeline_validation(result: Dict) -> str:
     cfdi = result.get("cfdi", {})
     if cfdi:
         lines.append(f"\n  🇲🇽 CFDI: {cfdi.get('actual_payment_option','?')} (expected: {cfdi.get('expected_payment_option','?')})")
+        # BUG 22: Show QTN credit_days reference for traceability
+        if cfdi.get("qtn_credit_days"):
+            lines.append(f"    📎 {cfdi['qtn_credit_days']}")
         if cfdi.get("audit"):
             for a in cfdi["audit"][:3]:
                 lines.append(f"    └─ {a}")
