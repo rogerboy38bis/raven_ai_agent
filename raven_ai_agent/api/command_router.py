@@ -89,6 +89,17 @@ class CommandRouterMixin:
         if is_dry_run:
             executor.dry_run = True
 
+        # R6: Validate pipeline for a Quotation
+        if qtn_match and ("validate" in query_lower or "check pipeline" in query_lower):
+            try:
+                from raven_ai_agent.api.truth_hierarchy import validate_pipeline, format_pipeline_validation
+                result = validate_pipeline(qtn_match.group(1).upper())
+                return {"success": True, "message": format_pipeline_validation(result)}
+            except ImportError:
+                return {"success": False, "error": "Pipeline validation requires truth_hierarchy module."}
+            except Exception as e:
+                return {"success": False, "error": f"Validation error: {str(e)}"}
+
         # Complete workflow: Quotation → Invoice
         if qtn_match and "complete" in query_lower and ("workflow" in query_lower or "invoice" in query_lower):
             from raven_ai_agent.api.workflows import complete_workflow_to_invoice
