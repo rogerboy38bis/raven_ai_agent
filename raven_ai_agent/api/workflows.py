@@ -247,18 +247,34 @@ class WorkflowExecutor:
             dn = make_delivery_note(so_name)
             dn.insert(ignore_permissions=True)
             
-            # Smart: Auto-assign batches
+            # Smart: Auto-assign batches (SBB for v16)
             batch_result = _auto_assign_batches(dn)
             if batch_result["assigned"] > 0:
                 dn.save(ignore_permissions=True)
             
+            # Auto-submit DN when executed with ! prefix (confirm=True)
+            dn_status = "Draft"
+            submit_note = ""
+            if confirm and not batch_result.get("issues"):
+                try:
+                    dn.submit()
+                    dn_status = "Submitted"
+                except Exception as submit_err:
+                    submit_note = f"\n⚠️ DN created but auto-submit failed: {str(submit_err)[:200]}"
+                    frappe.logger().warning(f"[Delivery] Auto-submit failed for {dn.name}: {submit_err}")
+            elif confirm and batch_result.get("issues"):
+                submit_note = "\n⚠️ DN left as Draft due to batch assignment issues — review before submitting."
+            
             frappe.db.commit()
             
-            msg = f"Delivery Note {dn.name} created (Draft)"
+            site_name = frappe.local.site
+            msg = f"✅ Delivery Note [{dn.name}](https://{site_name}/app/delivery-note/{dn.name}) created ({dn_status})"
+            msg += f"\n  Customer: {so.customer}"
             if batch_result["assigned"] > 0:
-                msg += f"\nAuto-assigned batches to {batch_result['assigned']} items"
+                msg += f"\n  Batches auto-assigned: {batch_result['assigned']} items"
             if batch_result["issues"]:
                 msg += "\n\nBatch warnings:\n" + "\n".join(f"  - {i}" for i in batch_result["issues"])
+            msg += submit_note
             
             return {
                 "success": True, "name": dn.name,
