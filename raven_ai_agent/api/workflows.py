@@ -190,6 +190,17 @@ class WorkflowExecutor:
             from erpnext.selling.doctype.quotation.quotation import make_sales_order
             so = make_sales_order(quotation_name)
             so.delivery_date = add_days(nowdate(), 30)
+            
+            # BUG18 fix: Recalculate payment_schedule due_dates relative to today
+            # Old QTNs carry stale due_date from original transaction (e.g. 2026-02-02)
+            # ERPNext v16 rejects "Due Date cannot be before Posting Date"
+            today = nowdate()
+            so.transaction_date = today
+            if hasattr(so, 'payment_schedule') and so.payment_schedule:
+                for ps_row in so.payment_schedule:
+                    credit_days = int(ps_row.credit_days or 0)
+                    ps_row.due_date = add_days(today, credit_days)
+            
             so.insert(ignore_permissions=True)
             frappe.db.commit()
             
