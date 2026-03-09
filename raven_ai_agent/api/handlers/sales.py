@@ -12,59 +12,67 @@ class SalesMixin:
     """Mixin for _handle_sales_commands"""
 
     @staticmethod
-    def _resolve_pue_ppd(payment_terms_template):
-        """Determine PUE vs PPD by reading the Payment Terms Template schedule.
+    def _resolve_pue_ppd_from_schedule(source_doc):
+        """Determine PUE vs PPD using a 3-tier truth hierarchy.
         
-        Smart logic (BUG16+BUG17 fix):
-        1. PRIMARY: Read the Payment Terms Template's payment_schedule child rows.
-           - If ALL rows have credit_days == 0 → PUE (immediate/advance payment)
-           - If ANY row has credit_days > 0 → PPD (credit/deferred)
-        2. FALLBACK: If template not found or DB error, use keyword matching on name.
-        3. DEFAULT: PPD (safer — allows payment complement).
+        BUG19 fix: Document payment_schedule is GROUND TRUTH — checked FIRST.
+        Template name keywords are just labels and can be wrong (e.g. "T/T In Advance"
+        with credit_days=30 from migration data).
         
-        This correctly handles cases like "45 DAYS NET CASH" (has credit_days=45 → PPD)
-        and "T/T After Reception of the goods" (has credit_days=100 → PPD) that keyword
-        matching alone would misclassify.
+        Truth hierarchy:
+        1. DOCUMENT: source_doc.payment_schedule[].credit_days (ground truth)
+           - ANY row credit_days > 0 → PPD (credit/deferred)
+           - ALL rows credit_days == 0 → PUE (immediate/advance)
+        2. TEMPLATE: Payment Terms Template Detail child table credit_days
+           - Same logic: any > 0 → PPD, all == 0 → PUE
+        3. KEYWORDS: Fallback matching on template name
+        4. DEFAULT: PUE (no credit found anywhere = immediate payment)
         
         Returns: 'PUE' or 'PPD'
         """
-        if not payment_terms_template:
-            return 'PPD'  # No terms = default PPD
-        
-        # --- PRIMARY: Read actual credit_days from payment_schedule ---
-        try:
-            schedule_rows = frappe.get_all(
-                'Payment Terms Template Detail',
-                filters={'parent': payment_terms_template},
-                fields=['credit_days'],
-                order_by='idx asc'
+        # --- TIER 1: Document's own payment_schedule (GROUND TRUTH) ---
+        schedule = getattr(source_doc, 'payment_schedule', None) or []
+        if schedule:
+            has_credit = any(
+                int(getattr(row, 'credit_days', 0) or 0) > 0
+                for row in schedule
             )
-            if schedule_rows:
-                # If ALL rows have credit_days == 0, it's immediate payment → PUE
-                # If ANY row has credit_days > 0, it's credit → PPD
-                max_days = max(int(row.get('credit_days') or 0) for row in schedule_rows)
-                if max_days == 0:
-                    return 'PUE'
-                else:
-                    return 'PPD'
-        except Exception:
-            pass  # Fall through to keyword matching
+            if has_credit:
+                return 'PPD'
+            else:
+                return 'PUE'
         
-        # --- FALLBACK: Keyword matching on template name ---
-        pt_lower = payment_terms_template.lower()
-        pue_keywords = ['advance', 'anticipad', 'contado', 'immediate', 'inmediato',
-                        'pue', 'prepaid', 'adelant', 'previo', 'antes']
-        ppd_keywords = ['days', 'dias', 'credit', 'credito', 'net ', 'parcialidad',
-                        'diferido', 'ppd', 'after', 'reception', 'recepcion',
-                        'delivery', 'entrega']
+        # --- TIER 2: Payment Terms Template Detail from DB ---
+        payment_terms_template = getattr(source_doc, 'payment_terms_template', '') or ''
+        if payment_terms_template:
+            try:
+                template_rows = frappe.get_all(
+                    'Payment Terms Template Detail',
+                    filters={'parent': payment_terms_template},
+                    fields=['credit_days'],
+                    order_by='idx asc'
+                )
+                if template_rows:
+                    max_days = max(int(row.get('credit_days') or 0) for row in template_rows)
+                    return 'PPD' if max_days > 0 else 'PUE'
+            except Exception:
+                pass  # Fall through to keywords
         
-        if any(kw in pt_lower for kw in pue_keywords):
-            return 'PUE'
-        elif any(kw in pt_lower for kw in ppd_keywords):
-            return 'PPD'
+            # --- TIER 3: Keyword matching on template name ---
+            pt_lower = payment_terms_template.lower()
+            pue_keywords = ['advance', 'anticipad', 'contado', 'immediate', 'inmediato',
+                            'pue', 'prepaid', 'adelant', 'previo', 'antes']
+            ppd_keywords = ['days', 'dias', 'credit', 'credito', 'net ', 'parcialidad',
+                            'diferido', 'ppd', 'after', 'reception', 'recepcion',
+                            'delivery', 'entrega']
+            
+            if any(kw in pt_lower for kw in pue_keywords):
+                return 'PUE'
+            elif any(kw in pt_lower for kw in ppd_keywords):
+                return 'PPD'
         
-        # --- DEFAULT: PPD (safer) ---
-        return 'PPD'
+        # --- DEFAULT: PUE (no credit data found anywhere = immediate) ---
+        return 'PUE'
 
     @staticmethod
     def _discover_mx_cfdi_fields(source_doc):
@@ -75,16 +83,17 @@ class SalesMixin:
         - mx_cfdi_use: From customer's last invoice, or G01 (goods) default
         - mode_of_payment: From customer's last invoice, or Wire Transfer default
         
-        PUE/PPD logic reads the Payment Terms Template's actual credit_days
-        from the payment_schedule child table (not just keyword matching).
+        PUE/PPD uses 3-tier truth hierarchy (BUG19):
+        1. Document payment_schedule credit_days (ground truth)
+        2. Payment Terms Template Detail credit_days
+        3. Keyword matching on template name
         
         Returns dict of field:value to set on the SI before insert.
         """
         cfdi = {}
         
-        # --- 1. Payment Option: PUE vs PPD based on payment terms schedule ---
-        payment_terms = getattr(source_doc, 'payment_terms_template', '') or ''
-        cfdi['mx_payment_option'] = SalesMixin._resolve_pue_ppd(payment_terms)
+        # --- 1. Payment Option: PUE vs PPD from document schedule (ground truth) ---
+        cfdi['mx_payment_option'] = SalesMixin._resolve_pue_ppd_from_schedule(source_doc)
         
         # --- 2. Discover CFDI Use + Mode of Payment from customer's last invoice ---
         customer = getattr(source_doc, 'customer', None)
