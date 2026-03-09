@@ -110,7 +110,23 @@ class CommandRouterMixin:
             return executor.create_sales_order_from_quotation(qtn_match.group(1).upper(), confirm=is_confirm)
 
         # Sales Order patterns
-        so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-[\w\-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*)', query, re.IGNORECASE)
+        # BUG15 fix: Customer names can contain (), commas, etc. that break regex.
+        # Strategy: match SO-NNNNN prefix, then resolve full name via DB lookup.
+        so_match = re.search(r'(SAL-ORD-\d+-\d+|SO-\d{3,5})', query, re.IGNORECASE)
+        if so_match:
+            _so_prefix = so_match.group(1).upper()
+            # Resolve full SO name from DB (handles special chars in customer names)
+            _so_full = frappe.db.get_value("Sales Order",
+                {"name": ["like", f"{_so_prefix}%"], "docstatus": ["!=", 2]}, "name")
+            if _so_full:
+                # Create a match-like object that returns the full name
+                class SOMatch:
+                    def __init__(self, name):
+                        self._name = name
+                    def group(self, n=0):
+                        return self._name
+                so_match = SOMatch(_so_full)
+            # else: keep the partial match, let downstream handle the error
 
         # Submit Sales Order
         if so_match and "submit" in query_lower and "sales order" in query_lower:
