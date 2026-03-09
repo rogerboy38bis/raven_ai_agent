@@ -12,116 +12,32 @@ class SalesMixin:
     """Mixin for _handle_sales_commands"""
 
     @staticmethod
-    def _resolve_pue_ppd_from_schedule(source_doc):
-        """Determine PUE vs PPD using a 3-tier truth hierarchy.
-        
-        BUG19 fix: Document payment_schedule is GROUND TRUTH — checked FIRST.
-        Template name keywords are just labels and can be wrong (e.g. "T/T In Advance"
-        with credit_days=30 from migration data).
-        
-        Truth hierarchy:
-        1. DOCUMENT: source_doc.payment_schedule[].credit_days (ground truth)
-           - ANY row credit_days > 0 → PPD (credit/deferred)
-           - ALL rows credit_days == 0 → PUE (immediate/advance)
-        2. TEMPLATE: Payment Terms Template Detail child table credit_days
-           - Same logic: any > 0 → PPD, all == 0 → PUE
-        3. KEYWORDS: Fallback matching on template name
-        4. DEFAULT: PUE (no credit found anywhere = immediate payment)
-        
-        Returns: 'PUE' or 'PPD'
-        """
-        # --- TIER 1: Document's own payment_schedule (GROUND TRUTH) ---
-        schedule = getattr(source_doc, 'payment_schedule', None) or []
-        if schedule:
-            has_credit = any(
-                int(getattr(row, 'credit_days', 0) or 0) > 0
-                for row in schedule
-            )
-            if has_credit:
-                return 'PPD'
-            else:
-                return 'PUE'
-        
-        # --- TIER 2: Payment Terms Template Detail from DB ---
-        payment_terms_template = getattr(source_doc, 'payment_terms_template', '') or ''
-        if payment_terms_template:
-            try:
-                template_rows = frappe.get_all(
-                    'Payment Terms Template Detail',
-                    filters={'parent': payment_terms_template},
-                    fields=['credit_days'],
-                    order_by='idx asc'
-                )
-                if template_rows:
-                    max_days = max(int(row.get('credit_days') or 0) for row in template_rows)
-                    return 'PPD' if max_days > 0 else 'PUE'
-            except Exception:
-                pass  # Fall through to keywords
-        
-            # --- TIER 3: Keyword matching on template name ---
-            pt_lower = payment_terms_template.lower()
-            pue_keywords = ['advance', 'anticipad', 'contado', 'immediate', 'inmediato',
-                            'pue', 'prepaid', 'adelant', 'previo', 'antes']
-            ppd_keywords = ['days', 'dias', 'credit', 'credito', 'net ', 'parcialidad',
-                            'diferido', 'ppd', 'after', 'reception', 'recepcion',
-                            'delivery', 'entrega']
-            
-            if any(kw in pt_lower for kw in pue_keywords):
-                return 'PUE'
-            elif any(kw in pt_lower for kw in ppd_keywords):
-                return 'PPD'
-        
-        # --- DEFAULT: PUE (no credit data found anywhere = immediate) ---
-        return 'PUE'
-
-    @staticmethod
     def _discover_mx_cfdi_fields(source_doc):
-        """Intelligently discover Mexico CFDI fields for Sales Invoice.
+        """Discover Mexico CFDI fields — delegates to truth_hierarchy (R1/R4).
         
-        Reads payment terms from the source document (SO or DN) to determine:
-        - mx_payment_option: PUE (advance/immediate) vs PPD (credit/deferred)
-        - mx_cfdi_use: From customer's last invoice, or G01 (goods) default
-        - mode_of_payment: From customer's last invoice, or Wire Transfer default
+        BUG19 completion: Replaced inline 3-tier PUE/PPD logic (~60 lines) with
+        single call to truth_hierarchy.resolve_mx_cfdi_fields(). This ensures:
+        - Single source of truth for PUE/PPD, CFDI Use, and mode_of_payment
+        - R7 audit logging works for this code path too
+        - Any future fix to truth_hierarchy propagates here automatically
         
-        PUE/PPD uses 3-tier truth hierarchy (BUG19):
-        1. Document payment_schedule credit_days (ground truth)
-        2. Payment Terms Template Detail credit_days
-        3. Keyword matching on template name
+        Keeps: Banxico FX rate, debit_to, posting_date, mx_product_service_key
+        (those are sales.py-specific post-processing, not CFDI resolution).
         
         Returns dict of field:value to set on the SI before insert.
         """
-        cfdi = {}
+        from raven_ai_agent.api.truth_hierarchy import resolve_mx_cfdi_fields
         
-        # --- 1. Payment Option: PUE vs PPD from document schedule (ground truth) ---
-        cfdi['mx_payment_option'] = SalesMixin._resolve_pue_ppd_from_schedule(source_doc)
-        
-        # --- 2. Discover CFDI Use + Mode of Payment from customer's last invoice ---
         customer = getattr(source_doc, 'customer', None)
-        if customer:
-            try:
-                last_si = frappe.get_all(
-                    'Sales Invoice',
-                    filters={'customer': customer, 'docstatus': 1},
-                    fields=['mx_cfdi_use', 'mode_of_payment'],
-                    order_by='posting_date desc',
-                    limit_page_length=1
-                )
-                if last_si:
-                    if last_si[0].get('mx_cfdi_use'):
-                        cfdi['mx_cfdi_use'] = last_si[0]['mx_cfdi_use']
-                    if last_si[0].get('mode_of_payment'):
-                        cfdi['mode_of_payment'] = last_si[0]['mode_of_payment']
-            except Exception:
-                pass  # Discovery is best-effort, defaults below
+        cfdi = resolve_mx_cfdi_fields(
+            source_doc=source_doc,
+            customer=customer,
+            payment_terms_template=getattr(source_doc, 'payment_terms_template', '') or '',
+            payment_schedule=getattr(source_doc, 'payment_schedule', []) or []
+        )
         
-        # --- 3. Smart defaults for anything not discovered ---
-        # G01 = Adquisición de mercancías (goods purchase) — most common for product sales
-        # G03 = Gastos en general — fallback for services
-        if 'mx_cfdi_use' not in cfdi:
-            cfdi['mx_cfdi_use'] = 'G01'
-        
-        if 'mode_of_payment' not in cfdi:
-            cfdi['mode_of_payment'] = 'Wire Transfer'
+        # Remove internal _audit key — not needed for SI field injection
+        cfdi.pop('_audit', None)
         
         return cfdi
 
