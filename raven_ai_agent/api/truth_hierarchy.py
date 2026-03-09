@@ -73,12 +73,90 @@ def log_decision(field: str, value: str, tier: int, reason: str,
 # PUE/PPD RESOLUTION — 3-Tier Truth Hierarchy
 # =============================================================================
 
+def _get_max_credit_days(schedule) -> int:
+    """Extract max credit_days from a payment_schedule list.
+    
+    Handles both frappe Document rows and plain dicts.
+    Returns 0 if schedule is empty or all credit_days are 0.
+    """
+    if not schedule:
+        return 0
+    max_cd = 0
+    for row in schedule:
+        if isinstance(row, dict):
+            cd = int(row.get('credit_days', 0) or 0)
+        else:
+            cd = int(getattr(row, 'credit_days', 0) or 0)
+        if cd > max_cd:
+            max_cd = cd
+    return max_cd
+
+
+def _trace_source_quotation(source_doc) -> 'Optional[object]':
+    """Walk back from SO/DN/SI to find the source Quotation.
+    
+    BUG 22: The Quotation payment_schedule has human-reviewed credit_days
+    that may differ from the Payment Terms Template definition. ERPNext's
+    make_sales_order() can regenerate payment_schedule from template,
+    overwriting the human override. We must read from the QTN.
+    
+    Returns the Quotation doc if found, None otherwise.
+    """
+    if not source_doc:
+        return None
+    
+    doctype = getattr(source_doc, 'doctype', '')
+    
+    try:
+        if doctype == 'Quotation':
+            return source_doc  # Already a QTN
+        
+        if doctype == 'Sales Order':
+            # SO items have prevdoc_docname pointing to QTN
+            items = getattr(source_doc, 'items', []) or []
+            for item in items:
+                qtn_name = getattr(item, 'prevdoc_docname', None)
+                if qtn_name:
+                    return frappe.get_doc('Quotation', qtn_name)
+        
+        if doctype == 'Delivery Note':
+            # DN items have against_sales_order → then trace to QTN
+            items = getattr(source_doc, 'items', []) or []
+            for item in items:
+                so_name = getattr(item, 'against_sales_order', None)
+                if so_name:
+                    so = frappe.get_doc('Sales Order', so_name)
+                    return _trace_source_quotation(so)
+        
+        if doctype == 'Sales Invoice':
+            # SI items have sales_order → then trace to QTN
+            items = getattr(source_doc, 'items', []) or []
+            for item in items:
+                so_name = getattr(item, 'sales_order', None)
+                if so_name:
+                    so = frappe.get_doc('Sales Order', so_name)
+                    return _trace_source_quotation(so)
+    except Exception:
+        pass  # Tracing is best-effort; fall through to other tiers
+    
+    return None
+
+
 def resolve_pue_ppd(source_doc=None, payment_terms_template: str = None,
                     payment_schedule: list = None, audit: list = None) -> str:
-    """Determine PUE vs PPD using the 3-tier truth hierarchy.
+    """Determine PUE vs PPD using the 5-tier truth hierarchy.
     
-    Truth hierarchy (BUG19):
-    1. DOCUMENT: source_doc.payment_schedule[].credit_days (ground truth)
+    BUG 22 fix: Added Tier 0 — trace back to source Quotation.
+    The Quotation payment_schedule has human-reviewed credit_days that
+    override template definitions. ERPNext's make_sales_order() can
+    regenerate payment_schedule from template, losing the human override.
+    
+    Truth hierarchy (BUG19 + BUG22):
+    0. QUOTATION: Trace source_doc back to its linked Quotation.
+       Read QTN.payment_schedule[].credit_days (human-reviewed truth).
+       - ANY row credit_days > 0 → PPD
+       - ALL rows credit_days == 0 → continue to Tier 1
+    1. DOCUMENT: source_doc.payment_schedule[].credit_days
        - ANY row credit_days > 0 → PPD
        - ALL rows credit_days == 0 → PUE
     2. TEMPLATE: Payment Terms Template Detail child table from DB
@@ -96,7 +174,27 @@ def resolve_pue_ppd(source_doc=None, payment_terms_template: str = None,
     """
     doc_name = getattr(source_doc, 'name', None) if source_doc else None
     
-    # --- TIER 1: Document's own payment_schedule (GROUND TRUTH) ---
+    # --- TIER 0: Source Quotation (HUMAN-REVIEWED TRUTH) ---
+    # BUG 22: Walk back to QTN. The QTN payment_schedule has credit_days
+    # set by the human reviewer. This overrides everything.
+    if source_doc:
+        qtn = _trace_source_quotation(source_doc)
+        if qtn and getattr(qtn, 'doctype', '') == 'Quotation':
+            qtn_schedule = getattr(qtn, 'payment_schedule', None) or []
+            if qtn_schedule:
+                qtn_max_cd = _get_max_credit_days(qtn_schedule)
+                if qtn_max_cd > 0:
+                    log_decision("mx_payment_option", "PPD", 0,
+                                f"Source QTN {qtn.name} payment_schedule has credit_days={qtn_max_cd}",
+                                doc_name, audit)
+                    return 'PPD'
+                # QTN has schedule but all credit_days=0 → PUE from QTN
+                log_decision("mx_payment_option", "PUE", 0,
+                            f"Source QTN {qtn.name} payment_schedule ALL credit_days=0",
+                            doc_name, audit)
+                return 'PUE'
+    
+    # --- TIER 1: Document's own payment_schedule ---
     schedule = None
     if source_doc:
         schedule = getattr(source_doc, 'payment_schedule', None) or []
@@ -104,15 +202,7 @@ def resolve_pue_ppd(source_doc=None, payment_terms_template: str = None,
         schedule = payment_schedule
     
     if schedule:
-        max_credit = 0
-        for row in schedule:
-            if isinstance(row, dict):
-                cd = int(row.get('credit_days', 0) or 0)
-            else:
-                cd = int(getattr(row, 'credit_days', 0) or 0)
-            if cd > max_credit:
-                max_credit = cd
-        
+        max_credit = _get_max_credit_days(schedule)
         if max_credit > 0:
             log_decision("mx_payment_option", "PPD", 1,
                         f"doc.payment_schedule has credit_days={max_credit}",
