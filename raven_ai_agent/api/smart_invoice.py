@@ -33,8 +33,11 @@ def resolve_mx_cfdi_fields(customer: str, payment_terms_template: str = None) ->
         "mode_of_payment": "Wire Transfer"
     }
     
-    pue_keywords = ["advance", "anticipad", "prepaid", "antes", "previo", "adelant"]
-    ppd_keywords = ["days", "dias", "credit", "credito", "net ", "after"]
+    pue_keywords = ["advance", "anticipad", "prepaid", "antes", "previo", "adelant",
+                     "contado", "cash", "immediate", "inmediato", "pue"]
+    ppd_keywords = ["days", "dias", "credit", "credito", "net ", "after",
+                    "reception", "recepcion", "parcialidad", "diferido", "ppd",
+                    "delivery", "entrega"]
     
     # Build terms string from template name + customer default terms
     terms_str = (payment_terms_template or "").lower()
