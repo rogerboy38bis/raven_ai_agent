@@ -115,8 +115,16 @@ def auto_assign_batches(dn_doc) -> Dict:
                     sbb.insert(ignore_permissions=True)
                     item.serial_and_batch_bundle = sbb.name
                     item.use_serial_batch_fields = 0
-                except Exception:
+                    frappe.logger().info(
+                        f"[SmartDelivery] SBB {sbb.name} created for {item.item_code} "
+                        f"batch={batch_no} qty={qty_needed}"
+                    )
+                except Exception as sbb_err:
                     # Fallback: use legacy batch_no field (older v16 / v15 compat)
+                    frappe.logger().warning(
+                        f"[SmartDelivery] SBB creation failed for {item.item_code} "
+                        f"batch={batch_no}: {str(sbb_err)[:200]}. Using legacy batch_no."
+                    )
                     item.batch_no = batch_no
                     item.use_serial_batch_fields = 1
                 remaining_in_batch -= qty_needed
