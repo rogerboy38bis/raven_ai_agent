@@ -38,6 +38,8 @@ def _detect_ai_intent(query: str) -> str:
         r'(?:run|start)\s+full\s+cycle',
         r'dry\s+run',
         r'validate\s+SO-',
+        r'validate\s+(?:pipeline\s+)?SAL-QTN',
+        r'validate\s+pipeline',
         r'run\s+pipeline',
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in orch_patterns):
