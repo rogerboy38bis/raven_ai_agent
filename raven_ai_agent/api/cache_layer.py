@@ -180,28 +180,48 @@ def get_customer_meta(customer: str) -> Optional[Dict]:
 
 # =============================================================================
 # BATCH STOCK CACHE (short TTL — stock changes frequently)
+# ERPNext v16: Batch.batch_qty is STALE. Use SBB entries instead.
 # =============================================================================
 
 def get_available_batches(item_code: str, warehouse: str = None) -> List[Dict]:
     """Get available batches with stock, ordered FIFO by expiry.
     
     Uses short TTL (30s) since batch quantities change frequently.
-    ERPNext v16: Queries Batch.batch_qty directly (Serial and Batch Bundle model).
+    ERPNext v16: Batch.batch_qty is STALE (always 0). Real stock is tracked
+    through Serial and Batch Bundle (SBB) entries. We sum qty from the child
+    table `Serial and Batch Entry` grouped by batch_no/warehouse.
     """
     cache_id = f"{item_code}:{warehouse or 'ALL'}"
     cached = cache_get("batch_stock", cache_id)
     if cached is not None:
         return cached
     
+    # v16 SBB-based query: sum qty from Serial and Batch Entry child rows
+    # qty is already signed: positive=inward, negative=outward
+    wh_filter = "AND sbe.warehouse = %s" if warehouse else ""
+    params = [item_code, warehouse] if warehouse else [item_code]
+    
     batches = frappe.db.sql("""
-        SELECT name as batch_no, batch_qty, expiry_date
-        FROM `tabBatch`
-        WHERE item = %s
-          AND disabled = 0
-          AND batch_qty > 0
-          AND (expiry_date IS NULL OR expiry_date >= CURDATE())
-        ORDER BY COALESCE(expiry_date, '9999-12-31') ASC
-    """, (item_code,), as_dict=True)
+        SELECT
+            sbe.batch_no,
+            SUM(sbe.qty) AS batch_qty,
+            b.expiry_date
+        FROM `tabSerial and Batch Entry` sbe
+        INNER JOIN `tabSerial and Batch Bundle` sbb
+            ON sbe.parent = sbb.name
+        INNER JOIN `tabBatch` b
+            ON sbe.batch_no = b.name
+        WHERE sbb.item_code = %s
+          AND sbb.docstatus = 1
+          AND sbe.is_cancelled = 0
+          AND sbe.batch_no IS NOT NULL
+          AND b.disabled = 0
+          AND (b.expiry_date IS NULL OR b.expiry_date >= CURDATE())
+          {wh_filter}
+        GROUP BY sbe.batch_no, b.expiry_date
+        HAVING SUM(sbe.qty) > 0
+        ORDER BY COALESCE(b.expiry_date, '9999-12-31') ASC
+    """.format(wh_filter=wh_filter), params, as_dict=True)
     
     cache_set("batch_stock", cache_id, batches, ttl=CACHE_TTL["batch_stock"])
     return batches
@@ -275,3 +295,4 @@ def api_clear_cache(namespace: str = None) -> str:
         return json.dumps({"status": "ok", "cleared": "all"})
     else:
         return json.dumps({"status": "error", "message": f"Unknown namespace: {namespace}"})
+
