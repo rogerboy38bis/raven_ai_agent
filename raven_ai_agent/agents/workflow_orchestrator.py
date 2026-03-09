@@ -284,6 +284,20 @@ class WorkflowOrchestrator:
     def _step_6_delivery_note(self, so) -> Dict:
         """Step 6: Create Delivery Note from Sales Order"""
         try:
+            # R2: Idempotency guard — check for existing DN
+            try:
+                from raven_ai_agent.api.truth_hierarchy import check_existing_dn
+                existing_dn = check_existing_dn(so.name)
+                if existing_dn:
+                    return {
+                        "step": 6, "success": True,
+                        "dn_name": existing_dn,
+                        "link": self.make_link("Delivery Note", existing_dn),
+                        "message": f"✅ Delivery Note {self.make_link('Delivery Note', existing_dn)} already exists for {so.name}"
+                    }
+            except ImportError:
+                pass  # truth_hierarchy not available, skip guard
+
             # Check inventory first
             for item in so.items:
                 available = frappe.db.get_value("Bin",
@@ -321,6 +335,20 @@ class WorkflowOrchestrator:
     def _step_7_sales_invoice(self, so, dn_name: str = None) -> Dict:
         """Step 7: Create Sales Invoice from SO/DN with CFDI compliance"""
         try:
+            # R2: Idempotency guard — check for existing SI
+            try:
+                from raven_ai_agent.api.truth_hierarchy import check_existing_si, resolve_mx_cfdi_fields
+                existing_si = check_existing_si(so_name=so.name, dn_name=dn_name)
+                if existing_si:
+                    return {
+                        "step": 7, "success": True,
+                        "si_name": existing_si,
+                        "link": self.make_link("Sales Invoice", existing_si),
+                        "message": f"✅ Sales Invoice {self.make_link('Sales Invoice', existing_si)} already exists for {so.name}"
+                    }
+            except ImportError:
+                pass  # truth_hierarchy not available, skip guard
+
             if dn_name:
                 from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
                 si = make_sales_invoice(dn_name)
@@ -328,9 +356,28 @@ class WorkflowOrchestrator:
                 from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
                 si = make_sales_invoice(so.name)
 
-            # CFDI compliance fields
-            if hasattr(si, "mx_cfdi_use"):
-                si.mx_cfdi_use = "G03"  # Gastos en general
+            # R1+R7: CFDI compliance via truth hierarchy (replaces hardcoded G03)
+            try:
+                cfdi = resolve_mx_cfdi_fields(source_doc=so)
+                if hasattr(si, 'mx_payment_option'):
+                    si.mx_payment_option = cfdi['mx_payment_option']
+                if hasattr(si, 'mx_cfdi_use'):
+                    si.mx_cfdi_use = cfdi['mx_cfdi_use']
+                if hasattr(si, 'mode_of_payment'):
+                    si.mode_of_payment = cfdi['mode_of_payment']
+                # Log audit trail
+                audit_msg = ' | '.join(
+                    f"{d['field']}={d['value']} ({d['tier_label']})"
+                    for d in cfdi.get('_audit', [])
+                )
+                frappe.logger('raven_ai_agent').info(
+                    f"SI for {so.name}: {audit_msg}"
+                )
+            except ImportError:
+                # Fallback: old behavior if truth_hierarchy not available
+                if hasattr(si, 'mx_cfdi_use'):
+                    si.mx_cfdi_use = 'G03'
+            
             if hasattr(si, "custom_customer_invoice_currency"):
                 si.custom_customer_invoice_currency = so.currency
 
@@ -555,6 +602,20 @@ class WorkflowOrchestrator:
             if qt.docstatus != 1:
                 return {"success": False, "error": f"Quotation '{quotation_name}' must be submitted first."}
 
+            # R2: Idempotency guard — check for existing SO
+            try:
+                from raven_ai_agent.api.truth_hierarchy import check_existing_so
+                existing_so = check_existing_so(quotation_name)
+                if existing_so:
+                    return {
+                        "success": True,
+                        "so_name": existing_so,
+                        "link": self.make_link("Sales Order", existing_so),
+                        "message": f"✅ Sales Order {self.make_link('Sales Order', existing_so)} already exists for {quotation_name}"
+                    }
+            except ImportError:
+                pass
+
             if qt.status == "Ordered":
                 return {
                     "success": True,
@@ -643,6 +704,17 @@ class WorkflowOrchestrator:
             result = self.get_pipeline_status(so_name)
             return result.get("message", result.get("error", "Unknown error"))
 
+        # ---- VALIDATE PIPELINE (R6) ----
+        if "validate" in message_lower and qtn_name:
+            try:
+                from raven_ai_agent.api.truth_hierarchy import validate_pipeline, format_pipeline_validation
+                result = validate_pipeline(qtn_name)
+                return format_pipeline_validation(result)
+            except ImportError:
+                return "Pipeline validation requires truth_hierarchy module."
+            except Exception as e:
+                return f"Validation error: {str(e)}"
+
         # ---- CREATE SO FROM QUOTATION ----
         if "create" in message_lower and "so" in message_lower and qtn_name:
             result = self.create_so_from_quotation(qtn_name)
@@ -684,7 +756,8 @@ class WorkflowOrchestrator:
             "`@workflow status [SO-NAME]` — Pipeline dashboard\n"
             "`@workflow dashboard [SO-NAME]` — Same as status\n\n"
             "**Pre-workflow**\n"
-            "`@workflow create so from [QTN-NAME]` — Create SO from Quotation\n\n"
+            "`@workflow create so from [QTN-NAME]` — Create SO from Quotation\n"
+            "`@workflow validate [QTN-NAME]` — Validate full pipeline (R6)\n\n"
             "**The 8 Steps:**\n"
             "```\n"
             "1. Manufacturing WO (create + submit)\n"
