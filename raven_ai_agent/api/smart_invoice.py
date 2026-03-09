@@ -16,72 +16,91 @@ from typing import Dict, Optional
 # MEXICO CFDI FIELD RESOLUTION
 # =============================================================================
 
-def resolve_pue_ppd(payment_terms_template: str = None) -> str:
-    """Determine PUE vs PPD by reading the Payment Terms Template schedule.
+def resolve_pue_ppd(payment_terms_template: str = None, payment_schedule: list = None) -> str:
+    """Determine PUE vs PPD using 3-tier truth hierarchy.
     
-    Smart logic (BUG16+BUG17 fix):
-    1. PRIMARY: Read the Payment Terms Template's payment_schedule child rows.
-       - If ALL rows have credit_days == 0 → PUE (immediate/advance payment)
-       - If ANY row has credit_days > 0 → PPD (credit/deferred)
-    2. FALLBACK: If template not found or DB error, use keyword matching on name.
-    3. DEFAULT: PPD (safer — allows payment complement).
+    BUG19 fix: Document payment_schedule is GROUND TRUTH — checked FIRST.
+    Template name keywords are just labels and can be wrong (e.g. "T/T In Advance"
+    with credit_days=30 from migration data).
     
-    This correctly handles cases like "45 DAYS NET CASH" (credit_days=45 → PPD)
-    and "T/T After Reception of the goods" (credit_days=100 → PPD) that keyword
-    matching alone would misclassify.
+    Truth hierarchy:
+    1. DOCUMENT: payment_schedule[].credit_days (ground truth from actual doc)
+       - ANY row credit_days > 0 → PPD (credit/deferred)
+       - ALL rows credit_days == 0 → PUE (immediate/advance)
+    2. TEMPLATE: Payment Terms Template Detail child table credit_days
+       - Same logic: any > 0 → PPD, all == 0 → PUE
+    3. KEYWORDS: Fallback matching on template name
+    4. DEFAULT: PUE (no credit data found anywhere = immediate)
+    
+    Args:
+        payment_terms_template: Name of the Payment Terms Template
+        payment_schedule: List of dicts/objects with 'credit_days' from source doc
     
     Returns: 'PUE' or 'PPD'
     """
-    if not payment_terms_template:
-        return 'PPD'
+    # --- TIER 1: Document's own payment_schedule (GROUND TRUTH) ---
+    if payment_schedule:
+        def _get_credit_days(row):
+            if isinstance(row, dict):
+                return int(row.get('credit_days', 0) or 0)
+            return int(getattr(row, 'credit_days', 0) or 0)
+        
+        has_credit = any(_get_credit_days(row) > 0 for row in payment_schedule)
+        if has_credit:
+            return 'PPD'
+        else:
+            return 'PUE'
     
-    # --- PRIMARY: Read actual credit_days from payment_schedule ---
-    try:
-        schedule_rows = frappe.get_all(
-            'Payment Terms Template Detail',
-            filters={'parent': payment_terms_template},
-            fields=['credit_days'],
-            order_by='idx asc'
-        )
-        if schedule_rows:
-            max_days = max(int(row.get('credit_days') or 0) for row in schedule_rows)
-            if max_days == 0:
-                return 'PUE'
-            else:
-                return 'PPD'
-    except Exception:
-        pass  # Fall through to keyword matching
+    # --- TIER 2: Payment Terms Template Detail from DB ---
+    if payment_terms_template:
+        try:
+            template_rows = frappe.get_all(
+                'Payment Terms Template Detail',
+                filters={'parent': payment_terms_template},
+                fields=['credit_days'],
+                order_by='idx asc'
+            )
+            if template_rows:
+                max_days = max(int(row.get('credit_days') or 0) for row in template_rows)
+                return 'PPD' if max_days > 0 else 'PUE'
+        except Exception:
+            pass  # Fall through to keywords
     
-    # --- FALLBACK: Keyword matching on template name ---
-    pt_lower = payment_terms_template.lower()
-    pue_keywords = ['advance', 'anticipad', 'contado', 'immediate', 'inmediato',
-                    'pue', 'prepaid', 'adelant', 'previo', 'antes']
-    ppd_keywords = ['days', 'dias', 'credit', 'credito', 'net ', 'parcialidad',
-                    'diferido', 'ppd', 'after', 'reception', 'recepcion',
-                    'delivery', 'entrega']
+        # --- TIER 3: Keyword matching on template name ---
+        pt_lower = payment_terms_template.lower()
+        pue_keywords = ['advance', 'anticipad', 'contado', 'immediate', 'inmediato',
+                        'pue', 'prepaid', 'adelant', 'previo', 'antes']
+        ppd_keywords = ['days', 'dias', 'credit', 'credito', 'net ', 'parcialidad',
+                        'diferido', 'ppd', 'after', 'reception', 'recepcion',
+                        'delivery', 'entrega']
+        
+        if any(kw in pt_lower for kw in pue_keywords):
+            return 'PUE'
+        elif any(kw in pt_lower for kw in ppd_keywords):
+            return 'PPD'
     
-    if any(kw in pt_lower for kw in pue_keywords):
-        return 'PUE'
-    elif any(kw in pt_lower for kw in ppd_keywords):
-        return 'PPD'
-    
-    return 'PPD'
+    # --- DEFAULT: PUE (no credit data found anywhere = immediate) ---
+    return 'PUE'
 
 
-def resolve_mx_cfdi_fields(customer: str, payment_terms_template: str = None) -> Dict:
+def resolve_mx_cfdi_fields(customer: str, payment_terms_template: str = None,
+                           payment_schedule: list = None) -> Dict:
     """Resolve Mexico CFDI fields for Sales Invoice.
     
-    Business rules:
+    Business rules (BUG19 — 3-tier truth hierarchy):
     - PUE = Pay in advance (Pago en Una sola Exhibicion) — credit_days == 0
     - PPD = Credit terms (Pago en Parcialidades o Diferido) — credit_days > 0
+    - Document payment_schedule.credit_days is GROUND TRUTH over template name
     - CFDI Use: G01 for goods, G03 default
     - Mode of Payment: Wire Transfer default
     
-    Uses Payment Terms Template schedule data for PUE/PPD (not just keywords).
-    Uses cache for customer metadata lookups.
+    Args:
+        customer: Customer name
+        payment_terms_template: Payment Terms Template name
+        payment_schedule: List of payment_schedule rows from source doc (ground truth)
     """
     result = {
-        "mx_payment_option": resolve_pue_ppd(payment_terms_template),
+        "mx_payment_option": resolve_pue_ppd(payment_terms_template, payment_schedule),
         "mx_cfdi_use": "G01",
         "mode_of_payment": "Wire Transfer"
     }
