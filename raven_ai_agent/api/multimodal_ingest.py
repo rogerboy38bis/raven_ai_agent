@@ -81,9 +81,9 @@ class MultimodalIngest:
             return {"error": f"Unsupported file type: {file_type}"}
         
         if category == 'image':
-            return self._process_image(image_data, content)
+            return self._process_image(file_data, content)
         elif category == 'pdf':
-            return self._process_pdf(image_data, content)
+            return self._process_pdf(file_data, content)
         elif category == 'audio':
             return self._process_audio(image_data, content)
         elif category == 'video':
