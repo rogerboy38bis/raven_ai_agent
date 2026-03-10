@@ -42,9 +42,9 @@ Enhance the Raymond-Lucy memory system with features from Google Always-On Memor
 
 | Phase | Status |
 |-------|--------|
-| Phase 1 | TODO |
-| Phase 2 | TODO |
-| Phase 3 | TODO |
-| Phase 4 | TODO |
-| Phase 5 | TODO |
-| Phase 6 | TODO |
+| Phase 1 | ✅ DONE - Importance scoring |
+| Phase 2 | ✅ DONE - Consolidation agent |
+| Phase 3 | ✅ DONE - Citations |
+| Phase 4 | ✅ DONE - Multimodal ingest |
+| Phase 5 | ✅ DONE - Enhanced search with scoring |
+| Phase 6 | ✅ DONE - Comparison doc |
