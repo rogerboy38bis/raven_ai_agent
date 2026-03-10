@@ -48,12 +48,13 @@ class MemoryMixin:
         return briefing
 
     def search_memories(self, query: str, limit: int = 5) -> List[Dict]:
-        """RAG: Search relevant memories using vector similarity"""
+        """RAG: Search relevant memories using vector similarity with citations"""
         # Try vector search first
+        memories = []
         try:
             from raven_ai_agent.utils.vector_store import VectorStore
             vector_store = VectorStore()
-            return vector_store.search_similar(
+            memories = vector_store.search_similar(
                 user=self.user,
                 query=query,
                 limit=limit,
@@ -63,20 +64,69 @@ class MemoryMixin:
             pass  # Fallback to keyword search
 
         # Fallback: Simple keyword search
-        memories = frappe.get_list(
-            "AI Memory",
-            filters={
-                "user": self.user,
-                "content": ["like", f"%{query}%"]
-            },
-            fields=["content", "importance", "source", "creation"],
-            order_by="creation desc",
-            limit=limit
-        )
+        if not memories:
+            memories = frappe.get_list(
+                "AI Memory",
+                filters={
+                    "user": self.user,
+                    "content": ["like", f"%{query}%"]
+                },
+                fields=["name", "content", "importance", "importance_score", "source", "creation"],
+                order_by="importance_score desc, creation desc",
+                limit=limit
+            )
+
+        # Add citations to each memory
+        for mem in memories:
+            mem["citation"] = self._format_citation(mem)
+
         return memories
 
-    def tattoo_fact(self, content: str, importance: str = "Normal", source: str = None):
-        """Memento Protocol: Store important fact with embedding"""
+    def _format_citation(self, memory: Dict) -> str:
+        """Format memory as a citation"""
+        date = ""
+        if memory.get("creation"):
+            try:
+                dt = memory["creation"]
+                date = f" ({dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(dt)[:10]})"
+            except:
+                pass
+
+        source = memory.get("source", "Conversation")
+        importance = memory.get("importance", "Normal")
+        score = memory.get("importance_score", 0.5)
+
+        return f"[{source}{date}, {importance} ({score:.0%})]"
+
+    def tattoo_fact(self, content: str, importance: str = "Normal", source: str = None, auto_analyze: bool = True):
+        """
+        Memento Protocol: Store important fact with auto-extracted metadata
+        If auto_analyze=True (default), uses LLM to extract:
+        - Importance score (0-1)
+        - Entities (people, places, organizations)
+        - Topics/themes
+        """
+        # Auto-analyze content if enabled
+        entities = None
+        topics = None
+        importance_score = 0.5
+
+        if auto_analyze:
+            try:
+                analysis = self._analyze_memory_content(content)
+                importance_score = analysis.get("importance_score", 0.5)
+                entities = analysis.get("entities", "")
+                topics = analysis.get("topics", "")
+                # Auto-upgrade importance if score is high
+                if importance_score >= 0.8:
+                    importance = "Critical"
+                elif importance_score >= 0.6:
+                    importance = "High"
+                elif importance_score <= 0.2:
+                    importance = "Low"
+            except Exception:
+                pass  # Fallback to basic storage
+
         # Try vector-enhanced storage first
         try:
             from raven_ai_agent.utils.vector_store import VectorStore
@@ -85,7 +135,10 @@ class MemoryMixin:
                 user=self.user,
                 content=content,
                 importance=importance,
-                source=source
+                source=source,
+                importance_score=importance_score,
+                entities=entities,
+                topics=topics
             )
         except (ImportError, Exception):
             pass  # Fallback to basic storage
@@ -96,12 +149,72 @@ class MemoryMixin:
             "user": self.user,
             "content": content,
             "importance": importance,
+            "importance_score": importance_score,
+            "entities": entities,
+            "topics": topics,
             "memory_type": "Fact",
             "source": source or "Conversation"
         })
         doc.insert(ignore_permissions=True)
         frappe.db.commit()
         return doc.name
+
+    def _analyze_memory_content(self, content: str) -> dict:
+        """
+        Analyze memory content to extract metadata using LLM
+        Returns: {importance_score, entities, topics}
+        """
+        analysis_prompt = f"""Analyze this memory and extract structured information.
+
+Memory: {content}
+
+Respond with JSON only (no other text):
+{{
+    "importance_score": <float 0-1>,
+    "entities": "<comma-separated list of named entities (people, places, organizations)>",
+    "topics": "<comma-separated list of topics/themes>",
+    "reason": "<1 sentence why this is important>
+}}
+
+Importance scoring guide:
+- 0.9-1.0: Critical decisions, personal info, errors to avoid
+- 0.7-0.89: Important facts, preferences, commitments
+- 0.4-0.69: General information, context
+- 0.1-0.39: Minor details, casual mentions
+"""
+
+        import json
+        messages = [
+            {"role": "system", "content": "You are a memory analysis system. Extract structured metadata from memory content."},
+            {"role": "user", "content": analysis_prompt}
+        ]
+
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=300,
+            temperature=0.3
+        )
+
+        result_text = response.choices[0].message.content
+
+        # Parse JSON response
+        try:
+            # Try to extract JSON from response
+            json_start = result_text.find('{')
+            json_end = result_text.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                result = json.loads(result_text[json_start:json_end])
+                return {
+                    "importance_score": float(result.get("importance_score", 0.5)),
+                    "entities": result.get("entities", ""),
+                    "topics": result.get("topics", "")
+                }
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Fallback
+        return {"importance_score": 0.5, "entities": "", "topics": ""}
 
     def end_session(self, conversation: List[Dict]):
         """Lucy Protocol: Generate session summary"""

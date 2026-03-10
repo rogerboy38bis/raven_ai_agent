@@ -9,10 +9,15 @@
   "user",
   "content",
   "importance",
+  "importance_score",
+  "entities",
+  "topics",
   "memory_type",
   "source",
   "verified",
   "expires_on",
+  "consolidated",
+  "consolidation_refs",
   "embedding"
  ],
  "fields": [
@@ -42,6 +47,23 @@
    "options": "Critical\nHigh\nNormal\nLow"
   },
   {
+   "default": "0.5",
+   "description": "Auto-calculated importance score (0-1)",
+   "fieldname": "importance_score",
+   "fieldtype": "Float",
+   "label": "Importance Score"
+  },
+  {
+   "fieldname": "entities",
+   "fieldtype": "Small Text",
+   "label": "Entities"
+  },
+  {
+   "fieldname": "topics",
+   "fieldtype": "Small Text",
+   "label": "Topics"
+  },
+  {
    "default": "Fact",
    "fieldname": "memory_type",
    "fieldtype": "Select",
@@ -66,6 +88,18 @@
    "fieldname": "expires_on",
    "fieldtype": "Date",
    "label": "Expires On"
+  },
+  {
+   "default": "0",
+   "description": "Has this memory been consolidated",
+   "fieldname": "consolidated",
+   "fieldtype": "Check",
+   "label": "Consolidated"
+  },
+  {
+   "fieldname": "consolidation_refs",
+   "fieldtype": "Small Text",
+   "label": "Consolidation Refs"
   },
   {
    "fieldname": "embedding",
