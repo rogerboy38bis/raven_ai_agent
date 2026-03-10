@@ -317,6 +317,14 @@ class WorkflowExecutor:
                         "message": f"[DRY RUN] Would create DN from {so_name}",
                         "warnings": preflight["warnings"]}
             
+            # BUG25: Idempotency guard for DN
+            from raven_ai_agent.api.truth_hierarchy import check_existing_dn
+            existing_dn = check_existing_dn(so_name)
+            if existing_dn:
+                return {"success": True, "name": existing_dn, "already_existed": True,
+                        "message": f"DN {existing_dn} already exists for {so_name} (BUG25 idempotency)",
+                        "link": self.make_link("Delivery Note", existing_dn)}
+
             from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
             dn = make_delivery_note(so_name)
             dn.insert(ignore_permissions=True)
@@ -391,6 +399,14 @@ class WorkflowExecutor:
                     frappe.db.commit()
             
             # Create invoice from SO
+            # BUG25: Idempotency guard for SI from SO
+            from raven_ai_agent.api.truth_hierarchy import check_existing_si
+            existing_si = check_existing_si(so_name=so_name)
+            if existing_si:
+                return {"success": True, "name": existing_si, "already_existed": True,
+                        "message": f"SI {existing_si} already exists for {so_name} (BUG25 idempotency)",
+                        "link": self.make_link("Sales Invoice", existing_si)}
+
             from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
             si = make_sales_invoice(so_name)
             
@@ -432,6 +448,19 @@ class WorkflowExecutor:
                 return {"success": True, "preview": True,
                         "message": f"Ready to create Invoice from DN {dn_name}. Use ! to confirm."}
             
+            # BUG25: Idempotency guard for SI from DN (check both dn_name and SO)
+            from raven_ai_agent.api.truth_hierarchy import check_existing_si
+            _trace_so = None
+            for _item in (dn.items or []):
+                if getattr(_item, "against_sales_order", None):
+                    _trace_so = _item.against_sales_order
+                    break
+            existing_si = check_existing_si(so_name=_trace_so, dn_name=dn_name)
+            if existing_si:
+                return {"success": True, "name": existing_si, "already_existed": True,
+                        "message": f"SI {existing_si} already exists for DN {dn_name} (BUG25 idempotency)",
+                        "link": self.make_link("Sales Invoice", existing_si)}
+
             from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
             si = make_sales_invoice(dn_name)
             
