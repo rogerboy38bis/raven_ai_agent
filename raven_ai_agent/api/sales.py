@@ -840,9 +840,11 @@ class SalesMixin:
                 # Prevents duplicate SIs on retry/re-run.
                 from raven_ai_agent.api.truth_hierarchy import check_existing_si
                 _idem_so = None
+                _idem_dn = None
                 if so_match:
                     _idem_so = so_match.group(1)
                 elif dn_match:
+                    _idem_dn = dn_match.group(1)
                     # Trace DN → SO for idempotency check
                     try:
                         _dn_tmp = frappe.get_doc("Delivery Note", dn_match.group(1))
@@ -852,14 +854,14 @@ class SalesMixin:
                                 break
                     except Exception:
                         pass
-                if _idem_so:
-                    existing_si = check_existing_si(so_name=_idem_so)
+                # BUG25: Always check BOTH so_name AND dn_name
+                existing_si = check_existing_si(so_name=_idem_so, dn_name=_idem_dn)
                     if existing_si:
                         site_name = frappe.local.site
                         si_link = f"[{existing_si}](https://{site_name}/app/sales-invoice/{existing_si})"
                         return {
                             "success": True,
-                            "message": f"⚠️ Sales Invoice already exists for SO {_idem_so}: {si_link}\n\nSkipping duplicate creation (idempotency guard BUG23)."
+                            "message": f"⚠️ Sales Invoice already exists for {"SO " + _idem_so if _idem_so else "DN " + str(_idem_dn)}: {si_link}\n\nSkipping duplicate creation (idempotency guard BUG25)."
                         }
                 
                 # --- Parse optional posting_date from command ---
