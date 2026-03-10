@@ -409,6 +409,8 @@ class WorkflowExecutor:
 
             from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
             si = make_sales_invoice(so_name)
+            # BUG 24 FIX: resolve customer_address for SI
+            self._fix_customer_address(si)
             
             # Apply ALL CFDI fields (mode_of_payment + mx_payment_option + mx_cfdi_use)
             # make_sales_invoice returns a Document — use .update() then setattr()
@@ -463,6 +465,8 @@ class WorkflowExecutor:
 
             from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_invoice
             si = make_sales_invoice(dn_name)
+            # BUG 24 FIX: resolve customer_address for SI from DN
+            self._fix_customer_address(si)
             
             # Apply ALL CFDI fields (mode_of_payment + mx_payment_option + mx_cfdi_use)
             cfdi = _resolve_mx_cfdi_fields(dn.customer)
