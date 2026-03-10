@@ -43,9 +43,22 @@ class MultimodalIngest:
         """Initialize LLM client with vision support"""
         try:
             from openai import OpenAI
-            settings = frappe.get_doc("AI Agent Settings")
-            api_key = settings.get_password("api_key")
-            base_url = settings.get("base_url") or "https://api.openai.com/v1"
+            
+            # Try to get settings - handle case where not configured
+            try:
+                settings = frappe.get_doc("AI Agent Settings")
+                api_key = settings.get_password("api_key")
+                base_url = settings.get("base_url") or "https://api.openai.com/v1"
+            except:
+                # Fallback: try environment variables
+                import os
+                api_key = os.environ.get("OPENAI_API_KEY")
+                base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            
+            if not api_key:
+                frappe.logger().warning("MultimodalIngest: No API key found")
+                return
+                
             self.client = OpenAI(api_key=api_key, base_url=base_url)
         except Exception as e:
             frappe.logger().error(f"MultimodalIngest: Failed to init client: {e}")
