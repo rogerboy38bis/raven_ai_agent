@@ -32,6 +32,13 @@ def _detect_ai_intent(query: str) -> str:
     """
     query_lower = query.lower()
     
+    # === PRIORITY: SO-linked commands always go to sales agent ===
+    # This must come FIRST to prevent payment_bot from intercepting SI creation
+    if re.search(r'SO-\d+', query, re.IGNORECASE) or re.search(r'from\s+SO', query, re.IGNORECASE):
+        # Exclude actual payment commands
+        if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+)', query, re.IGNORECASE):
+            return "sales_order_follow_up"
+
     # Orchestrator: pipeline, full cycle, validate, dry run
     orch_patterns = [
         r'pipeline\s+status',
@@ -92,7 +99,7 @@ def _detect_ai_intent(query: str) -> str:
     # Sales-specific patterns (DN, invoice, pending orders, next steps)
     sales_patterns = [
         r'(?:create|make)\s+(?:DN|delivery\s*note)',
-        r'(?:create|make)\s+invoice',
+        r'(?:create|make)\s+(?:sales\s+)?invoice',  # Matches "create invoice" and "create sales invoice"
         r'(?:create|make)\s+SO\s+from',
         r'pending\s+orders?',
         r'next\s+steps?',
@@ -132,6 +139,9 @@ def handle_raven_message(doc, method):
         # Check for @ai trigger — uses intent detection to route to correct agent
         if plain_text.lower().startswith("@ai"):
             query = plain_text[3:].strip()
+            # Strip ! prefix (force mode) before intent detection
+            if query.startswith("!"):
+                query = query[1:].strip()
             bot_name = _detect_ai_intent(query)
             frappe.logger().info(f"[AI Agent] @ai intent detected: {bot_name}")
         
