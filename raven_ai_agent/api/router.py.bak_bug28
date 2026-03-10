@@ -31,12 +31,6 @@ def _detect_ai_intent(query: str) -> str:
                       sales_order_follow_up, or sales_order_bot (default)
     """
     query_lower = query.lower()
-
-    # === PRIORITY: SO-linked commands always go to sales agent ===
-    if re.search(r'SO-\d+', query, re.IGNORECASE) or re.search(r'from\s+SO', query, re.IGNORECASE):
-        if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+)', query, re.IGNORECASE):
-            return "sales_order_follow_up"
-
     
     # Orchestrator: pipeline, full cycle, validate, dry run
     orch_patterns = [
@@ -96,15 +90,13 @@ def _detect_ai_intent(query: str) -> str:
     # Sales-specific patterns (DN, invoice, pending orders, next steps)
     sales_patterns = [
         r'(?:create|make)\s+(?:DN|delivery\s*note)',
-        r'(?:create|make)\s+(?:sales\s+)?invoice',
+        r'(?:create|make)\s+invoice',
         r'(?:create|make)\s+SO\s+from',
         r'pending\s+orders?',
         r'next\s+steps?',
         r'(?:status|check)\s+SO-',
         r'inventory\s+SO-',
         r'track\s+purchase',
-        r'!create\s+',
-        r'(?:create|make)\s+(?:sales\s+)?(?:invoice|SI)\s+(?:from|for)',
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in sales_patterns):
         return "sales_order_follow_up"
