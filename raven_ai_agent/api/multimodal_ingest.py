@@ -81,13 +81,13 @@ class MultimodalIngest:
             return {"error": f"Unsupported file type: {file_type}"}
         
         if category == 'image':
-            return self._process_image(file_data, content)
+            return self._process_image(image_data, content)
         elif category == 'pdf':
-            return self._process_pdf(file_data, content)
+            return self._process_pdf(image_data, content)
         elif category == 'audio':
-            return self._process_audio(file_data, content)
+            return self._process_audio(image_data, content)
         elif category == 'video':
-            return self._process_video(file_data, content)
+            return self._process_video(image_data, content)
         
         return {"error": "Processing failed"}
     
@@ -142,36 +142,138 @@ Respond with JSON:
             frappe.logger().error(f"Image processing error: {e}")
             return {"error": str(e)}
     
-    def _process_pdf(self, pdf_data: str, context: str = None) -> Dict:
-        """Process PDF document"""
-        # For PDFs, we'd typically use a PDF parsing library
-        # Here we use a simple approach with OCR or text extraction
+    def _process_pdf(self, pdf_url: str, context: str = None) -> Dict:
+        """Process PDF document using PyMuPDF (best for invoices/orders)"""
+        import requests
+        import io
         
-        prompt = f"""Extract and analyze content from this PDF document.
+        prompt = f"""Analyze this PDF document and extract:
+1. PO/Invoice number
+2. Customer/Supplier name
+3. Date
+4. Items with quantities and prices
+5. Total amount
+6. Delivery/ billing address
+7. Any other important details
 
 Context: {context or 'No additional context'}
 
-Extract:
-1. Main topics discussed
-2. Key entities (people, companies, dates)
-3. Important facts or data
-4. A brief summary
-
 Respond with JSON:
 {{
-    "topics": "<comma-separated topics>",
-    "entities": "<comma-separated entities>",
-    "key_facts": "<important facts>",
+    "po_number": "<number or null>",
+    "customer": "<name>",
+    "date": "<date>",
+    "items": [{{"item": "<name>", "qty": <number>, "unit_price": <price>, "total": <total>}}],
+    "total": <amount>,
+    "address": "<delivery address>",
     "summary": "<2-3 sentence summary>"
 }}"""
         
-        # Note: For actual PDF processing, you'd use a PDF library
-        # This is a placeholder that would integrate with PDF extraction
-        return {
-            "prompt": prompt,
-            "status": "PDF processing requires additional setup",
-            "suggestion": "Use pdf2image + OCR or PDF parsing library"
-        }
+        try:
+            # Try PyMuPDF first
+            try:
+                import fitz  # PyMuPDF
+                response = requests.get(pdf_url, timeout=30)
+                pdf_data = response.content
+                
+                doc = fitz.open(stream=pdf_data, filetype="pdf")
+                text = ""
+                for page in doc:
+                    text += page.get_text()
+                doc.close()
+                
+                if text.strip():
+                    # Send to LLM for extraction
+                    return self._extract_from_text(text, prompt)
+            except ImportError:
+                pass
+            
+            # Fallback: Try pypdf
+            try:
+                from pypdf import PdfReader
+                response = requests.get(pdf_url, timeout=30)
+                pdf_file = io.BytesIO(response.content)
+                
+                reader = PdfReader(pdf_file)
+                text = ""
+                for page in reader.pages:
+                    text += page.extract_text() or ""
+                
+                if text.strip():
+                    return self._extract_from_text(text, prompt)
+            except ImportError:
+                pass
+            
+            # Final fallback: Use OCR with pytesseract (for scanned PDFs)
+            try:
+                import fitz
+                response = requests.get(pdf_url, timeout=30)
+                pdf_data = response.content
+                
+                doc = fitz.open(stream=pdf_data, filetype="pdf")
+                text = ""
+                for page in doc:
+                    # Get pixmap (image) of page
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x scale for better OCR
+                    img_data = pix.tobytes("png")
+                    
+                    # OCR with pytesseract
+                    try:
+                        import pytesseract
+                        from PIL import Image
+                        img = Image.open(io.BytesIO(img_data))
+                        page_text = pytesseract.image_to_string(img)
+                        text += page_text + "\n"
+                    except:
+                        # If OCR fails, just use basic extraction
+                        text += page.get_text() or ""
+                
+                doc.close()
+                
+                if text.strip():
+                    return self._extract_from_text(text, prompt)
+            except Exception as e:
+                pass
+            
+            return {
+                "status": "No PDF libraries available",
+                "suggestion": "Install: pip install pymupdf pypdf pillow pytesseract"
+            }
+            
+        except Exception as e:
+            return {"error": f"PDF processing failed: {str(e)}"}
+    
+    def _extract_from_text(self, text: str, prompt: str) -> Dict:
+        """Extract structured data from text using LLM"""
+        if not self.client:
+            return {"error": "LLM client not initialized"}
+        
+        # Truncate text if too long
+        max_chars = 8000
+        if len(text) > max_chars:
+            text = text[:max_chars] + "... [truncated]"
+        
+        full_prompt = f"""Document content:
+{text}
+
+{prompt}"""
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You extract structured data from documents. Always respond with valid JSON."},
+                    {"role": "user", "content": full_prompt}
+                ],
+                max_tokens=1500,
+                temperature=0.3
+            )
+            
+            result_text = response.choices[0].message.content
+            return self._parse_json_response(result_text)
+            
+        except Exception as e:
+            return {"error": f"LLM extraction failed: {str(e)}"}
     
     def _process_audio(self, audio_data: str, context: str = None) -> Dict:
         """Process audio file (transcription)"""
