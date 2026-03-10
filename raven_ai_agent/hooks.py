@@ -14,6 +14,9 @@ required_apps = ["frappe"]
 doc_events = {
     "Raven Message": {
         "after_insert": "raven_ai_agent.api.agent.handle_raven_message"
+    },
+    "File": {
+        "after_insert": "raven_ai_agent.api.po_extractor.on_file_added"
     }
 }
 
