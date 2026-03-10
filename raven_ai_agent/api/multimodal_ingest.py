@@ -85,9 +85,9 @@ class MultimodalIngest:
         elif category == 'pdf':
             return self._process_pdf(file_data, content)
         elif category == 'audio':
-            return self._process_audio(image_data, content)
+            return self._process_audio(file_data, content)
         elif category == 'video':
-            return self._process_video(image_data, content)
+            return self._process_video(file_data, content)
         
         return {"error": "Processing failed"}
     
@@ -143,105 +143,116 @@ Respond with JSON:
             return {"error": str(e)}
     
     def _process_pdf(self, pdf_url: str, context: str = None) -> Dict:
-        """Process PDF document using PyMuPDF (best for invoices/orders)"""
-        import requests
+        """Process PDF document - tries multiple methods"""
+        
+        # Method 1: Try via Frappe file system (for private files)
+        result = self._process_pdf_frappe(pdf_url)
+        if "error" not in result or "not initialized" not in result.get("error", ""):
+            return result
+        
+        # Method 2: Try direct URL with auth
+        return self._process_pdf_url(pdf_url, context)
+    
+    def _process_pdf_frappe(self, file_url: str) -> Dict:
+        """Process PDF using Frappe's file system"""
         import io
         
-        prompt = f"""Analyze this PDF document and extract:
-1. PO/Invoice number
-2. Customer/Supplier name
-3. Date
-4. Items with quantities and prices
-5. Total amount
-6. Delivery/ billing address
-7. Any other important details
-
-Context: {context or 'No additional context'}
-
-Respond with JSON:
-{{
-    "po_number": "<number or null>",
-    "customer": "<name>",
-    "date": "<date>",
-    "items": [{{"item": "<name>", "qty": <number>, "unit_price": <price>, "total": <total>}}],
-    "total": <amount>,
-    "address": "<delivery address>",
-    "summary": "<2-3 sentence summary>"
-}}"""
+        prompt = f"""Extract from this PDF: PO number, customer, date, items with qty/prices, total, address.
+Respond with JSON: {{"po_number": "", "customer": "", "date": "", "items": [], "total": 0, "address": "", "summary": ""}}"""
         
         try:
-            # Try PyMuPDF first
+            # Extract filename from URL
+            filename = file_url
+            if "/private/files/" in file_url:
+                filename = file_url.split("/private/files/")[-1]
+            elif "/files/" in file_url:
+                filename = file_url.split("/files/")[-1]
+            
+            # Get file doc
+            file_doc = frappe.get_doc("File", {"file_url": f"/private/files/{filename}"})
+            
+            # Get content
+            content = file_doc.get_content()
+            
+            # Try PyMuPDF
             try:
-                import fitz  # PyMuPDF
-                response = requests.get(pdf_url, timeout=30)
-                pdf_data = response.content
-                
-                doc = fitz.open(stream=pdf_data, filetype="pdf")
+                import fitz
+                doc = fitz.open(stream=content, filetype="pdf")
                 text = ""
                 for page in doc:
                     text += page.get_text()
                 doc.close()
                 
                 if text.strip():
-                    # Send to LLM for extraction
                     return self._extract_from_text(text, prompt)
             except ImportError:
                 pass
             
-            # Fallback: Try pypdf
+            # Fallback to pypdf
             try:
                 from pypdf import PdfReader
-                response = requests.get(pdf_url, timeout=30)
-                pdf_file = io.BytesIO(response.content)
-                
-                reader = PdfReader(pdf_file)
+                reader = PdfReader(io.BytesIO(content))
                 text = ""
                 for page in reader.pages:
                     text += page.extract_text() or ""
                 
                 if text.strip():
                     return self._extract_from_text(text, prompt)
-            except ImportError:
+            except:
                 pass
             
-            # Final fallback: Use OCR with pytesseract (for scanned PDFs)
+            return {"error": "PDF extraction failed"}
+            
+        except Exception as e:
+            return {"error": f"Frappe file error: {str(e)}"}
+    
+    def _process_pdf_url(self, pdf_url: str, context: str = None) -> Dict:
+        """Process PDF from URL"""
+        import requests
+        import io
+        
+        prompt = f"""Extract from PDF: PO number, customer, date, items with qty/prices, total, address.
+Respond with JSON: {{"po_number": "", "customer": "", "date": "", "items": [], "total": 0, "address": "", "summary": ""}}"""
+        
+        try:
+            # Try to get file - first without auth
+            response = requests.get(pdf_url, timeout=30)
+            
+            # Check if we got HTML instead of PDF
+            if response.content.startswith(b'<!') or b'<!doc' in response.content[:100]:
+                return {"error": "PDF URL requires authentication - use Frappe file path"}
+            
+            # Try PyMuPDF
             try:
                 import fitz
-                response = requests.get(pdf_url, timeout=30)
-                pdf_data = response.content
-                
-                doc = fitz.open(stream=pdf_data, filetype="pdf")
+                doc = fitz.open(stream=response.content, filetype="pdf")
                 text = ""
                 for page in doc:
-                    # Get pixmap (image) of page
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x scale for better OCR
-                    img_data = pix.tobytes("png")
-                    
-                    # OCR with pytesseract
-                    try:
-                        import pytesseract
-                        from PIL import Image
-                        img = Image.open(io.BytesIO(img_data))
-                        page_text = pytesseract.image_to_string(img)
-                        text += page_text + "\n"
-                    except:
-                        # If OCR fails, just use basic extraction
-                        text += page.get_text() or ""
-                
+                    text += page.get_text()
                 doc.close()
                 
                 if text.strip():
                     return self._extract_from_text(text, prompt)
-            except Exception as e:
+            except ImportError:
                 pass
             
-            return {
-                "status": "No PDF libraries available",
-                "suggestion": "Install: pip install pymupdf pypdf pillow pytesseract"
-            }
+            # Fallback to pypdf
+            try:
+                from pypdf import PdfReader
+                reader = PdfReader(io.BytesIO(response.content))
+                text = ""
+                for page in reader.pages:
+                    text += page.extract_text() or ""
+                
+                if text.strip():
+                    return self._extract_from_text(text, prompt)
+            except:
+                pass
+            
+            return {"error": "Could not extract PDF text"}
             
         except Exception as e:
-            return {"error": f"PDF processing failed: {str(e)}"}
+            return {"error": f"PDF URL error: {str(e)}"}
     
     def _extract_from_text(self, text: str, prompt: str) -> Dict:
         """Extract structured data from text using LLM"""
@@ -277,54 +288,14 @@ Respond with JSON:
     
     def _process_audio(self, audio_data: str, context: str = None) -> Dict:
         """Process audio file (transcription)"""
-        prompt = f"""Transcribe and analyze this audio file.
-
-Context: {context or 'No additional context'}
-
-Extract:
-1. Main topics discussed
-2. Key entities mentioned
-3. Important statements or decisions
-4. A brief summary
-
-Respond with JSON:
-{{
-    "transcript": "<full or partial transcript>",
-    "topics": "<comma-separated topics>",
-    "entities": "<comma-separated entities>",
-    "summary": "<2-3 sentence summary>"
-}}"""
-        
         return {
-            "prompt": prompt,
             "status": "Audio processing requires Whisper API integration",
             "suggestion": "Use OpenAI Whisper for transcription"
         }
     
     def _process_video(self, video_data: str, context: str = None) -> Dict:
         """Process video file"""
-        prompt = f"""Analyze this video and extract key information.
-
-Context: {context or 'No additional context'}
-
-Extract:
-1. What's happening in the video
-2. Any text or speech
-3. Key entities
-4. Main topics
-5. Brief summary
-
-Respond with JSON:
-{{
-    "description": "<scene description>",
-    "extracted_text": "<any text or speech>",
-    "topics": "<comma-separated topics>",
-    "entities": "<comma-separated entities>",
-    "summary": "<2-3 sentence summary>"
-}}"""
-        
         return {
-            "prompt": prompt,
             "status": "Video processing requires frame extraction + vision",
             "suggestion": "Extract key frames and process as images"
         }
@@ -365,16 +336,12 @@ Respond with JSON:
         
         full_content = "\n".join(memory_content)
         
-        # Store via MemoryMixin
-        # Get importance score from analysis
-        importance_score = 0.5  # Default
-        
         doc = frappe.get_doc({
             "doctype": "AI Memory",
             "user": self.user,
             "content": full_content,
             "importance": importance,
-            "importance_score": importance_score,
+            "importance_score": 0.5,
             "entities": result.get("entities", ""),
             "topics": result.get("topics", ""),
             "memory_type": "Fact",
@@ -390,20 +357,10 @@ def ingest_file_via_api(file_content: str, file_type: str, user: str,
                         content: str = None) -> Dict:
     """
     API function for file ingestion
-    
-    Usage:
-    POST /api/method/raven_ai_agent.api.memory_manager.ingest_file_via_api
-    {
-        "file_content": "base64 or url",
-        "file_type": "image/jpeg",
-        "user": "user@example.com",
-        "content": "optional context"
-    }
     """
     ingest = MultimodalIngest(user=user)
     result = ingest.ingest_file(file_content, file_type, content)
     
-    # Also store as memory
     if "error" not in result:
         memory_name = ingest.store_multimodal_memory(file_content, file_type, content)
         result["memory_name"] = memory_name
