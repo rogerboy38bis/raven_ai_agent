@@ -289,26 +289,23 @@ class SalesOrderFollowupAgent:
                     if mop:
                         si.mode_of_payment = mop
 
-            # Set mxpaymentoption for Mexico CFDI compliance
-            # Try multiple possible field names
+            # Set mx_payment_option for Mexico CFDI compliance
+            # Use the correct field name: mx_payment_option (with underscores)
             payment_option_field = None
-            for field_name in ["mxpaymentoption", "sat_payment_option", "sat_payment_option"]:
+            for field_name in ["mx_payment_option", "sat_payment_option"]:
                 if hasattr(si, field_name) and not getattr(si, field_name, None):
                     payment_option_field = field_name
                     break
             
             if payment_option_field:
-                # Get available SAT Payment Options from the system
-                try:
-                    sat_options = frappe.get_all("SAT Payment Option", fields=["name"])
-                    if sat_options:
-                        # Use first available option
-                        si.set(payment_option_field, sat_options[0].name)
-                    else:
-                        # Fallback to common Mexican payment methods
-                        si.set(payment_option_field, "99")  # Others
-                except Exception:
-                    si.set(payment_option_field, "99")  # Others
+                # Get the payment method from mode_of_payment or default to PPD
+                mop_name = ""
+                if hasattr(si, "mode_of_payment") and si.mode_of_payment:
+                    mop_name = si.mode_of_payment.lower()
+                
+                # Map to PPD (Pago en una sola exhibicion) or PUE (Pago en parcialidades)
+                # Default to PPD for most cases
+                si.set(payment_option_field, "PPD")
 
             si.insert(ignore_permissions=True)
             si.submit()
