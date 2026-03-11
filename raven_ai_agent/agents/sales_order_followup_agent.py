@@ -307,6 +307,38 @@ class SalesOrderFollowupAgent:
                 # Default to PPD for most cases
                 si.set(payment_option_field, "PPD")
 
+            # Fix debit_to: ensure it's a valid Receivable ledger (not a Group account)
+            if hasattr(si, 'debit_to') and si.debit_to:
+                # Check if current debit_to is a group account
+                acct = frappe.get_doc("Account", si.debit_to)
+                if acct.is_group:
+                    # Find a valid leaf receivable account for this company
+                    valid_accounts = frappe.db.get_all("Account", 
+                        filters={
+                            "company": si.company,
+                            "account_type": "Receivable",
+                            "is_group": 0,
+                            "currency": si.currency
+                        },
+                        fields=["name"],
+                        limit=1
+                    )
+                    if valid_accounts:
+                        si.debit_to = valid_accounts[0].name
+                    else:
+                        # Try without currency filter
+                        valid_accounts = frappe.db.get_all("Account",
+                            filters={
+                                "company": si.company,
+                                "account_type": "Receivable",
+                                "is_group": 0
+                            },
+                            fields=["name"],
+                            limit=1
+                        )
+                        if valid_accounts:
+                            si.debit_to = valid_accounts[0].name
+
             si.insert(ignore_permissions=True)
             si.submit()
             frappe.db.commit()
