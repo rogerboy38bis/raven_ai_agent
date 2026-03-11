@@ -444,6 +444,12 @@ class SalesOrderFollowupAgent:
     def create_from_quotation(self, quotation_name: str) -> Dict:
         """Create a Sales Order from a Quotation (pre-Step 3).
         
+        IMPORTANT: Quotation is the TRUTH SOURCE - ALL fields must be copied:
+        - Address (customer_address, shipping_address, billing_address)
+        - Items with all custom fields (TDS, AMB tabs, etc.)
+        - Payment terms
+        - Custom fields (all fields starting with tds_, amb_, etc.)
+        
         Args:
             quotation_name: Quotation name (e.g. 'SAL-QTN-2024-00752')
         
@@ -467,6 +473,96 @@ class SalesOrderFollowupAgent:
 
             from erpnext.selling.doctype.quotation.quotation import make_sales_order
             so = make_sales_order(quotation_name)
+            
+            # === COMPREHENSIVE COPY FROM QUOTATION (TRUTH SOURCE) ===
+            frappe.logger().info(f"Raven AI: Copying ALL fields from Quotation {quotation_name}")
+            
+            # 1. COPY ADDRESSES
+            if getattr(qt, 'customer_address', None):
+                so.customer_address = qt.customer_address
+            if getattr(qt, 'shipping_address_name', None):
+                so.shipping_address_name = qt.shipping_address_name
+            if getattr(qt, 'billing_address', None):
+                so.billing_address = qt.billing_address
+            
+            # 2. COPY HEADER CUSTOM FIELDS (AMB, TDS, etc.)
+            qt_meta = frappe.get_meta("Quotation")
+            so_meta = frappe.get_meta("Sales Order")
+            
+            # Get all custom fields from Quotation
+            qt_custom_fields = [d.fieldname for d in qt_meta.fields 
+                               if d.fieldname and (d.fieldname.startswith('tds_') or 
+                                                 d.fieldname.startswith('amb_') or
+                                                 'technical' in (d.label or '').lower() or
+                                                 'data_sheet' in d.fieldname or
+                                                 d.fieldname in ['0307', 'tds_base', 'tds_detail'])]
+            
+            # Copy each custom field to SO header
+            for field in qt_custom_fields:
+                if hasattr(qt, field) and hasattr(so, field):
+                    value = getattr(qt, field)
+                    if value:
+                        setattr(so, field, value)
+                        frappe.logger().info(f"Raven AI: Copied header field {field} = {value}")
+            
+            # 3. COPY PAYMENT TERMS
+            if hasattr(qt, 'payment_schedule') and qt.payment_schedule:
+                so.payment_schedule = []
+                for term in qt.payment_schedule:
+                    so.append('payment_schedule', {
+                        'payment_term': term.payment_term,
+                        'due_date': term.due_date,
+                        'invoice_portion': term.invoice_portion,
+                        'payment_amount': term.payment_amount,
+                        'discount': term.discount,
+                        'discount_type': term.discount_type
+                    })
+            
+            # 4. COPY ITEM-LEVEL CUSTOM FIELDS (TDS, AMB, etc.)
+            so_meta_item = frappe.get_meta("Sales Order Item")
+            
+            # Get custom field names from SO Item
+            item_custom_fields = [d.fieldname for d in so_meta_item.fields 
+                                 if d.fieldname and (d.fieldname.startswith('tds_') or 
+                                                   d.fieldname.startswith('amb_') or
+                                                   'tds' in (d.label or '').lower() or
+                                                   '0307' in (d.label or '') or
+                                                   'technical' in (d.label or '').lower())]
+            
+            for so_item in so.items:
+                # Find matching Quotation item
+                for qt_item in qt.items:
+                    if qt_item.item_code == so_item.item_code and qt_item.qty == so_item.qty:
+                        # Copy ALL custom fields from Quotation Item
+                        for field in item_custom_fields:
+                            if hasattr(qt_item, field) and hasattr(so_item, field):
+                                value = getattr(qt_item, field)
+                                if value:
+                                    setattr(so_item, field, value)
+                        
+                        # Also copy standard fields that might be missing
+                        if getattr(qt_item, 'description', None):
+                            so_item.description = qt_item.description
+                        if getattr(qt_item, 'warehouse', None):
+                            so_item.warehouse = qt_item.warehouse
+                        break
+            
+            # 5. COPY OTHER RELEVANT FIELDS
+            if getattr(qt, 'taxes_and_charges', None):
+                so.taxes_and_charges = qt.taxes_and_charges
+            if hasattr(qt, 'taxes') and qt.taxes:
+                # Copy taxes if they exist
+                so.taxes = []
+                for tax in qt.taxes:
+                    so.append('taxes', {
+                        'charge_type': tax.charge_type,
+                        'account_head': tax.account_head,
+                        'description': tax.description,
+                        'rate': tax.rate,
+                        'amount': tax.amount,
+                        'total': tax.total
+                    })
+            
             so.insert(ignore_permissions=True)
             frappe.db.commit()
 
@@ -488,6 +584,70 @@ class SalesOrderFollowupAgent:
             return {"success": False, "error": f"Quotation '{quotation_name}' not found."}
         except Exception as e:
             return {"success": False, "error": f"Error creating SO from Quotation: {str(e)}"}
+    
+    def fix_so_from_quotation(self, so_name: str) -> Dict:
+        """Fix missing fields on Sales Order from source Quotation (migration fix).
+        
+        Call this for existing SOs that are missing TDS/AMB data from their Quotations.
+        
+        Args:
+            so_name: Sales Order name
+        
+        Returns:
+            Dict with fix status
+        """
+        try:
+            so = frappe.get_doc("Sales Order", so_name)
+            
+            # Find source Quotation
+            quotation_name = None
+            for item in so.items:
+                if getattr(item, 'prevdoc_docname', None):
+                    quotation_name = item.prevdoc_docname
+                    break
+            
+            if not quotation_name:
+                return {"success": False, "error": f"No source Quotation found for {so_name}"}
+            
+            qt = frappe.get_doc("Quotation", quotation_name)
+            frappe.logger().info(f"Raven AI: Fixing SO {so_name} from Quotation {quotation_name}")
+            
+            # Copy addresses
+            if getattr(qt, 'customer_address', None):
+                so.customer_address = qt.customer_address
+            if getattr(qt, 'shipping_address_name', None):
+                so.shipping_address_name = qt.shipping_address_name
+            if getattr(qt, 'billing_address', None):
+                so.billing_address = qt.billing_address
+            
+            # Copy item custom fields
+            so_meta_item = frappe.get_meta("Sales Order Item")
+            item_custom_fields = [d.fieldname for d in so_meta_item.fields 
+                                 if d.fieldname and (d.fieldname.startswith('tds_') or 
+                                                   d.fieldname.startswith('amb_'))]
+            
+            fixed_count = 0
+            for so_item in so.items:
+                for qt_item in qt.items:
+                    if qt_item.item_code == so_item.item_code:
+                        for field in item_custom_fields:
+                            if hasattr(qt_item, field) and hasattr(so_item, field):
+                                qt_value = getattr(qt_item, field)
+                                if qt_value and not getattr(so_item, field, None):
+                                    setattr(so_item, field, qt_value)
+                                    fixed_count += 1
+                        break
+            
+            so.save(ignore_permissions=True)
+            frappe.db.commit()
+            
+            return {
+                "success": True,
+                "message": f"✅ Fixed {so_name}: {fixed_count} item fields updated from {quotation_name}"
+            }
+            
+        except Exception as e:
+            return {"success": False, "error": f"Error fixing SO: {str(e)}"}
 
     def create_delivery_note(self, so_name: str) -> Dict:
         """Create a Delivery Note from a Sales Order (Step 6).
