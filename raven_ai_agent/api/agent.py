@@ -426,6 +426,9 @@ def handle_raven_message(doc, method):
                 else:
                     # It's a payment command, continue to payment routing below
                     pass
+            # === BATCH commands also go to sales agent ===
+            elif "batch" in q_lower and ("invoice" in q_lower or "factura" in q_lower or "delivery" in q_lower):
+                bot_name = "sales_order_follow_up"
             # Route by priority (more specific first) — skip if analytics already matched
             elif is_analytics:
                 pass  # Already set to sales_order_bot → RaymondLucyAgent
