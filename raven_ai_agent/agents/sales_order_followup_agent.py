@@ -310,45 +310,60 @@ class SalesOrderFollowupAgent:
             try:
                 acct = frappe.get_doc("Account", si.debit_to)
                 
+                # SPECIAL CASE: Customer has existing entries in MXN - enforce MXN account
+                # ERPNext requires consistency: if customer has MXN history, use MXN
+                target_currency = si.currency
+                
+                # Check if customer has existing GL entries in MXN (different from invoice currency)
+                if si.currency != "MXN":
+                    has_mxn_entries = frappe.db.exists("GL Entry", {
+                        "party_type": "Customer",
+                        "party": si.customer,
+                        "account_currency": "MXN"
+                    })
+                    if has_mxn_entries:
+                        frappe.logger().info(f"Raven AI: Customer {si.customer} has MXN entries, enforcing MXN account")
+                        target_currency = "MXN"
+                
                 # Check if account is a group OR has wrong currency - need to find valid one
                 needs_fix = False
                 if acct.is_group:
                     needs_fix = True
                     frappe.logger().info(f"Raven AI: Account {si.debit_to} is group, finding alternative")
-                elif getattr(acct, 'account_currency', None) != si.currency:
+                elif getattr(acct, 'account_currency', None) != target_currency:
                     needs_fix = True
-                    frappe.logger().info(f"Raven AI: Account {si.debit_to} currency {acct.account_currency} != {si.currency}")
+                    frappe.logger().info(f"Raven AI: Account {si.debit_to} currency {acct.account_currency} != {target_currency}")
                 
                 if needs_fix:
-                    # Priority 1: Company default receivable with correct currency
+                    # Priority 1: Company default receivable with target currency
                     default = frappe.get_value("Company", si.company, "default_receivable_account")
                     if default:
                         check = frappe.get_doc("Account", default)
-                        if not check.is_group and getattr(check, 'account_currency', None) == si.currency:
+                        if not check.is_group and getattr(check, 'account_currency', None) == target_currency:
                             si.debit_to = default
                             frappe.logger().info(f"Raven AI: Using company default: {default}")
                     
-                    # Priority 2: Any receivable account with correct currency (not group)
-                    if getattr(frappe.get_doc("Account", si.debit_to), 'account_currency', None) != si.currency:
+                    # Priority 2: Any receivable account with target currency (not group)
+                    if getattr(frappe.get_doc("Account", si.debit_to), 'account_currency', None) != target_currency:
                         valid = frappe.db.get_all("Account", 
                             filters={
                                 "company": si.company, 
                                 "account_type": "Receivable", 
                                 "is_group": 0,
-                                "account_currency": si.currency
+                                "account_currency": target_currency
                             },
                             fields=["name"], limit=5)
                         if valid:
                             si.debit_to = valid[0].name
                             frappe.logger().info(f"Raven AI: Found receivable: {si.debit_to}")
                         
-                        # Priority 3: Any account with correct currency (not group)
-                        if getattr(frappe.get_doc("Account", si.debit_to), 'account_currency', None) != si.currency:
+                        # Priority 3: Any account with target currency (not group)
+                        if getattr(frappe.get_doc("Account", si.debit_to), 'account_currency', None) != target_currency:
                             valid = frappe.db.get_all("Account", 
                                 filters={
                                     "company": si.company, 
                                     "is_group": 0,
-                                    "account_currency": si.currency
+                                    "account_currency": target_currency
                                 },
                                 fields=["name"], limit=5)
                             if valid:
