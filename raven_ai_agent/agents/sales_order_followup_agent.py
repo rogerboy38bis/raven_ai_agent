@@ -753,30 +753,38 @@ class SalesOrderFollowupAgent:
                 'custom_tds_en_item': 'custom_tds_item'  # Map QT field to SO field
             }
             
-            for so_item in so.items:
-                for qt_item in qt.items:
-                    # Match by item_code
-                    if qt_item.item_code == so_item.item_code:
-                        # Copy dynamic fields
-                        for field in copyable_fields:
-                            qt_value = getattr(qt_item, field, None)
-                            if qt_value and str(qt_value).strip():
-                                current_value = getattr(so_item, field, None)
-                                if not current_value or not str(current_value).strip():
-                                    setattr(so_item, field, qt_value)
-                                    fixed_count += 1
-                                    frappe.logger().info(f"Raven AI: Copied {field} = {qt_value} for {so_item.item_code}")
-                        
-                        # Copy TDS fields with explicit mapping
-                        for qt_field, so_field in tds_field_mapping.items():
-                            qt_value = getattr(qt_item, qt_field, None)
-                            if qt_value and str(qt_value).strip():
-                                current_value = getattr(so_item, so_field, None)
-                                if not current_value or not str(current_value).strip():
-                                    setattr(so_item, so_field, qt_value)
-                                    fixed_count += 1
-                                    frappe.logger().info(f"Raven AI: Copied TDS {so_field} = {qt_value} from {qt_field} for {so_item.item_code}")
-                        break
+            for so_idx, so_item in enumerate(so.items):
+                # Match by row index first (most reliable), then fallback to item_code
+                qt_item = None
+                if len(qt.items) > so_idx:
+                    qt_item = qt.items[so_idx]
+                else:
+                    # Fallback: match by item_code
+                    for q_item in qt.items:
+                        if q_item.item_code == so_item.item_code:
+                            qt_item = q_item
+                            break
+                
+                if qt_item:
+                    # Copy dynamic fields
+                    for field in copyable_fields:
+                        qt_value = getattr(qt_item, field, None)
+                        if qt_value and str(qt_value).strip():
+                            current_value = getattr(so_item, field, None)
+                            if not current_value or not str(current_value).strip():
+                                setattr(so_item, field, qt_value)
+                                fixed_count += 1
+                                frappe.logger().info(f"Raven AI: Copied {field} = {qt_value} for {so_item.item_code}")
+                    
+                    # Copy TDS fields with explicit mapping
+                    for qt_field, so_field in tds_field_mapping.items():
+                        qt_value = getattr(qt_item, qt_field, None)
+                        if qt_value and str(qt_value).strip():
+                            current_value = getattr(so_item, so_field, None)
+                            if not current_value or not str(current_value).strip():
+                                setattr(so_item, so_field, qt_value)
+                                fixed_count += 1
+                                frappe.logger().info(f"Raven AI: Copied TDS {so_field} = {qt_value} from {qt_field} for {so_item.item_code}")
             
             # Save if there are changes (only for draft SOs)
             if so.docstatus == 0:
