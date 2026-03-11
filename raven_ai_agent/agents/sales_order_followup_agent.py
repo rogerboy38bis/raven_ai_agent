@@ -289,6 +289,22 @@ class SalesOrderFollowupAgent:
                     if mop:
                         si.mode_of_payment = mop
 
+            # Set mxpaymentoption for Mexico CFDI compliance
+            if hasattr(si, "mxpaymentoption") and not si.mxpaymentoption:
+                if hasattr(si, "mode_of_payment") and si.mode_of_payment:
+                    # Map mode of payment to Mexican payment method catalog
+                    mop_name = si.mode_of_payment.lower()
+                    if "transfer" in mop_name or "spei" in mop_name:
+                        si.mxpaymentoption = "STP"
+                    elif "efectivo" in mop_name or "cash" in mop_name:
+                        si.mxpaymentoption = "01"
+                    elif "cheque" in mop_name:
+                        si.mxpaymentoption = "02"
+                    elif "tarjeta" in mop_name or "card" in mop_name:
+                        si.mxpaymentoption = "04"
+                    else:
+                        si.mxpaymentoption = "99"  # Others
+
             si.insert(ignore_permissions=True)
             si.submit()
             frappe.db.commit()
