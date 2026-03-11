@@ -606,16 +606,27 @@ class SalesOrderFollowupAgent:
         )
         
         if not addresses:
+            # Try with partial customer name match
+            addresses = frappe.get_all("Dynamic Link",
+                filters={
+                    "link_doctype": "Customer",
+                    "link_name": ["like", f"%{customer}%"],
+                    "parenttype": "Address"
+                },
+                fields=["parent"]
+            )
+        
+        if not addresses:
             return None
         
-        # Try to find address with matching type
+        # Try to find address with matching type (flexible matching)
         for addr in addresses:
             addr_doc = frappe.get_doc("Address", addr.parent)
             addr_name_lower = addr_doc.address_title.lower() if addr_doc.address_title else ""
             address_type_lower = address_type.lower()
             
-            # Direct match
-            if address_type_lower in addr_name_lower:
+            # Direct match or partial match (e.g., "Billing" in "ALBAFLOR - Billing")
+            if address_type_lower in addr_name_lower or addr_name_lower.replace("-", " ").replace("  ", " ").startswith(address_type_lower):
                 return addr.parent
         
         # Fallback: return first address
@@ -692,7 +703,8 @@ class SalesOrderFollowupAgent:
             # Find common fields (excluding standard fields we don't want to copy)
             standard_fields = ['name', 'parent', 'parenttype', 'parentfield', 'idx', 'docstatus',
                             'item_code', 'item_name', 'qty', 'rate', 'amount', 'warehouse',
-                            'delivery_date', 'against_sales_order', 'prevdoc_docname', 'description']
+                            'delivery_date', 'against_sales_order', 'prevdoc_docname', 'description',
+                            'ordered_qty', 'received_qty', 'billed_qty', 'delivered_qty', 'conversion_factor']
             
             copyable_fields = [f for f in so_item_fields 
                             if f in qt_item_fields and f not in standard_fields]
