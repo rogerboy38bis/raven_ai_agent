@@ -258,10 +258,12 @@ class SalesOrderFollowupAgent:
                         }]
                     })
                     addr.insert(ignore_permissions=True)
+                    si.customer_address = addr.name  # Use addr.name after insert
+                else:
+                    si.customer_address = addr_name
                 
-                # Set both addresses
-                si.customer_address = addr_name
-                si.billing_address = addr_name
+                # Set billing address same as customer address
+                si.billing_address = si.customer_address
             except Exception as e:
                 errors.append(f"Could not create verified address: {e}")
         
@@ -283,8 +285,25 @@ class SalesOrderFollowupAgent:
             si.mx_payment_option = "PPD"
         if not getattr(si, 'mode_of_payment', None):
             si.mode_of_payment = "Wire Transfer"
+        
+        # Ensure SI-level mx_product_service_key is set (fallback)
         if hasattr(si, 'mx_product_service_key') and not getattr(si, 'mx_product_service_key', None):
             si.mx_product_service_key = "84111506"
+        
+        # Set mx_product_service_key on all items (CFDI 4.0 mandatory)
+        if hasattr(si, 'items'):
+            for item in si.items:
+                if not getattr(item, 'mx_product_service_key', None):
+                    # Try to get from Item master first
+                    item_psk = frappe.get_value("Item", item.item_code, "mx_product_service_key")
+                    if item_psk:
+                        item.mx_product_service_key = item_psk
+                    elif hasattr(si, 'mx_product_service_key') and si.mx_product_service_key:
+                        # Fall back to SI-level key
+                        item.mx_product_service_key = si.mx_product_service_key
+                    else:
+                        # Hard fallback for Mexico CFDI
+                        item.mx_product_service_key = "84111506"
         
         # === 3. DEBIT TO (Account) ===
         if hasattr(si, 'debit_to') and si.debit_to:
