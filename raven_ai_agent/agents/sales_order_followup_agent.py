@@ -591,12 +591,17 @@ class SalesOrderFollowupAgent:
         Call this for existing SOs that are missing TDS/AMB data from their Quotations.
         
         Args:
-            so_name: Sales Order name
+            so_name: Sales Order name (supports intelligent matching)
         
         Returns:
             Dict with fix status
         """
         try:
+            # Intelligent SO lookup
+            found_so = self._find_sales_order_intelligent(so_name)
+            if found_so:
+                so_name = found_so
+            
             so = frappe.get_doc("Sales Order", so_name)
             
             # Find source Quotation
