@@ -290,20 +290,25 @@ class SalesOrderFollowupAgent:
                         si.mode_of_payment = mop
 
             # Set mxpaymentoption for Mexico CFDI compliance
-            if hasattr(si, "mxpaymentoption") and not si.mxpaymentoption:
-                if hasattr(si, "mode_of_payment") and si.mode_of_payment:
-                    # Map mode of payment to Mexican payment method catalog
-                    mop_name = si.mode_of_payment.lower()
-                    if "transfer" in mop_name or "spei" in mop_name:
-                        si.mxpaymentoption = "STP"
-                    elif "efectivo" in mop_name or "cash" in mop_name:
-                        si.mxpaymentoption = "01"
-                    elif "cheque" in mop_name:
-                        si.mxpaymentoption = "02"
-                    elif "tarjeta" in mop_name or "card" in mop_name:
-                        si.mxpaymentoption = "04"
+            # Try multiple possible field names
+            payment_option_field = None
+            for field_name in ["mxpaymentoption", "sat_payment_option", "sat_payment_option"]:
+                if hasattr(si, field_name) and not getattr(si, field_name, None):
+                    payment_option_field = field_name
+                    break
+            
+            if payment_option_field:
+                # Get available SAT Payment Options from the system
+                try:
+                    sat_options = frappe.get_all("SAT Payment Option", fields=["name"])
+                    if sat_options:
+                        # Use first available option
+                        si.set(payment_option_field, sat_options[0].name)
                     else:
-                        si.mxpaymentoption = "99"  # Others
+                        # Fallback to common Mexican payment methods
+                        si.set(payment_option_field, "99")  # Others
+                except Exception:
+                    si.set(payment_option_field, "99")  # Others
 
             si.insert(ignore_permissions=True)
             si.submit()
