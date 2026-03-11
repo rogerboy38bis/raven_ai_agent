@@ -20,6 +20,22 @@ doc_events = {
     }
 }
 
+# App lifecycle hooks
+def post_install():
+    """Create custom fields after app install"""
+    from raven_ai_agent.api.custom_fields import create_po_extraction_fields
+    create_po_extraction_fields()
+
+def app_install():
+    """Create custom fields on app install"""
+    from raven_ai_agent.api.custom_fields import create_po_extraction_fields
+    create_po_extraction_fields()
+
+def app_uninstall():
+    """Clean up custom fields on app uninstall"""
+    from raven_ai_agent.api.custom_fields import delete_po_extraction_fields
+    delete_po_extraction_fields()
+
 # Scheduler
 scheduler_events = {
     "daily": [
