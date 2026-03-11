@@ -600,7 +600,7 @@ class SalesOrderFollowupAgent:
             addresses = frappe.get_all("Dynamic Link",
                 filters={
                     "link_doctype": "Customer",
-                    "link_name": customer,
+                    "link_name": ["like", f"%{customer}%"],
                     "parenttype": "Address"
                 },
                 fields=["parent"],
@@ -608,7 +608,7 @@ class SalesOrderFollowupAgent:
             )
             return addresses[0].parent if addresses else None
         
-        # Get all addresses linked to this customer
+        # Get all addresses linked to this customer - try exact and partial match
         addresses = frappe.get_all("Dynamic Link",
             filters={
                 "link_doctype": "Customer",
@@ -630,17 +630,28 @@ class SalesOrderFollowupAgent:
             )
         
         if not addresses:
-            return None
+            # Last resort: search Address doctype directly by customer name in address_title
+            addresses = frappe.get_all("Address",
+                filters={
+                    "address_title": ["like", f"%{customer}%"]
+                },
+                fields=["name"],
+                limit=5
+            )
+            return addresses[0].name if addresses else None
         
         # Try to find address with matching type (flexible matching)
         for addr in addresses:
-            addr_doc = frappe.get_doc("Address", addr.parent)
-            addr_name_lower = addr_doc.address_title.lower() if addr_doc.address_title else ""
-            address_type_lower = address_type.lower()
-            
-            # Direct match or partial match (e.g., "Billing" in "ALBAFLOR - Billing")
-            if address_type_lower in addr_name_lower or addr_name_lower.replace("-", " ").replace("  ", " ").startswith(address_type_lower):
-                return addr.parent
+            try:
+                addr_doc = frappe.get_doc("Address", addr.parent)
+                addr_name_lower = addr_doc.address_title.lower() if addr_doc.address_title else ""
+                address_type_lower = address_type.lower()
+                
+                # Direct match or partial match
+                if address_type_lower in addr_name_lower or addr_name_lower.replace("-", " ").replace("  ", " ").startswith(address_type_lower):
+                    return addr.parent
+            except Exception:
+                continue
         
         # Fallback: return first address
         return addresses[0].parent if addresses else None
