@@ -617,38 +617,67 @@ class SalesOrderFollowupAgent:
             qt = frappe.get_doc("Quotation", quotation_name)
             frappe.logger().info(f"Raven AI: Fixing SO {so_name} from Quotation {quotation_name}")
             
-            # Copy addresses
-            if getattr(qt, 'customer_address', None):
-                so.customer_address = qt.customer_address
-            if getattr(qt, 'shipping_address_name', None):
-                so.shipping_address_name = qt.shipping_address_name
-            if getattr(qt, 'billing_address', None):
-                so.billing_address = qt.billing_address
-            
-            # Copy item custom fields
-            so_meta_item = frappe.get_meta("Sales Order Item")
-            item_custom_fields = [d.fieldname for d in so_meta_item.fields 
-                                 if d.fieldname and (d.fieldname.startswith('tds_') or 
-                                                   d.fieldname.startswith('amb_'))]
-            
             fixed_count = 0
+            
+            # 1. COPY ADDRESSES - ONLY for draft SOs (submitted SOs can't change addresses)
+            if so.docstatus == 0:
+                if getattr(qt, 'customer_address', None):
+                    so.customer_address = qt.customer_address
+                    fixed_count += 1
+                if getattr(qt, 'shipping_address_name', None):
+                    so.shipping_address_name = qt.shipping_address_name
+                    fixed_count += 1
+                if getattr(qt, 'billing_address', None):
+                    so.billing_address = qt.billing_address
+                    fixed_count += 1
+            else:
+                frappe.logger().info(f"Raven AI: SO {so_name} is submitted, skipping address updates")
+            
+            # 2. COPY ITEM CUSTOM FIELDS - Works for both draft and submitted
+            # Get ALL fields from SO Item that exist on Quotation Item (not just custom fields)
+            so_item_fields = [d.fieldname for d in frappe.get_meta("Sales Order Item").fields]
+            qt_item_fields = [d.fieldname for d in frappe.get_meta("Quotation Item").fields]
+            
+            # Find common fields (excluding standard fields we don't want to copy)
+            standard_fields = ['name', 'parent', 'parenttype', 'parentfield', 'idx', 'docstatus',
+                            'item_code', 'item_name', 'qty', 'rate', 'amount', 'warehouse',
+                            'delivery_date', 'against_sales_order', 'prevdoc_docname', 'description']
+            
+            copyable_fields = [f for f in so_item_fields 
+                            if f in qt_item_fields and f not in standard_fields]
+            
+            frappe.logger().info(f"Raven AI: Copyable fields: {copyable_fields}")
+            
             for so_item in so.items:
                 for qt_item in qt.items:
+                    # Match by item_code
                     if qt_item.item_code == so_item.item_code:
-                        for field in item_custom_fields:
-                            if hasattr(qt_item, field) and hasattr(so_item, field):
-                                qt_value = getattr(qt_item, field)
-                                if qt_value and not getattr(so_item, field, None):
+                        for field in copyable_fields:
+                            qt_value = getattr(qt_item, field, None)
+                            if qt_value and str(qt_value).strip():
+                                current_value = getattr(so_item, field, None)
+                                if not current_value or not str(current_value).strip():
                                     setattr(so_item, field, qt_value)
                                     fixed_count += 1
+                                    frappe.logger().info(f"Raven AI: Copied {field} = {qt_value} for {so_item.item_code}")
                         break
             
-            so.save(ignore_permissions=True)
-            frappe.db.commit()
+            # Save if there are changes (only for draft SOs)
+            if so.docstatus == 0:
+                if fixed_count > 0:
+                    so.save(ignore_permissions=True)
+                    frappe.db.commit()
+            else:
+                # For submitted SOs, we can only update items (not header)
+                if fixed_count > 0:
+                    # Update each item directly
+                    for so_item in so.items:
+                        so_item.save(ignore_permissions=True)
+                    frappe.db.commit()
             
             return {
                 "success": True,
-                "message": f"✅ Fixed {so_name}: {fixed_count} item fields updated from {quotation_name}"
+                "message": f"✅ Fixed {so_name}: {fixed_count} fields updated from {quotation_name}"
             }
             
         except Exception as e:
