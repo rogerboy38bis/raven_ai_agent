@@ -307,7 +307,7 @@ class SalesOrderFollowupAgent:
                     si.customer_address = addr
             
             # Try to set mx_product_service_key if missing
-            if not getattr(si, 'mx_product_service_key', None):
+            if hasattr(si, 'mx_product_service_key') and not getattr(si, 'mx_product_service_key', None):
                 # Get from company defaults
                 si.mx_product_service_key = "84111506"  # Servicios de consultoría de gestión empresarial
 
@@ -354,6 +354,49 @@ class SalesOrderFollowupAgent:
                             )
                             if valid_accounts:
                                 si.debit_to = valid_accounts[0].name
+
+            # Fix cost_center: ensure it's a valid non-group cost center
+            if hasattr(si, 'cost_center') and si.cost_center:
+                try:
+                    cc = frappe.get_doc("Cost Center", si.cost_center)
+                    if cc.is_group:
+                        # Find a valid non-group cost center for this company
+                        valid_ccs = frappe.db.get_all("Cost Center",
+                            filters={
+                                "company": si.company,
+                                "is_group": 0
+                            },
+                            fields=["name"],
+                            limit=1
+                        )
+                        if valid_ccs:
+                            si.cost_center = valid_ccs[0].name
+                except Exception:
+                    pass  # If cost_center doesn't exist, let it fail naturally
+
+            # Fix customer_address: ensure it belongs to customer
+            if hasattr(si, 'customer_address') and si.customer_address:
+                try:
+                    addr_doc = frappe.get_doc("Address", si.customer_address)
+                    if addr_doc.customer and addr_doc.customer != so.customer:
+                        # Address doesn't belong to this customer, clear it
+                        si.customer_address = None
+                except Exception:
+                    pass
+            
+            # Set default customer_address if missing
+            if not getattr(si, 'customer_address', None):
+                # Try to get address from SO's customer
+                addr_list = frappe.get_all("Dynamic Link",
+                    filters={"link_doctype": "Customer", "link_name": so.customer},
+                    fields=["parent"]
+                )
+                if addr_list:
+                    si.customer_address = addr_list[0].parent
+            
+            # Set default billing_address if missing
+            if not getattr(si, 'billing_address', None):
+                si.billing_address = getattr(si, 'customer_address', None)
 
             si.insert(ignore_permissions=True)
             si.submit()
