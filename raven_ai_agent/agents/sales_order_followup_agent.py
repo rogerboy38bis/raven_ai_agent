@@ -389,31 +389,44 @@ class SalesOrderFollowupAgent:
                 except Exception:
                     pass
             
-            # Set default customer_address if missing
+            # Set default customer_address if missing - FOLLOW THE TRUTH HIERARCHY
             if not getattr(si, 'customer_address', None):
-                # Try to get address from SO's customer via Dynamic Link
-                addr_list = frappe.get_all("Dynamic Link",
-                    filters={"link_doctype": "Customer", "link_name": so.customer, "parenttype": "Address"},
-                    fields=["parent"],
-                    limit=5
+                # 1. Get address from Quotation (truth source)
+                qo_items = frappe.get_all("Sales Order Item",
+                    filters={"parent": so_name, "parenttype": "Sales Order"},
+                    fields=["prevdoc_docname"]
                 )
-                if addr_list:
-                    si.customer_address = addr_list[0].parent
-                else:
-                    # Try to get address from Delivery Note if from_dn=True
-                    if from_dn:
-                        dns = frappe.get_all("Delivery Note Item",
-                            filters={"against_sales_order": so_name, "docstatus": 1},
-                            fields=["parent"], distinct=True)
-                        if dns:
-                            dn = frappe.get_doc("Delivery Note", dns[0].parent)
-                            if getattr(dn, 'customer_address', None):
-                                si.customer_address = dn.customer_address
-                            elif getattr(dn, 'shipping_address_name', None):
-                                si.customer_address = dn.shipping_address_name
-                    
-                    # Last resort: create minimal address if still missing
-                    if not getattr(si, 'customer_address', None):
+                if qo_items and qo_items[0].prevdoc_docname:
+                    qo = frappe.get_doc("Quotation", qo_items[0].prevdoc_docname)
+                    if getattr(qo, 'customer_address', None):
+                        si.customer_address = qo.customer_address
+                    elif getattr(qo, 'billing_address', None):
+                        si.billing_address = qo.billing_address
+                
+                # 2. Try to get address from SO's customer via Dynamic Link
+                if not getattr(si, 'customer_address', None):
+                    addr_list = frappe.get_all("Dynamic Link",
+                        filters={"link_doctype": "Customer", "link_name": so.customer, "parenttype": "Address"},
+                        fields=["parent"],
+                        limit=5
+                    )
+                    if addr_list:
+                        si.customer_address = addr_list[0].parent
+                
+                # 3. Try to get address from Delivery Note if from_dn=True
+                if not getattr(si, 'customer_address', None) and from_dn:
+                    dns = frappe.get_all("Delivery Note Item",
+                        filters={"against_sales_order": so_name, "docstatus": 1},
+                        fields=["parent"], distinct=True)
+                    if dns:
+                        dn = frappe.get_doc("Delivery Note", dns[0].parent)
+                        if getattr(dn, 'customer_address', None):
+                            si.customer_address = dn.customer_address
+                        elif getattr(dn, 'shipping_address_name', None):
+                            si.customer_address = dn.shipping_address_name
+                
+                # 4. Last resort: create minimal address if still missing
+                if not getattr(si, 'customer_address', None):
                         try:
                             # Create a minimal address for the customer
                             addr_name = f"{so.customer}-Auto"
