@@ -276,6 +276,7 @@ class SalesOrderFollowupAgent:
 
             # SMART FIX: Use existing CFDI discovery function for all Mexico fields
             # This ensures consistency with sales.py and handles all CFDI requirements
+            cfdi_fields = {}
             try:
                 from raven_ai_agent.api.truth_hierarchy import resolve_mx_cfdi_fields
                 cfdi_fields = resolve_mx_cfdi_fields(so, so.customer, so.transaction_date, so.credit_days)
@@ -285,10 +286,30 @@ class SalesOrderFollowupAgent:
                     if hasattr(si, field):
                         setattr(si, field, value)
             except Exception as e:
-                # Fallback: set critical fields manually if CFDI resolution fails
+                # Log the error but continue with fallback
                 frappe.logger().warning(f"CFDI resolution failed, using fallback: {e}")
-                if hasattr(si, "mx_cfdi_use"):
-                    si.mx_cfdi_use = "G03"  # Gastos en general
+            
+            # FALLBACK: Ensure critical MX fields are always set
+            if not getattr(si, 'mx_cfdi_use', None):
+                si.mx_cfdi_use = "G03"  # Gastos en general
+            
+            if not getattr(si, 'mx_payment_option', None):
+                si.mx_payment_option = "PPD"  # Pago en parcialidades
+            
+            if not getattr(si, 'mode_of_payment', None):
+                si.mode_of_payment = "Wire Transfer"
+            
+            # Try to set customer_address if missing
+            if not getattr(si, 'customer_address', None):
+                # Get primary address from customer
+                addr = frappe.get_value("Customer", so.customer, "primary_address")
+                if addr:
+                    si.customer_address = addr
+            
+            # Try to set mx_product_service_key if missing
+            if not getattr(si, 'mx_product_service_key', None):
+                # Get from company defaults
+                si.mx_product_service_key = "84111506"  # Servicios de consultoría de gestión empresarial
 
             # Fix debit_to: ensure it's a valid Receivable ledger (not a Group account)
             if hasattr(si, 'debit_to') and si.debit_to:
