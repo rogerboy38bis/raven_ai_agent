@@ -1003,11 +1003,14 @@ class SalesMixin:
                             so.currency,
                             so.status
                         FROM `tabSales Order` so
-                        INNER JOIN `tabDelivery Note` dn ON dn.against_sales_order = so.name AND dn.docstatus = 1
-                        LEFT JOIN `tabSales Invoice` si ON si.sales_order = so.name AND si.docstatus = 1
+                        INNER JOIN `tabDelivery Note Item` dni ON dni.against_sales_order = so.name AND dni.docstatus = 1
+                        INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent AND dn.docstatus = 1
+                        LEFT JOIN `tabSales Invoice Item` sii ON sii.sales_order = so.name AND sii.docstatus = 1
+                        LEFT JOIN `tabSales Invoice` si ON si.name = sii.parent AND si.docstatus = 1
                         WHERE so.status = 'To Bill'
                           AND so.docstatus = 1
                           AND si.name IS NULL
+                        GROUP BY so.name
                         ORDER BY so.grand_total DESC
                         LIMIT 20
                     """, as_dict=True)
