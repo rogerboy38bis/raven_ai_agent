@@ -585,6 +585,42 @@ class SalesOrderFollowupAgent:
         except Exception as e:
             return {"success": False, "error": f"Error creating SO from Quotation: {str(e)}"}
     
+    def _find_address_for_customer(self, customer: str, address_type: str = "Billing") -> Optional[str]:
+        """Intelligently find an address for a customer.
+        
+        Args:
+            customer: Customer name
+            address_type: Type of address (Billing, Shipping, etc.)
+        
+        Returns:
+            Address name if found, None otherwise
+        """
+        # Get all addresses linked to this customer
+        addresses = frappe.get_all("Dynamic Link",
+            filters={
+                "link_doctype": "Customer",
+                "link_name": customer,
+                "parenttype": "Address"
+            },
+            fields=["parent"]
+        )
+        
+        if not addresses:
+            return None
+        
+        # Try to find address with matching type
+        for addr in addresses:
+            addr_doc = frappe.get_doc("Address", addr.parent)
+            addr_name_lower = addr_doc.address_title.lower() if addr_doc.address_title else ""
+            address_type_lower = address_type.lower()
+            
+            # Direct match
+            if address_type_lower in addr_name_lower:
+                return addr.parent
+        
+        # Fallback: return first address
+        return addresses[0].parent if addresses else None
+    
     def fix_so_from_quotation(self, so_name: str) -> Dict:
         """Fix missing fields on Sales Order from source Quotation (migration fix).
         
@@ -621,15 +657,30 @@ class SalesOrderFollowupAgent:
             
             # 1. COPY ADDRESSES - ONLY for draft SOs (submitted SOs can't change addresses)
             if so.docstatus == 0:
-                if getattr(qt, 'customer_address', None):
-                    so.customer_address = qt.customer_address
-                    fixed_count += 1
-                if getattr(qt, 'shipping_address_name', None):
-                    so.shipping_address_name = qt.shipping_address_name
-                    fixed_count += 1
-                if getattr(qt, 'billing_address', None):
-                    so.billing_address = qt.billing_address
-                    fixed_count += 1
+                address_fields_to_copy = [
+                    ('customer_address', 'customer_address'),
+                    ('shipping_address_name', 'shipping_address_name'),
+                    ('billing_address', 'billing_address')
+                ]
+                
+                for qt_field, so_field in address_fields_to_copy:
+                    qt_value = getattr(qt, qt_field, None)
+                    if qt_value and str(qt_value).strip():
+                        # Check if address exists
+                        if frappe.db.exists("Address", qt_value):
+                            setattr(so, so_field, qt_value)
+                            fixed_count += 1
+                            frappe.logger().info(f"Raven AI: Copied {so_field} = {qt_value} (exact match)")
+                        else:
+                            # Intelligent fallback: find address by customer and type
+                            address_type = "Billing" if "billing" in qt_field.lower() else "Shipping"
+                            fallback_addr = self._find_address_for_customer(so.customer, address_type)
+                            if fallback_addr:
+                                setattr(so, so_field, fallback_addr)
+                                fixed_count += 1
+                                frappe.logger().info(f"Raven AI: Copied {so_field} = {fallback_addr} (intelligent fallback for missing {qt_value})")
+                            else:
+                                frappe.logger().warning(f"Raven AI: Address '{qt_value}' not found for customer {so.customer}, skipping")
             else:
                 frappe.logger().info(f"Raven AI: SO {so_name} is submitted, skipping address updates")
             
