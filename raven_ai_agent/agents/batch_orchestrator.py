@@ -138,6 +138,7 @@ class BatchOrchestrator:
         """
         # Find SOs with DN but no SI - include ALL statuses (including Completed)
         # The status filter was too restrictive - some SOs are completed but still need invoicing
+        # IMPORTANT: Don't limit here - we filter by DN/SO existence next which is the real filter
         sos = frappe.get_all("Sales Order",
             filters={
                 "docstatus": 1,
@@ -145,7 +146,7 @@ class BatchOrchestrator:
             },
             fields=["name", "customer_name", "grand_total", "currency", "status"],
             order_by="grand_total desc",
-            limit=limit * 2  # Get more since we'll filter
+            limit=500  # Get many SOs to filter
         )
         
         # Filter: must have DN and no SI
