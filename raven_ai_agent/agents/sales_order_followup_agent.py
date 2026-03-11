@@ -435,16 +435,21 @@ class SalesOrderFollowupAgent:
                 # 4. Last resort: create minimal address if still missing
                 if not getattr(si, 'customer_address', None):
                     try:
-                        # Create a minimal address for the customer
+                        # Create a minimal address for the customer with ALL required fields
                         addr_name = f"{so.customer}-Auto"
                         if not frappe.db.exists("Address", addr_name):
                             addr = frappe.get_doc({
                                 "doctype": "Address",
                                 "address_title": so.customer,
                                 "address_type": "Billing",
+                                "address_line1": "Auto Generated Address",
+                                "city": "Mexico City",
+                                "pincode": "00000",
+                                "email_id": "billing@autogen.com",
                                 "phone": "+1234567890",
                                 "customer": so.customer,
-                                "company": si.company
+                                "company": si.company,
+                                "country": "Mexico"
                             })
                             addr.insert(ignore_permissions=True)
                             si.customer_address = addr.name
