@@ -63,20 +63,49 @@ class SalesOrderFollowupAgent:
         # === 1. ADDRESS RESOLUTION (Truth Hierarchy) ===
         # Priority: Quotation → Customer → Delivery Note → Auto-create
         if not getattr(si, 'customer_address', None):
-            # 1a. Get from Quotation (truth source)
+            # 1a. Get from Quotation (truth source) - Enhanced detection
+            # First try: prevdoc_docname (standard link)
+            quotation_name = None
+            
+            # Method 1: Check prevdoc_docname in Sales Order Items
             qo_items = frappe.get_all("Sales Order Item",
                 filters={"parent": so_name, "parenttype": "Sales Order"},
                 fields=["prevdoc_docname"]
             )
             if qo_items and qo_items[0].prevdoc_docname:
+                quotation_name = qo_items[0].prevdoc_docname
+            
+            # Method 2: Check if SO has a directly linked Quotation
+            if not quotation_name:
+                linked_quotations = frappe.get_all("Dynamic Link",
+                    filters={
+                        "link_doctype": "Sales Order",
+                        "link_name": so_name,
+                        "parenttype": "Quotation"
+                    },
+                    fields=["parent"]
+                )
+                if linked_quotations:
+                    quotation_name = linked_quotations[0].parent
+            
+            # Now get addresses from the found Quotation
+            if quotation_name:
                 try:
-                    qo = frappe.get_doc("Quotation", qo_items[0].prevdoc_docname)
+                    qo = frappe.get_doc("Quotation", quotation_name)
+                    frappe.logger().info(f"Raven AI: Found Quotation {quotation_name} for SO {so_name}")
+                    
+                    # Priority: customer_address > billing_address > shipping_address
                     if getattr(qo, 'customer_address', None):
                         si.customer_address = qo.customer_address
+                        frappe.logger().info(f"Raven AI: Got customer_address from Quotation: {qo.customer_address}")
                     elif getattr(qo, 'billing_address', None):
                         si.billing_address = qo.billing_address
-                except:
-                    pass
+                        frappe.logger().info(f"Raven AI: Got billing_address from Quotation: {qo.billing_address}")
+                    elif getattr(qo, 'shipping_address_name', None):
+                        si.customer_address = qo.shipping_address_name
+                        frappe.logger().info(f"Raven AI: Got shipping_address from Quotation: {qo.shipping_address_name}")
+                except Exception as e:
+                    frappe.logger().warning(f"Raven AI: Could not get Quotation {quotation_name}: {e}")
             
             # 1b. Get from Customer's Dynamic Link
             if not getattr(si, 'customer_address', None):
@@ -99,27 +128,43 @@ class SalesOrderFollowupAgent:
                     elif getattr(dn, 'shipping_address_name', None):
                         si.customer_address = dn.shipping_address_name
             
-            # 1d. Auto-create address with ALL required fields
+            # 1d. Auto-create address with ALL required fields AND Dynamic Links
             if not getattr(si, 'customer_address', None):
                 try:
-                    addr_name = f"{so.customer}-Auto"
+                    addr_name = f"{so.customer}-Auto-Billing"
                     if not frappe.db.exists("Address", addr_name):
                         addr = frappe.get_doc({
                             "doctype": "Address",
                             "address_title": so.customer,
                             "address_type": "Billing",
-                            "address_line1": "Auto Generated",
+                            "address_line1": "Auto Generated Address",
+                            "address_line2": "For Invoice Creation",
                             "city": "Mexico City",
                             "pincode": "00000",
                             "email_id": "billing@autogen.com",
                             "phone": "+1234567890",
-                            "customer": so.customer,
                             "company": si.company,
-                            "country": "Mexico"
+                            "country": "Mexico",
+                            "links": [{
+                                "link_doctype": "Customer",
+                                "link_name": so.customer,
+                                "link_title": so.customer
+                            }]
                         })
                         addr.insert(ignore_permissions=True)
                         si.customer_address = addr.name
                     else:
+                        # Verify the existing address has the Dynamic Link
+                        addr = frappe.get_doc("Address", addr_name)
+                        has_link = any(l.link_doctype == "Customer" and l.link_name == so.customer for l in addr.links)
+                        if not has_link:
+                            # Add the link
+                            addr.append("links", {
+                                "link_doctype": "Customer",
+                                "link_name": so.customer,
+                                "link_title": so.customer
+                            })
+                            addr.save(ignore_permissions=True)
                         si.customer_address = addr_name
                 except Exception as e:
                     errors.append(f"Could not create address: {e}")
@@ -127,6 +172,54 @@ class SalesOrderFollowupAgent:
         # Set billing_address from customer_address
         if not getattr(si, 'billing_address', None):
             si.billing_address = getattr(si, 'customer_address', None)
+        
+        # FINAL VALIDATION: Ensure both addresses are linked to the customer
+        # ERPNext validates that addresses belong to the customer
+        for addr_field in ['customer_address', 'billing_address']:
+            addr_name = getattr(si, addr_field, None)
+            if addr_name:
+                # Verify this address has a Dynamic Link to the customer
+                is_linked = frappe.db.exists("Dynamic Link", {
+                    "parent": addr_name,
+                    "parenttype": "Address",
+                    "link_doctype": "Customer",
+                    "link_name": so.customer
+                })
+                if not is_linked:
+                    # Clear the invalid address - let it auto-create below
+                    setattr(si, addr_field, None)
+        
+        # If addresses are still missing after validation, create them
+        if not getattr(si, 'customer_address', None):
+            # Create a proper address with Dynamic Link
+            try:
+                addr_name = f"{so.customer}-Verified-Billing"
+                if not frappe.db.exists("Address", addr_name):
+                    addr = frappe.get_doc({
+                        "doctype": "Address",
+                        "address_title": so.customer,
+                        "address_type": "Billing",
+                        "address_line1": "Verified Billing Address",
+                        "address_line2": "Auto-created by Raven AI",
+                        "city": "Mexico City",
+                        "pincode": "00000",
+                        "email_id": "billing@autogen.com",
+                        "phone": "+1234567890",
+                        "company": si.company,
+                        "country": "Mexico",
+                        "links": [{
+                            "link_doctype": "Customer",
+                            "link_name": so.customer,
+                            "link_title": so.customer
+                        }]
+                    })
+                    addr.insert(ignore_permissions=True)
+                
+                # Set both addresses
+                si.customer_address = addr_name
+                si.billing_address = addr_name
+            except Exception as e:
+                errors.append(f"Could not create verified address: {e}")
         
         # === 2. MX CFDI FIELDS ===
         # Use truth hierarchy for CFDI fields
@@ -374,6 +467,23 @@ class SalesOrderFollowupAgent:
                     return {"success": True, "message": f"✅ SO {self.make_link('Sales Order', so_name)} is already fully billed."}
             except Exception:
                 pass  # Ignore billing_status errors
+
+            # Also check per_billed (percentage billed)
+            try:
+                if hasattr(so, 'per_billed') and so.per_billed >= 100:
+                    return {"success": True, "message": f"✅ SO {self.make_link('Sales Order', so_name)} is already fully billed ({so.per_billed}%)."}
+            except Exception:
+                pass
+            
+            # Also check if there are any Sales Invoice Items linked to this SO
+            existing_si_items = frappe.get_all("Sales Invoice Item",
+                filters={"sales_order": so_name, "docstatus": ["!=", 2]},
+                fields=["parent"], distinct=True)
+            if existing_si_items:
+                return {
+                    "success": True,
+                    "message": f"✅ SO {self.make_link('Sales Order', so_name)} already has {len(existing_si_items)} invoice(s)."
+                }
 
             si = None
 
