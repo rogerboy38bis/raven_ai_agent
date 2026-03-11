@@ -295,13 +295,20 @@ class SalesOrderFollowupAgent:
                 # Check if current debit_to is a group account
                 acct = frappe.get_doc("Account", si.debit_to)
                 if acct.is_group:
-                    # Use Frappe's built-in function to get default receivable account
-                    from erpnext.controllers.accounts_controller import get_default_receivable_account
-                    default_receivable = get_default_receivable_account(si.company)
+                    # Try to get default receivable account using frappe's get_value
+                    default_receivable = frappe.get_value(
+                        "Company", 
+                        si.company, 
+                        "default_receivable_account"
+                    )
                     
                     if default_receivable:
-                        si.debit_to = default_receivable
-                    else:
+                        # Verify it's not a group account
+                        check_acct = frappe.get_doc("Account", default_receivable)
+                        if not check_acct.is_group:
+                            si.debit_to = default_receivable
+                    
+                    if acct.is_group:  # Check again in case default worked
                         # Fallback: find a valid leaf receivable account for this company
                         valid_accounts = frappe.db.get_all("Account", 
                             filters={
