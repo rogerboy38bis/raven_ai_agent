@@ -136,30 +136,36 @@ class BatchOrchestrator:
         2. Use existing invoice creation logic
         3. Report results
         """
-        from raven_ai_agent.api.sales import SalesMixin
+        # Find SOs with DN but no SI using frappe.get_all (handles field names correctly)
+        # First get all submitted SOs with status "To Bill" or "To Deliver and Bill"
+        sos = frappe.get_all("Sales Order",
+            filters={
+                "docstatus": 1,
+                "status": ["in", ["To Bill", "To Deliver and Bill"]]
+            },
+            fields=["name", "customer_name", "grand_total", "currency", "status"],
+            order_by="grand_total desc",
+            limit=limit
+        )
         
-        sales_mixin = SalesMixin()
-        
-        # Find SOs with DN but no SI
-        ordenes = frappe.db.sql("""
-            SELECT 
-                so.name,
-                so.customer_name,
-                so.grand_total,
-                so.currency,
-                so.status
-            FROM `tabSales Order` so
-            INNER JOIN `tabDelivery Note Item` dni ON dni.against_sales_order = so.name AND dni.docstatus = 1
-            INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent AND dn.docstatus = 1
-            LEFT JOIN `tabSales Invoice Item` sii ON sii.sales_order = so.name AND sii.docstatus = 1
-            LEFT JOIN `tabSales Invoice` si ON si.name = sii.parent AND si.docstatus = 1
-            WHERE so.docstatus = 1
-              AND so.status IN ('To Bill', 'To Deliver and Bill')
-              AND si.name IS NULL
-            GROUP BY so.name
-            ORDER BY so.grand_total DESC
-            LIMIT %s
-        """, (limit,), as_dict=True)
+        # Filter: must have DN and no SI
+        ordenes = []
+        for so in sos:
+            # Check if has DN
+            dns = frappe.get_all("Delivery Note Item",
+                filters={"against_sales_order": so.name, "docstatus": 1},
+                fields=["parent"], distinct=True)
+            if not dns:
+                continue
+            
+            # Check if already has SI
+            sis = frappe.get_all("Sales Invoice Item",
+                filters={"sales_order": so.name, "docstatus": ["!=", 2]},
+                fields=["parent"], distinct=True)
+            if sis:
+                continue
+            
+            ordenes.append(so)
         
         if not ordenes:
             return {
