@@ -230,17 +230,12 @@ class SalesOrderFollowupAgent:
             if so.docstatus != 1:
                 return {"success": False, "error": f"Sales Order '{so_name}' must be submitted first."}
 
-            # Safe check: is this SO already fully billed?
-            # Use frappe.get_all instead of .billing_status which may not exist
-            existing_sis = frappe.get_all("Sales Invoice Item",
-                filters={"sales_order": so_name, "docstatus": ["!=", 2]},
-                fields=["parent"], distinct=True)
-            if existing_sis:
-                # Check if billed amount >= order amount
-                billed_amt = so.billed_amt or 0
-                grand_total = so.grand_total or 0
-                if billed_amt >= grand_total:
+            # Safe check: use billing_status if available
+            try:
+                if hasattr(so, 'billing_status') and so.billing_status == "Fully Billed":
                     return {"success": True, "message": f"✅ SO {self.make_link('Sales Order', so_name)} is already fully billed."}
+            except Exception:
+                pass  # Ignore billing_status errors
 
             si = None
 
@@ -353,7 +348,9 @@ class SalesOrderFollowupAgent:
         except frappe.DoesNotExistError:
             return {"success": False, "error": f"Sales Order '{so_name}' not found."}
         except Exception as e:
-            return {"success": False, "error": f"Error creating Sales Invoice: {str(e)}"}
+            import traceback
+            frappe.logger().error(f"Error creating SI for {so_name}: {traceback.format_exc()}")
+            return {"success": False, "error": f"Error creating Sales Invoice: {str(e)}\n\nDetails: {traceback.format_exc()[:500]}"}
 
     # ========== ORIGINAL METHODS (preserved) ==========
 
