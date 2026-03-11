@@ -22,6 +22,7 @@ Backward compatibility:
 """
 import frappe
 import json
+import re
 from typing import Optional, Dict, List
 from openai import OpenAI
 
