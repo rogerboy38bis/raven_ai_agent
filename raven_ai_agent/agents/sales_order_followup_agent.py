@@ -687,6 +687,18 @@ class SalesOrderFollowupAgent:
         if "help" in message_lower or "capabilities" in message_lower:
             return self._help_text()
 
+        # ---- BATCH CREATE SALES INVOICES (for To Bill orders) ----
+        if "batch" in message_lower and ("invoice" in message_lower or "factura" in message_lower):
+            if "to bill" in message_lower or "pending invoice" in message_lower:
+                from raven_ai_agent.api.sales import SalesMixin
+                mixin = SalesMixin()
+                result = mixin._handle_sales_commands(message, message_lower, is_confirm=True)
+                if result and result.get("message"):
+                    return result["message"]
+                elif result and result.get("error"):
+                    return f"❌ Error: {result['error']}"
+                return "✅ No hay órdenes 'To Bill' pendientes de facturar."
+
         # ---- CREATE SO FROM QUOTATION (NEW) ----
         if ("create" in message_lower and "from" in message_lower
                 and ("quotation" in message_lower or "qtn" in message_lower)):
