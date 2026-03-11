@@ -285,9 +285,7 @@ class SalesOrderFollowupAgent:
                     si.mode_of_payment = customer.custom_default_payment_method
                 else:
                     # Get first available Mode of Payment from system
-                    mop = frappe.db.get_value("Mode of Payment", {"is_active": 1, "is_cash": 1}, "name")
-                    if not mop:
-                        mop = frappe.db.get_value("Mode of Payment", {"is_active": 1}, "name")
+                    mop = frappe.db.get_value("Mode of Payment", {}, "name", order_by="name")
                     if mop:
                         si.mode_of_payment = mop
 
