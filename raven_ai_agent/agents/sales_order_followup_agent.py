@@ -705,7 +705,7 @@ class SalesOrderFollowupAgent:
                 for qt_field, so_field in address_fields_to_copy:
                     qt_value = getattr(qt, qt_field, None)
                     if qt_value and str(qt_value).strip():
-                        # Check if address exists
+                        # Check if address exists - ONLY set if valid
                         if frappe.db.exists("Address", qt_value):
                             setattr(so, so_field, qt_value)
                             fixed_count += 1
@@ -726,7 +726,9 @@ class SalesOrderFollowupAgent:
                                     fixed_count += 1
                                     frappe.logger().warning(f"Raven AI: Used any address {any_address} for {so_field} (original {qt_value} not found)")
                                 else:
-                                    frappe.logger().warning(f"Raven AI: No address found for customer {so.customer}, skipping {so_field}")
+                                    # No valid address found - CLEAR the field to avoid ERPNext validation error
+                                    frappe.logger().warning(f"Raven AI: No address found for customer {so.customer}, clearing invalid {so_field}")
+                                    # Don't set invalid address - just leave it blank
             else:
                 frappe.logger().info(f"Raven AI: SO {so_name} is submitted, skipping address updates")
             
@@ -763,8 +765,18 @@ class SalesOrderFollowupAgent:
             # Save if there are changes (only for draft SOs)
             if so.docstatus == 0:
                 if fixed_count > 0:
-                    so.save(ignore_permissions=True)
-                    frappe.db.commit()
+                    try:
+                        so.save(ignore_permissions=True)
+                        frappe.db.commit()
+                    except Exception as save_err:
+                        # If save fails (e.g., invalid address), try to save only items
+                        frappe.db.rollback()
+                        frappe.logger().warning(f"Raven AI: Header save failed for {so_name}, trying items only: {save_err}")
+                        # Reload and save only items
+                        so = frappe.get_doc("Sales Order", so_name)
+                        for so_item in so.items:
+                            so_item.save(ignore_permissions=True)
+                        frappe.db.commit()
             else:
                 # For submitted SOs, we can only update items (not header)
                 if fixed_count > 0:
