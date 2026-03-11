@@ -305,11 +305,6 @@ class SalesOrderFollowupAgent:
                 addr = frappe.get_value("Customer", so.customer, "primary_address")
                 if addr:
                     si.customer_address = addr
-            
-            # Try to set mx_product_service_key if missing
-            if hasattr(si, 'mx_product_service_key') and not getattr(si, 'mx_product_service_key', None):
-                # Get from company defaults
-                si.mx_product_service_key = "84111506"  # Servicios de consultoría de gestión empresarial
 
             # Fix debit_to: ensure it's a valid Receivable ledger (not a Group account)
             if hasattr(si, 'debit_to') and si.debit_to:
@@ -384,12 +379,23 @@ class SalesOrderFollowupAgent:
                 except Exception:
                     pass
             
+            # Fix billing_address: ensure it belongs to customer
+            if hasattr(si, 'billing_address') and si.billing_address:
+                try:
+                    addr_doc = frappe.get_doc("Address", si.billing_address)
+                    if addr_doc.customer and addr_doc.customer != so.customer:
+                        # Address doesn't belong to this customer, clear it
+                        si.billing_address = None
+                except Exception:
+                    pass
+            
             # Set default customer_address if missing
             if not getattr(si, 'customer_address', None):
-                # Try to get address from SO's customer
+                # Try to get address from SO's customer via Dynamic Link
                 addr_list = frappe.get_all("Dynamic Link",
-                    filters={"link_doctype": "Customer", "link_name": so.customer},
-                    fields=["parent"]
+                    filters={"link_doctype": "Customer", "link_name": so.customer, "parenttype": "Address"},
+                    fields=["parent"],
+                    limit=5
                 )
                 if addr_list:
                     si.customer_address = addr_list[0].parent
@@ -397,6 +403,11 @@ class SalesOrderFollowupAgent:
             # Set default billing_address if missing
             if not getattr(si, 'billing_address', None):
                 si.billing_address = getattr(si, 'customer_address', None)
+            
+            # Force set mx_product_service_key if field exists
+            if hasattr(si, 'mx_product_service_key'):
+                if not getattr(si, 'mx_product_service_key', None):
+                    si.mx_product_service_key = "84111506"
 
             si.insert(ignore_permissions=True)
             si.submit()
