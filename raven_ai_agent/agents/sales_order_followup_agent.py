@@ -296,12 +296,12 @@ class SalesOrderFollowupAgent:
                 acct = frappe.get_doc("Account", si.debit_to)
                 if acct.is_group:
                     # Find a valid leaf receivable account for this company
+                    # Note: currency field doesn't exist on Account doctype, so we don't filter by it
                     valid_accounts = frappe.db.get_all("Account", 
                         filters={
                             "company": si.company,
                             "account_type": "Receivable",
-                            "is_group": 0,
-                            "currency": si.currency
+                            "is_group": 0
                         },
                         fields=["name"],
                         limit=1
@@ -309,11 +309,10 @@ class SalesOrderFollowupAgent:
                     if valid_accounts:
                         si.debit_to = valid_accounts[0].name
                     else:
-                        # Try without currency filter
+                        # Try to find any non-group account for this company
                         valid_accounts = frappe.db.get_all("Account",
                             filters={
                                 "company": si.company,
-                                "account_type": "Receivable",
                                 "is_group": 0
                             },
                             fields=["name"],
