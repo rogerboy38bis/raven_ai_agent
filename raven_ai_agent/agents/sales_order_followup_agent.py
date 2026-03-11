@@ -396,17 +396,17 @@ class SalesOrderFollowupAgent:
                     filters={"parent": so_name, "parenttype": "Sales Order"},
                     fields=["prevdoc_docname"]
                 )
-                frappe.logger().warning(f"DEBUG: qo_items for {so_name}: {qo_items}")
+                print(f"DEBUG: qo_items for {so_name}: {qo_items}")
                 if qo_items and qo_items[0].prevdoc_docname:
                     try:
                         qo = frappe.get_doc("Quotation", qo_items[0].prevdoc_docname)
-                        frappe.logger().warning(f"DEBUG: Quotation {qo.name} has customer_address={getattr(qo, 'customer_address', None)}")
+                        print(f"DEBUG: Quotation {qo.name} has customer_address={getattr(qo, 'customer_address', None)}")
                         if getattr(qo, 'customer_address', None):
                             si.customer_address = qo.customer_address
                         elif getattr(qo, 'billing_address', None):
                             si.billing_address = qo.billing_address
                     except Exception as e:
-                        frappe.logger().warning(f"DEBUG: Error loading quotation: {e}")
+                        print(f"DEBUG: Error loading quotation: {e}")
                 
                 # 2. Try to get address from SO's customer via Dynamic Link
                 if not getattr(si, 'customer_address', None):
@@ -415,7 +415,7 @@ class SalesOrderFollowupAgent:
                         fields=["parent"],
                         limit=5
                     )
-                    frappe.logger().warning(f"DEBUG: addr_list for {so.customer}: {addr_list}")
+                    print(f"DEBUG: addr_list for {so.customer}: {addr_list}")
                     if addr_list:
                         si.customer_address = addr_list[0].parent
                 
@@ -426,7 +426,7 @@ class SalesOrderFollowupAgent:
                         fields=["parent"], distinct=True)
                     if dns:
                         dn = frappe.get_doc("Delivery Note", dns[0].parent)
-                        frappe.logger().warning(f"DEBUG: DN {dn.name} has customer_address={getattr(dn, 'customer_address', None)}")
+                        print(f"DEBUG: DN {dn.name} has customer_address={getattr(dn, 'customer_address', None)}")
                         if getattr(dn, 'customer_address', None):
                             si.customer_address = dn.customer_address
                         elif getattr(dn, 'shipping_address_name', None):
@@ -448,12 +448,14 @@ class SalesOrderFollowupAgent:
                             })
                             addr.insert(ignore_permissions=True)
                             si.customer_address = addr.name
+                            print(f"DEBUG: Created new address: {si.customer_address}")
                         else:
                             si.customer_address = addr_name
+                            print(f"DEBUG: Using existing address: {si.customer_address}")
                     except Exception as e:
-                        frappe.logger().warning(f"DEBUG: Error creating address: {e}")
+                        print(f"DEBUG: Error creating address: {e}")
                 
-                frappe.logger().warning(f"DEBUG: Final customer_address: {getattr(si, 'customer_address', None)}")
+                print(f"DEBUG: Final customer_address: {getattr(si, 'customer_address', None)}")
             
             # Set default billing_address if missing
             if not getattr(si, 'billing_address', None):
