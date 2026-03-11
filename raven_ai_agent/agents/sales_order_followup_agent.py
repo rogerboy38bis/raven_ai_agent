@@ -590,11 +590,24 @@ class SalesOrderFollowupAgent:
         
         Args:
             customer: Customer name
-            address_type: Type of address (Billing, Shipping, etc.)
+            address_type: Type of address (Billing, Shipping, etc.) - empty string means any
         
         Returns:
             Address name if found, None otherwise
         """
+        # If address_type is empty, return ANY address
+        if not address_type:
+            addresses = frappe.get_all("Dynamic Link",
+                filters={
+                    "link_doctype": "Customer",
+                    "link_name": customer,
+                    "parenttype": "Address"
+                },
+                fields=["parent"],
+                limit=1
+            )
+            return addresses[0].parent if addresses else None
+        
         # Get all addresses linked to this customer
         addresses = frappe.get_all("Dynamic Link",
             filters={
@@ -659,7 +672,11 @@ class SalesOrderFollowupAgent:
                     break
             
             if not quotation_name:
-                return {"success": False, "error": f"No source Quotation found for {so_name}"}
+                frappe.logger().warning(f"Raven AI: No source Quotation found for {so_name}, skipping fix")
+                return {
+                    "success": True,
+                    "message": f"⏭️ Skipped {so_name}: No source Quotation linked"
+                }
             
             qt = frappe.get_doc("Quotation", quotation_name)
             frappe.logger().info(f"Raven AI: Fixing SO {so_name} from Quotation {quotation_name}")
@@ -691,7 +708,14 @@ class SalesOrderFollowupAgent:
                                 fixed_count += 1
                                 frappe.logger().info(f"Raven AI: Copied {so_field} = {fallback_addr} (intelligent fallback for missing {qt_value})")
                             else:
-                                frappe.logger().warning(f"Raven AI: Address '{qt_value}' not found for customer {so.customer}, skipping")
+                                # Last resort: find ANY address for customer
+                                any_address = self._find_address_for_customer(so.customer, "")
+                                if any_address:
+                                    setattr(so, so_field, any_address)
+                                    fixed_count += 1
+                                    frappe.logger().warning(f"Raven AI: Used any address {any_address} for {so_field} (original {qt_value} not found)")
+                                else:
+                                    frappe.logger().warning(f"Raven AI: No address found for customer {so.customer}, skipping {so_field}")
             else:
                 frappe.logger().info(f"Raven AI: SO {so_name} is submitted, skipping address updates")
             
