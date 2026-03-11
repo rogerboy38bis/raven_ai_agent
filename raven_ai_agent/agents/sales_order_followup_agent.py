@@ -295,24 +295,18 @@ class SalesOrderFollowupAgent:
                 # Check if current debit_to is a group account
                 acct = frappe.get_doc("Account", si.debit_to)
                 if acct.is_group:
-                    # Find a valid leaf receivable account for this company
-                    # Note: currency field doesn't exist on Account doctype, so we don't filter by it
-                    valid_accounts = frappe.db.get_all("Account", 
-                        filters={
-                            "company": si.company,
-                            "account_type": "Receivable",
-                            "is_group": 0
-                        },
-                        fields=["name"],
-                        limit=1
-                    )
-                    if valid_accounts:
-                        si.debit_to = valid_accounts[0].name
+                    # Use Frappe's built-in function to get default receivable account
+                    from erpnext.controllers.accounts_controller import get_default_receivable_account
+                    default_receivable = get_default_receivable_account(si.company)
+                    
+                    if default_receivable:
+                        si.debit_to = default_receivable
                     else:
-                        # Try to find any non-group account for this company
-                        valid_accounts = frappe.db.get_all("Account",
+                        # Fallback: find a valid leaf receivable account for this company
+                        valid_accounts = frappe.db.get_all("Account", 
                             filters={
                                 "company": si.company,
+                                "account_type": "Receivable",
                                 "is_group": 0
                             },
                             fields=["name"],
@@ -320,6 +314,18 @@ class SalesOrderFollowupAgent:
                         )
                         if valid_accounts:
                             si.debit_to = valid_accounts[0].name
+                        else:
+                            # Last resort: find any non-group account for this company
+                            valid_accounts = frappe.db.get_all("Account",
+                                filters={
+                                    "company": si.company,
+                                    "is_group": 0
+                                },
+                                fields=["name"],
+                                limit=1
+                            )
+                            if valid_accounts:
+                                si.debit_to = valid_accounts[0].name
 
             si.insert(ignore_permissions=True)
             si.submit()
