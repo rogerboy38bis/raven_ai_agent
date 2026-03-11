@@ -270,42 +270,21 @@ class SalesOrderFollowupAgent:
             if not si:
                 return {"success": False, "error": "Could not generate Sales Invoice."}
 
-            # CFDI compliance — Mexico invoice fields
-            if hasattr(si, "mx_cfdi_use"):
-                si.mx_cfdi_use = "G03"  # Gastos en general
-
-            if hasattr(si, "custom_customer_invoice_currency"):
-                si.custom_customer_invoice_currency = so.currency
-
-            # Set default mode of payment for Mexico CFDI compliance
-            if hasattr(si, "mode_of_payment") and not si.mode_of_payment:
-                # Try to get from Customer first
-                customer = frappe.get_doc("Customer", so.customer)
-                if hasattr(customer, "custom_default_payment_method") and customer.custom_default_payment_method:
-                    si.mode_of_payment = customer.custom_default_payment_method
-                else:
-                    # Get first available Mode of Payment from system
-                    mop = frappe.db.get_value("Mode of Payment", {}, "name", order_by="name")
-                    if mop:
-                        si.mode_of_payment = mop
-
-            # Set mx_payment_option for Mexico CFDI compliance
-            # Use the correct field name: mx_payment_option (with underscores)
-            payment_option_field = None
-            for field_name in ["mx_payment_option", "sat_payment_option"]:
-                if hasattr(si, field_name) and not getattr(si, field_name, None):
-                    payment_option_field = field_name
-                    break
-            
-            if payment_option_field:
-                # Get the payment method from mode_of_payment or default to PPD
-                mop_name = ""
-                if hasattr(si, "mode_of_payment") and si.mode_of_payment:
-                    mop_name = si.mode_of_payment.lower()
+            # SMART FIX: Use existing CFDI discovery function for all Mexico fields
+            # This ensures consistency with sales.py and handles all CFDI requirements
+            try:
+                from raven_ai_agent.api.truth_hierarchy import resolve_mx_cfdi_fields
+                cfdi_fields = resolve_mx_cfdi_fields(so, so.customer, so.transaction_date, so.credit_days)
                 
-                # Map to PPD (Pago en una sola exhibicion) or PUE (Pago en parcialidades)
-                # Default to PPD for most cases
-                si.set(payment_option_field, "PPD")
+                # Apply all CFDI fields to the SI
+                for field, value in cfdi_fields.items():
+                    if hasattr(si, field):
+                        setattr(si, field, value)
+            except Exception as e:
+                # Fallback: set critical fields manually if CFDI resolution fails
+                frappe.logger().warning(f"CFDI resolution failed, using fallback: {e}")
+                if hasattr(si, "mx_cfdi_use"):
+                    si.mx_cfdi_use = "G03"  # Gastos en general
 
             # Fix debit_to: ensure it's a valid Receivable ledger (not a Group account)
             if hasattr(si, 'debit_to') and si.debit_to:
