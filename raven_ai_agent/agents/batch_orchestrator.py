@@ -132,20 +132,20 @@ class BatchOrchestrator:
         """Batch create Sales Invoices for matching SOs
         
         Strategy:
-        1. Find SOs that have Delivery Notes but no Sales Invoice
+        1. Find SOs that have Delivery Notes but no Sales Invoice (regardless of status)
         2. Use existing invoice creation logic
         3. Report results
         """
-        # Find SOs with DN but no SI using frappe.get_all (handles field names correctly)
-        # First get all submitted SOs with status "To Bill" or "To Deliver and Bill"
+        # Find SOs with DN but no SI - include ALL statuses (including Completed)
+        # The status filter was too restrictive - some SOs are completed but still need invoicing
         sos = frappe.get_all("Sales Order",
             filters={
                 "docstatus": 1,
-                "status": ["in", ["To Bill", "To Deliver and Bill"]]
+                # Removed status filter - find ALL SOs with DN but no SI
             },
             fields=["name", "customer_name", "grand_total", "currency", "status"],
             order_by="grand_total desc",
-            limit=limit
+            limit=limit * 2  # Get more since we'll filter
         )
         
         # Filter: must have DN and no SI
