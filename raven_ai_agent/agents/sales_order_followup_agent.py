@@ -309,40 +309,53 @@ class SalesOrderFollowupAgent:
         if hasattr(si, 'debit_to') and si.debit_to:
             try:
                 acct = frappe.get_doc("Account", si.debit_to)
+                
+                # Check if account is a group OR has wrong currency - need to find valid one
+                needs_fix = False
                 if acct.is_group:
-                    # Try company default
+                    needs_fix = True
+                    frappe.logger().info(f"Raven AI: Account {si.debit_to} is group, finding alternative")
+                elif getattr(acct, 'account_currency', None) != si.currency:
+                    needs_fix = True
+                    frappe.logger().info(f"Raven AI: Account {si.debit_to} currency {acct.account_currency} != {si.currency}")
+                
+                if needs_fix:
+                    # Priority 1: Company default receivable with correct currency
                     default = frappe.get_value("Company", si.company, "default_receivable_account")
                     if default:
                         check = frappe.get_doc("Account", default)
                         if not check.is_group and getattr(check, 'account_currency', None) == si.currency:
                             si.debit_to = default
-                
-                # Check if current debit_to has correct currency
-                current_acct = frappe.get_doc("Account", si.debit_to)
-                if getattr(current_acct, 'account_currency', None) != si.currency:
-                    # Find receivable account with matching currency
-                    valid = frappe.db.get_all("Account", 
-                        filters={
-                            "company": si.company, 
-                            "account_type": "Receivable", 
-                            "is_group": 0,
-                            "account_currency": si.currency
-                        },
-                        fields=["name"], limit=1)
-                    if valid:
-                        si.debit_to = valid[0].name
-                    else:
-                        # Fallback: any receivable with matching currency
+                            frappe.logger().info(f"Raven AI: Using company default: {default}")
+                    
+                    # Priority 2: Any receivable account with correct currency (not group)
+                    if getattr(frappe.get_doc("Account", si.debit_to), 'account_currency', None) != si.currency:
                         valid = frappe.db.get_all("Account", 
                             filters={
                                 "company": si.company, 
+                                "account_type": "Receivable", 
                                 "is_group": 0,
                                 "account_currency": si.currency
                             },
-                            fields=["name"], limit=1)
+                            fields=["name"], limit=5)
                         if valid:
                             si.debit_to = valid[0].name
-            except:
+                            frappe.logger().info(f"Raven AI: Found receivable: {si.debit_to}")
+                        
+                        # Priority 3: Any account with correct currency (not group)
+                        if getattr(frappe.get_doc("Account", si.debit_to), 'account_currency', None) != si.currency:
+                            valid = frappe.db.get_all("Account", 
+                                filters={
+                                    "company": si.company, 
+                                    "is_group": 0,
+                                    "account_currency": si.currency
+                                },
+                                fields=["name"], limit=5)
+                            if valid:
+                                si.debit_to = valid[0].name
+                                frappe.logger().info(f"Raven AI: Found any account: {si.debit_to}")
+            except Exception as e:
+                frappe.logger().error(f"Raven AI: Account validation error: {e}")
                 pass
         
         # === 4. COST CENTER ===
@@ -350,12 +363,16 @@ class SalesOrderFollowupAgent:
             try:
                 cc = frappe.get_doc("Cost Center", si.cost_center)
                 if cc.is_group:
+                    frappe.logger().info(f"Raven AI: Cost Center {si.cost_center} is group, finding alternative")
+                    # Find any non-group cost center for the company
                     valid = frappe.db.get_all("Cost Center",
                         filters={"company": si.company, "is_group": 0},
-                        fields=["name"], limit=1)
+                        fields=["name"], limit=5)
                     if valid:
                         si.cost_center = valid[0].name
-            except:
+                        frappe.logger().info(f"Raven AI: Found cost center: {si.cost_center}")
+            except Exception as e:
+                frappe.logger().error(f"Raven AI: Cost center validation error: {e}")
                 pass
         
         return errors
