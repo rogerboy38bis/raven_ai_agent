@@ -277,6 +277,16 @@ class SalesOrderFollowupAgent:
             if hasattr(si, "custom_customer_invoice_currency"):
                 si.custom_customer_invoice_currency = so.currency
 
+            # Set default mode of payment for Mexico CFDI compliance
+            if hasattr(si, "mode_of_payment") and not si.mode_of_payment:
+                # Try to get from Customer first
+                customer = frappe.get_doc("Customer", so.customer)
+                if hasattr(customer, "custom_default_payment_method") and customer.custom_default_payment_method:
+                    si.mode_of_payment = customer.custom_default_payment_method
+                else:
+                    # Fall back to common Mexican payment methods
+                    si.mode_of_payment = "Transferencia SPEI"
+
             si.insert(ignore_permissions=True)
             si.submit()
             frappe.db.commit()
