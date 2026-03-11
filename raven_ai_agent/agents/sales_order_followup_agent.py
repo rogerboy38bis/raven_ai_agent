@@ -314,12 +314,31 @@ class SalesOrderFollowupAgent:
                     default = frappe.get_value("Company", si.company, "default_receivable_account")
                     if default:
                         check = frappe.get_doc("Account", default)
-                        if not check.is_group:
+                        if not check.is_group and getattr(check, 'account_currency', None) == si.currency:
                             si.debit_to = default
-                    # Fallback: find any receivable
-                    if frappe.get_doc("Account", si.debit_to).is_group:
+                
+                # Check if current debit_to has correct currency
+                current_acct = frappe.get_doc("Account", si.debit_to)
+                if getattr(current_acct, 'account_currency', None) != si.currency:
+                    # Find receivable account with matching currency
+                    valid = frappe.db.get_all("Account", 
+                        filters={
+                            "company": si.company, 
+                            "account_type": "Receivable", 
+                            "is_group": 0,
+                            "account_currency": si.currency
+                        },
+                        fields=["name"], limit=1)
+                    if valid:
+                        si.debit_to = valid[0].name
+                    else:
+                        # Fallback: any receivable with matching currency
                         valid = frappe.db.get_all("Account", 
-                            filters={"company": si.company, "account_type": "Receivable", "is_group": 0},
+                            filters={
+                                "company": si.company, 
+                                "is_group": 0,
+                                "account_currency": si.currency
+                            },
                             fields=["name"], limit=1)
                         if valid:
                             si.debit_to = valid[0].name
