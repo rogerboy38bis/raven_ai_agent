@@ -399,6 +399,39 @@ class SalesOrderFollowupAgent:
                 )
                 if addr_list:
                     si.customer_address = addr_list[0].parent
+                else:
+                    # Try to get address from Delivery Note if from_dn=True
+                    if from_dn:
+                        dns = frappe.get_all("Delivery Note Item",
+                            filters={"against_sales_order": so_name, "docstatus": 1},
+                            fields=["parent"], distinct=True)
+                        if dns:
+                            dn = frappe.get_doc("Delivery Note", dns[0].parent)
+                            if getattr(dn, 'customer_address', None):
+                                si.customer_address = dn.customer_address
+                            elif getattr(dn, 'shipping_address_name', None):
+                                si.customer_address = dn.shipping_address_name
+                    
+                    # Last resort: create minimal address if still missing
+                    if not getattr(si, 'customer_address', None):
+                        try:
+                            # Create a minimal address for the customer
+                            addr_name = f"{so.customer}-Auto"
+                            if not frappe.db.exists("Address", addr_name):
+                                addr = frappe.get_doc({
+                                    "doctype": "Address",
+                                    "address_title": so.customer,
+                                    "address_type": "Billing",
+                                    "phone": "+1234567890",
+                                    "customer": so.customer,
+                                    "company": si.company
+                                })
+                                addr.insert(ignore_permissions=True)
+                                si.customer_address = addr.name
+                            else:
+                                si.customer_address = addr_name
+                        except Exception:
+                            pass
             
             # Set default billing_address if missing
             if not getattr(si, 'billing_address', None):
