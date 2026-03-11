@@ -856,7 +856,7 @@ class SalesMixin:
                         pass
                 # BUG25: Always check BOTH so_name AND dn_name
                 existing_si = check_existing_si(so_name=_idem_so, dn_name=_idem_dn)
-                    if existing_si:
+                if existing_si:
                         site_name = frappe.local.site
                         si_link = f"[{existing_si}](https://{site_name}/app/sales-invoice/{existing_si})"
                         return {
