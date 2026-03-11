@@ -284,8 +284,12 @@ class SalesOrderFollowupAgent:
                 if hasattr(customer, "custom_default_payment_method") and customer.custom_default_payment_method:
                     si.mode_of_payment = customer.custom_default_payment_method
                 else:
-                    # Fall back to common Mexican payment methods
-                    si.mode_of_payment = "Transferencia SPEI"
+                    # Get first available Mode of Payment from system
+                    mop = frappe.db.get_value("Mode of Payment", {"is_active": 1, "is_cash": 1}, "name")
+                    if not mop:
+                        mop = frappe.db.get_value("Mode of Payment", {"is_active": 1}, "name")
+                    if mop:
+                        si.mode_of_payment = mop
 
             si.insert(ignore_permissions=True)
             si.submit()
