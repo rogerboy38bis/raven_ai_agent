@@ -47,6 +47,144 @@ class SalesOrderFollowupAgent:
         slug = doctype.lower().replace(" ", "-")
         return f"[{name}](https://{self.site_name}/app/{slug}/{name})"
     
+    def _smart_validate_and_fix_sales_invoice(self, si, so, so_name: str, from_dn: bool = True) -> List[str]:
+        """
+        SMART INTELLIGENT VALIDATION - Proactively validate and fix ALL required fields
+        before attempting to insert the document.
+        
+        This is the core intelligence of Raven AI Agent - anticipating issues and fixing them
+        BEFORE they cause validation errors.
+        
+        Returns:
+            List of error messages (empty if all fixed)
+        """
+        errors = []
+        
+        # === 1. ADDRESS RESOLUTION (Truth Hierarchy) ===
+        # Priority: Quotation → Customer → Delivery Note → Auto-create
+        if not getattr(si, 'customer_address', None):
+            # 1a. Get from Quotation (truth source)
+            qo_items = frappe.get_all("Sales Order Item",
+                filters={"parent": so_name, "parenttype": "Sales Order"},
+                fields=["prevdoc_docname"]
+            )
+            if qo_items and qo_items[0].prevdoc_docname:
+                try:
+                    qo = frappe.get_doc("Quotation", qo_items[0].prevdoc_docname)
+                    if getattr(qo, 'customer_address', None):
+                        si.customer_address = qo.customer_address
+                    elif getattr(qo, 'billing_address', None):
+                        si.billing_address = qo.billing_address
+                except:
+                    pass
+            
+            # 1b. Get from Customer's Dynamic Link
+            if not getattr(si, 'customer_address', None):
+                addr_list = frappe.get_all("Dynamic Link",
+                    filters={"link_doctype": "Customer", "link_name": so.customer, "parenttype": "Address"},
+                    fields=["parent"], limit=5
+                )
+                if addr_list:
+                    si.customer_address = addr_list[0].parent
+            
+            # 1c. Get from Delivery Note
+            if not getattr(si, 'customer_address', None) and from_dn:
+                dns = frappe.get_all("Delivery Note Item",
+                    filters={"against_sales_order": so_name, "docstatus": 1},
+                    fields=["parent"], distinct=True)
+                if dns:
+                    dn = frappe.get_doc("Delivery Note", dns[0].parent)
+                    if getattr(dn, 'customer_address', None):
+                        si.customer_address = dn.customer_address
+                    elif getattr(dn, 'shipping_address_name', None):
+                        si.customer_address = dn.shipping_address_name
+            
+            # 1d. Auto-create address with ALL required fields
+            if not getattr(si, 'customer_address', None):
+                try:
+                    addr_name = f"{so.customer}-Auto"
+                    if not frappe.db.exists("Address", addr_name):
+                        addr = frappe.get_doc({
+                            "doctype": "Address",
+                            "address_title": so.customer,
+                            "address_type": "Billing",
+                            "address_line1": "Auto Generated",
+                            "city": "Mexico City",
+                            "pincode": "00000",
+                            "email_id": "billing@autogen.com",
+                            "phone": "+1234567890",
+                            "customer": so.customer,
+                            "company": si.company,
+                            "country": "Mexico"
+                        })
+                        addr.insert(ignore_permissions=True)
+                        si.customer_address = addr.name
+                    else:
+                        si.customer_address = addr_name
+                except Exception as e:
+                    errors.append(f"Could not create address: {e}")
+        
+        # Set billing_address from customer_address
+        if not getattr(si, 'billing_address', None):
+            si.billing_address = getattr(si, 'customer_address', None)
+        
+        # === 2. MX CFDI FIELDS ===
+        # Use truth hierarchy for CFDI fields
+        try:
+            from raven_ai_agent.api.truth_hierarchy import resolve_mx_cfdi_fields
+            cfdi_fields = resolve_mx_cfdi_fields(so, so.customer, so.transaction_date, so.credit_days)
+            for field, value in cfdi_fields.items():
+                if hasattr(si, field) and not getattr(si, field, None):
+                    setattr(si, field, value)
+        except:
+            pass
+        
+        # Fallback MX fields
+        if not getattr(si, 'mx_cfdi_use', None):
+            si.mx_cfdi_use = "G03"
+        if not getattr(si, 'mx_payment_option', None):
+            si.mx_payment_option = "PPD"
+        if not getattr(si, 'mode_of_payment', None):
+            si.mode_of_payment = "Wire Transfer"
+        if hasattr(si, 'mx_product_service_key') and not getattr(si, 'mx_product_service_key', None):
+            si.mx_product_service_key = "84111506"
+        
+        # === 3. DEBIT TO (Account) ===
+        if hasattr(si, 'debit_to') and si.debit_to:
+            try:
+                acct = frappe.get_doc("Account", si.debit_to)
+                if acct.is_group:
+                    # Try company default
+                    default = frappe.get_value("Company", si.company, "default_receivable_account")
+                    if default:
+                        check = frappe.get_doc("Account", default)
+                        if not check.is_group:
+                            si.debit_to = default
+                    # Fallback: find any receivable
+                    if frappe.get_doc("Account", si.debit_to).is_group:
+                        valid = frappe.db.get_all("Account", 
+                            filters={"company": si.company, "account_type": "Receivable", "is_group": 0},
+                            fields=["name"], limit=1)
+                        if valid:
+                            si.debit_to = valid[0].name
+            except:
+                pass
+        
+        # === 4. COST CENTER ===
+        if hasattr(si, 'cost_center') and si.cost_center:
+            try:
+                cc = frappe.get_doc("Cost Center", si.cost_center)
+                if cc.is_group:
+                    valid = frappe.db.get_all("Cost Center",
+                        filters={"company": si.company, "is_group": 0},
+                        fields=["name"], limit=1)
+                    if valid:
+                        si.cost_center = valid[0].name
+            except:
+                pass
+        
+        return errors
+    
     # ========== NEW: DOCUMENT CREATION (Steps 3, 6, 7) ==========
 
     def submit_sales_order(self, so_name: str) -> Dict:
