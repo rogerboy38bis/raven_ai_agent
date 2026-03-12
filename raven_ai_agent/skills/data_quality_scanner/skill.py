@@ -89,7 +89,7 @@ class DataQualityScannerSkill(SkillBase):
             
             # Check if this is a pipeline diagnosis request
             is_pipeline_diagnosis = any(
-                kw in query_lower for kw in ["pipeline", "full scan", "diagnosis", "complete"]
+                kw in query_lower for kw in ["pipeline", "full scan", "diagnosis", "complete", "diagnose"]
             )
             
             # Extract document name from query
@@ -695,7 +695,7 @@ class DataQualityScannerSkill(SkillBase):
         Format: [item_code(4)][WO_consecutive(3)][WO_year(2)][Plant(1)]
         Example: 0334114231 → item_code=0334, WO=114, year=23, plant=1
         
-        Cost Center name format: "LOT {code} - {code} - AMB-W"
+        Cost Center name format: "{code} - {code} - AMB-W"
         
         Args:
             doc: Sales Order or Sales Invoice document
@@ -767,7 +767,7 @@ class DataQualityScannerSkill(SkillBase):
                                 continue
                     
                     cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
-                    cc_name = f"LOT {cc_code} - {cc_code} - AMB-W"
+                    cc_name = f"{cc_code} - {cc_code} - AMB-W"
                     
                     frappe.logger().info(f"[DataQualityScanner] Derived cost center from WO {wo_name}: {cc_name}")
                     
@@ -806,7 +806,7 @@ class DataQualityScannerSkill(SkillBase):
                         item_prefix = "0000"
                     
                     cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
-                    cc_name = f"LOT {cc_code} - {cc_code} - AMB-W"
+                    cc_name = f"{cc_code} - {cc_code} - AMB-W"
                     
                     if frappe.db.exists("Cost Center", cc_name):
                         return cc_name
@@ -838,7 +838,7 @@ class DataQualityScannerSkill(SkillBase):
                         item_prefix = "0000"
                     
                     cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
-                    cc_name = f"LOT {cc_code} - {cc_code} - AMB-W"
+                    cc_name = f"{cc_code} - {cc_code} - AMB-W"
                     
                     if frappe.db.exists("Cost Center", cc_name):
                         return cc_name
