@@ -677,6 +677,43 @@ class DataQualityScannerSkill(SkillBase):
         if not items:
             return None
         
+        # Get Sales Order name
+        so_name = doc.name
+        
+        # Try to find Work Orders by querying Work Order table directly
+        # The work_order field in SO items might not be populated, but WO has sales_order link
+        try:
+            wos = frappe.get_all(
+                "Work Order",
+                filters={"sales_order": so_name},
+                fields=["name", "production_item", "status", "qty"]
+            )
+            
+            if wos:
+                frappe.logger().info(f"[DataQualityScanner] Found {len(wos)} Work Orders for SO {so_name}")
+                
+                for wo in wos:
+                    wo_name = wo.name
+                    import re
+                    match = re.search(r'(\d{10})', wo_name)
+                    if match:
+                        full_code = match.group(1)
+                        item_prefix = full_code[0:4]  # First 4 chars
+                        wo_consecutive = full_code[4:7]  # positions 4-6
+                        wo_year = full_code[7:9]  # positions 7-8
+                        plant_code = full_code[9]  # position 9
+                        
+                        cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
+                        cc_name = f"LOT {cc_code} - {cc_code} - AMB-W"
+                        
+                        frappe.logger().info(f"[DataQualityScanner] Derived cost center from WO {wo_name}: {cc_name}")
+                        
+                        if frappe.db.exists("Cost Center", cc_name):
+                            return cc_name
+                        return cc_name
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] Error querying Work Orders: {e}")
+        
         # Try to find Work Order or Production Order from items
         for item in items:
             work_order = item.get("work_order")
