@@ -576,6 +576,7 @@ class DataQualityScannerSkill(SkillBase):
                     "severity": "CRITICAL",
                     "message": f"Account '{receivable_account}' is a Group Account (cannot be used in transactions)",
                     "field": "debit_to",
+                    "current_value": receivable_account,
                     "auto_fix": "find_leaf_account",
                     "fix_confidence": 0.80
                 })
@@ -1249,20 +1250,71 @@ class DataQualityScannerSkill(SkillBase):
             if not is_group:
                 return account_name
             
-            # Find child accounts
+            # Find direct child accounts that are leaves
             children = frappe.get_all(
                 "Account",
                 filters={
                     "parent_account": account_name,
                     "is_group": 0
                 },
-                fields=["name"],
-                limit=1
+                fields=["name", "account_currency"],
+                limit=5
             )
             if children:
+                frappe.logger().info(f"[DataQualityScanner] Found {len(children)} direct leaf accounts under {account_name}")
                 return children[0].name
             
+            # Try to find any descendant leaf accounts by climbing up the tree
+            # Get the root parent
+            current_account = account_name
+            visited = set()
+            
+            while current_account and current_account not in visited:
+                visited.add(current_account)
+                
+                # Get parent of current account
+                parent = frappe.get_value("Account", current_account, "parent_account")
+                if not parent:
+                    break
+                
+                # Look for leaf siblings
+                siblings = frappe.get_all(
+                    "Account",
+                    filters={
+                        "parent_account": parent,
+                        "is_group": 0,
+                        "name": ["!=", current_account]
+                    },
+                    fields=["name", "account_currency"],
+                    limit=5
+                )
+                
+                if siblings:
+                    frappe.logger().info(f"[DataQualityScanner] Found {len(siblings)} sibling leaf accounts under {parent}")
+                    return siblings[0].name
+                
+                current_account = parent
+            
+            # Last resort: search for any receivable account in the company
+            frappe.logger().warning(f"[DataQualityScanner] No leaf found under {account_name}, trying receivable accounts")
+            company = frappe.get_value("Account", account_name, "company")
+            
+            if company:
+                receivables = frappe.get_all(
+                    "Account",
+                    filters={
+                        "company": company,
+                        "account_type": "Receivable",
+                        "is_group": 0
+                    },
+                    fields=["name"],
+                    limit=5
+                )
+                if receivables:
+                    return receivables[0].name
+            
             return None
+            
         except Exception as e:
             frappe.logger().error(f"[DataQualityScanner] Error finding leaf account: {e}")
             return None
