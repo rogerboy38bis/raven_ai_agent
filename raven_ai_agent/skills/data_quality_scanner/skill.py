@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 from raven_ai_agent.skills.framework import SkillBase
+from raven_ai_agent.skills.formulation_reader.reader import parse_golden_number
 
 
 class DataQualityScannerSkill(SkillBase):
@@ -56,6 +57,17 @@ class DataQualityScannerSkill(SkillBase):
         super().__init__(agent)
         self.issues_found = []
         self.fixes_applied = []
+        
+        # Plant code to Cost Center mapping (from golden number)
+        # Golden number format: ITEM_[product(4)][folio(3)][year(2)][plant(1)]
+        # Plant codes: 1=Mix, 2=Dry, 3=Juice, 4=Laboratory, 5=Formulated
+        self.PLANT_COST_CENTER_MAP = {
+            '1': 'Mix - AMB',      # Mix Plant
+            '2': 'Dry - AMB',      # Dry Plant
+            '3': 'Juice - AMB',   # Juice Plant
+            '4': 'Laboratory - AMB',  # Laboratory
+            '5': 'Formulated - AMB'   # Formulated Products
+        }
     
     def handle(self, query: str, context: Dict = None) -> Optional[Dict]:
         """Handle validation query"""
@@ -530,16 +542,19 @@ class DataQualityScannerSkill(SkillBase):
                     "fix_confidence": 0.80
                 })
             
-            # Check currency
+            # Check currency - Multi-currency is normal in ERPNext (USD invoices in MXN company)
+            # This is handled by exchange rate at invoice time, NOT an error
             account_currency = account.account_currency
             if account_currency and account_currency != currency:
+                # Multi-currency is valid workflow: USD invoice → USD payment → converted to MXN
+                # Exchange difference goes to "perdidas y ganancias monetarias"
                 issues.append({
                     "type": "currency_mismatch",
-                    "severity": "HIGH",
-                    "message": f"Account currency '{account_currency}' doesn't match document currency '{currency}'",
+                    "severity": "INFO",  # Changed from HIGH - this is expected multi-currency behavior
+                    "message": f"Multi-currency: Account in '{account_currency}', document in '{currency}' - Normal for export transactions",
                     "field": "currency",
-                    "auto_fix": "find_matching_currency_account",
-                    "fix_confidence": 0.88
+                    "auto_fix": None,  # No fix needed - this is correct
+                    "fix_confidence": 1.0
                 })
         except frappe.DoesNotExistError:
             issues.append({
@@ -643,6 +658,96 @@ class DataQualityScannerSkill(SkillBase):
         
         return issues
     
+    def _get_cost_center_from_golden_number(self, doc) -> Optional[str]:
+        """
+        Derive cost center from golden number in document items.
+        
+        Looks at item codes in the document (Sales Order/Sales Invoice),
+        parses their golden numbers, and maps the plant code to a Cost Center.
+        
+        Args:
+            doc: Sales Order or Sales Invoice document
+            
+        Returns:
+            Cost Center name if found, None otherwise
+        """
+        # Get items from document
+        items = doc.get("items", [])
+        if not items:
+            return None
+        
+        # Collect plant codes from all items
+        plant_codes = set()
+        golden_items_found = 0
+        
+        for item in items:
+            item_code = item.get("item_code")
+            if not item_code:
+                continue
+            
+            # Parse golden number from item code
+            parsed = parse_golden_number(item_code)
+            if parsed and parsed.get("plant"):
+                golden_items_found += 1
+                # Get plant code (numeric) from the plant name
+                # Plant names: Mix, Dry, Juice, Laboratory, Formulated
+                plant_name = parsed.get("plant", "").lower()
+                
+                # Find the numeric code for this plant name
+                for code, name in self.PLANT_COST_CENTER_MAP.items():
+                    if plant_name in name.lower():
+                        plant_codes.add(code)
+                        break
+        
+        if not plant_codes:
+            frappe.logger().info(f"[DataQualityScanner] No golden numbers found in {len(items)} items")
+            return None
+        
+        # If multiple plants, we can't determine a single cost center
+        if len(plant_codes) > 1:
+            frappe.logger().info(f"[DataQualityScanner] Multiple plants found: {plant_codes}")
+            return None
+        
+        # Get the cost center for the identified plant
+        plant_code = list(plant_codes)[0]
+        cost_center = self.PLANT_COST_CENTER_MAP.get(plant_code)
+        
+        # Verify the cost center exists and is not a group
+        if cost_center:
+            try:
+                is_group = frappe.get_value("Cost Center", cost_center, "is_group")
+                if is_group:
+                    # Try to find a leaf cost center under this group
+                    leaf_cc = self._find_leaf_cost_center(cost_center)
+                    if leaf_cc:
+                        cost_center = leaf_cc
+                    else:
+                        cost_center = None
+            except Exception as e:
+                frappe.logger().error(f"[DataQualityScanner] Error verifying cost center {cost_center}: {e}")
+                cost_center = None
+        
+        frappe.logger().info(f"[DataQualityScanner] Derived cost center from golden number: {cost_center} (items with golden number: {golden_items_found})")
+        return cost_center
+    
+    def _find_leaf_cost_center(self, parent_cc: str) -> Optional[str]:
+        """Find a leaf (non-group) cost center under a parent group."""
+        try:
+            children = frappe.get_all(
+                "Cost Center",
+                filters={
+                    "parent_cost_center": parent_cc,
+                    "is_group": 0
+                },
+                fields=["name"],
+                limit=1
+            )
+            if children:
+                return children[0].name
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] Error finding leaf cost center: {e}")
+        return None
+    
     def _validate_cost_center(self, doc) -> List[Dict]:
         """Check if cost center is valid (not a group)"""
         issues = []
@@ -650,14 +755,28 @@ class DataQualityScannerSkill(SkillBase):
         cost_center = doc.get("cost_center")
         
         if not cost_center:
-            issues.append({
-                "type": "missing_cost_center",
-                "severity": "MEDIUM",
-                "message": "Cost Center is missing",
-                "field": "cost_center",
-                "auto_fix": "set_default_cost_center",
-                "fix_confidence": 0.90
-            })
+            # Try to derive cost center from golden number in items
+            derived_cc = self._get_cost_center_from_golden_number(doc)
+            
+            if derived_cc:
+                issues.append({
+                    "type": "missing_cost_center",
+                    "severity": "MEDIUM",
+                    "message": "Cost Center is missing - AUTO-FIX AVAILABLE",
+                    "field": "cost_center",
+                    "auto_fix": "set_from_golden_number",
+                    "auto_fix_value": derived_cc,
+                    "fix_confidence": 0.95
+                })
+            else:
+                issues.append({
+                    "type": "missing_cost_center",
+                    "severity": "MEDIUM",
+                    "message": "Cost Center is missing - Could not derive from golden number",
+                    "field": "cost_center",
+                    "auto_fix": "set_default_cost_center",
+                    "fix_confidence": 0.70
+                })
             return issues
         
         # Check if it's a group
@@ -739,26 +858,31 @@ class DataQualityScannerSkill(SkillBase):
     
     def _calculate_confidence(self, issues: List[Dict], warnings: List[Dict]) -> float:
         """Calculate confidence score based on issues"""
-        if not issues:
+        # Filter out INFO issues (they are informational, not problems)
+        real_issues = [i for i in issues if i.get("severity") != "INFO"]
+        
+        if not real_issues:
             return 0.95
         
         base_score = 1.0
         
         # Deduct for critical issues
-        critical = len([i for i in issues if i.get("severity") == "CRITICAL"])
+        critical = len([i for i in real_issues if i.get("severity") == "CRITICAL"])
         base_score -= critical * 0.25
         
         # Deduct for high issues
-        high = len([i for i in issues if i.get("severity") == "HIGH"])
+        high = len([i for i in real_issues if i.get("severity") == "HIGH"])
         base_score -= high * 0.15
         
         # Deduct for medium issues
-        medium = len([i for i in issues if i.get("severity") == "MEDIUM"])
+        medium = len([i for i in real_issues if i.get("severity") == "MEDIUM"])
         base_score -= medium * 0.08
         
         # Deduct for low issues
-        low = len([i for i in issues if i.get("severity") == "LOW"])
+        low = len([i for i in real_issues if i.get("severity") == "LOW"])
         base_score -= low * 0.03
+        
+        # INFO issues don't reduce confidence
         
         return max(0.1, min(0.95, base_score))
     
@@ -818,6 +942,7 @@ class DataQualityScannerSkill(SkillBase):
         high = [i for i in issues if i.get("severity") == "HIGH"]
         medium = [i for i in issues if i.get("severity") == "MEDIUM"]
         low = [i for i in issues if i.get("severity") == "LOW"]
+        info = [i for i in issues if i.get("severity") == "INFO"]
         
         if critical:
             response += f"### 🔴 Critical Issues ({len(critical)})\n"
@@ -825,7 +950,10 @@ class DataQualityScannerSkill(SkillBase):
                 response += f"- **{issue['message']}**\n"
                 response += f"  - Field: `{issue.get('field')}`\n"
                 if issue.get("auto_fix"):
-                    response += f"  - Auto-fix: {issue['auto_fix']} ({issue['fix_confidence']*100:.0f}% confidence)\n"
+                    response += f"  - Auto-fix: {issue['auto_fix']}"
+                    if issue.get("auto_fix_value"):
+                        response += f" → `{issue['auto_fix_value']}`"
+                    response += f" ({issue['fix_confidence']*100:.0f}% confidence)\n"
             response += "\n"
         
         if high:
@@ -834,7 +962,10 @@ class DataQualityScannerSkill(SkillBase):
                 response += f"- **{issue['message']}**\n"
                 response += f"  - Field: `{issue.get('field')}`\n"
                 if issue.get("auto_fix"):
-                    response += f"  - Auto-fix: {issue['auto_fix']} ({issue['fix_confidence']*100:.0f}% confidence)\n"
+                    response += f"  - Auto-fix: {issue['auto_fix']}"
+                    if issue.get("auto_fix_value"):
+                        response += f" → `{issue['auto_fix_value']}`"
+                    response += f" ({issue['fix_confidence']*100:.0f}% confidence)\n"
             response += "\n"
         
         if medium:
