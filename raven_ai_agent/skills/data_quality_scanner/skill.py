@@ -846,50 +846,73 @@ class DataQualityScannerSkill(SkillBase):
                 except:
                     pass
         
-        frappe.logger().info(f"[DataQualityScanner] No Work Orders/Production Orders found")
+        frappe.logger().info(f"[DataQualityScanner] No Work Orders/Production Orders found, trying DN/Batch lookup")
         
         # PRIORITY: Try to get golden number from Delivery Notes/Batches
         # This is more accurate than deriving from item code
-        # Check BOTH against_sales_order AND sales_order fields for compatibility
+        # Check using dni.against_sales_order (child table field) - this matches pipeline diagnosis
+        frappe.logger().info(f"[DataQualityScanner] Starting DN/Batch lookup for SO: {doc.name}")
+        
+        dn_items = []
         try:
             dn_items = frappe.db.sql("""
                 SELECT dni.item_code, dni.batch_no
                 FROM `tabDelivery Note Item` dni
                 INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
-                WHERE dn.against_sales_order = %s OR dn.sales_order = %s
+                WHERE dni.against_sales_order = %s
                 LIMIT 20
-            """, (doc.name, doc.name,), as_dict=True)
+            """, (doc.name,), as_dict=True)
             
-            frappe.logger().info(f"[DataQualityScanner] Found {len(dn_items)} DN items for SO {doc.name}")
+            frappe.logger().info(f"[DataQualityScanner] Found {len(dn_items)} DN items using dni.against_sales_order")
             
-            for dni in dn_items:
-                if dni.batch_no:
-                    # FIRST: Try to get from Batch doctype (most reliable)
-                    # This handles cases where batch_no is short name like "LOTE016"
-                    try:
-                        batch = frappe.get_doc("Batch", dni.batch_no)
-                        raw_golden = batch.custom_golden_number or batch.batch_id or batch.name
-                        golden_digits = ''.join(filter(str.isdigit, str(raw_golden)))
-                        if golden_digits and len(golden_digits) >= 10:
-                            # Take first 10 digits
-                            golden_digits = golden_digits[:10]
-                            cc_name = f"{golden_digits} - {golden_digits} - AMB-W"
-                            frappe.logger().info(f"[DataQualityScanner] Found golden from Batch doctype: {golden_digits}")
-                            return cc_name
-                    except Exception as e:
-                        frappe.logger().warning(f"[DataQualityScanner] Error fetching Batch {dni.batch_no}: {e}")
-                        pass
-                    
-                    # SECOND: Try to extract digits directly from batch_no
-                    # This works if batch_no contains full golden number like "LOTE-0612185231"
-                    batch_digits = ''.join(filter(str.isdigit, str(dni.batch_no)))
-                    if batch_digits and len(batch_digits) >= 10:
-                        batch_digits = batch_digits[:10]  # Take first 10 digits
-                        cc_name = f"{batch_digits} - {batch_digits} - AMB-W"
-                        frappe.logger().info(f"[DataQualityScanner] Found golden number from DN batch direct: {batch_digits}")
-                        return cc_name
+            if not dn_items:
+                # Try alternative: query using parent sales_order field
+                dn_items_alt = frappe.db.sql("""
+                    SELECT dni.item_code, dni.batch_no
+                    FROM `tabDelivery Note Item` dni
+                    INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+                    WHERE dn.sales_order = %s
+                    LIMIT 20
+                """, (doc.name,), as_dict=True)
+                frappe.logger().info(f"[DataQualityScanner] Alternative query (dn.sales_order) found {len(dn_items_alt)} DN items")
+                dn_items = dn_items_alt
         except Exception as e:
-            frappe.logger().error(f"[DataQualityScanner] Error checking DN batches: {e}")
+            frappe.logger().error(f"[DataQualityScanner] ERROR in DN query: {e}")
+        
+        # Process DN items to find golden number
+        for dni in dn_items:
+            if dni.batch_no:
+                frappe.logger().info(f"[DataQualityScanner] Processing DN item with batch_no: {dni.batch_no}")
+                
+                # FIRST: Try to get from Batch doctype (most reliable)
+                # This handles cases where batch_no is short name like "LOTE016"
+                try:
+                    batch = frappe.get_doc("Batch", dni.batch_no)
+                    raw_golden = batch.custom_golden_number or batch.batch_id or batch.name
+                    golden_digits = ''.join(filter(str.isdigit, str(raw_golden)))
+                    frappe.logger().info(f"[DataQualityScanner] Batch {dni.batch_no}: raw_golden={raw_golden}, digits={golden_digits}")
+                    
+                    if golden_digits and len(golden_digits) >= 10:
+                        # Take first 10 digits
+                        golden_digits = golden_digits[:10]
+                        cc_name = f"{golden_digits} - {golden_digits} - AMB-W"
+                        frappe.logger().info(f"[DataQualityScanner] Found golden from Batch doctype: {golden_digits}")
+                        return cc_name
+                except Exception as e:
+                    frappe.logger().warning(f"[DataQualityScanner] Error fetching Batch {dni.batch_no}: {e}")
+                
+                # SECOND: Try to extract digits directly from batch_no
+                # This works if batch_no contains full golden number like "LOTE-0612185231"
+                batch_digits = ''.join(filter(str.isdigit, str(dni.batch_no)))
+                frappe.logger().info(f"[DataQualityScanner] Direct batch digits: {batch_digits}")
+                
+                if batch_digits and len(batch_digits) >= 10:
+                    batch_digits = batch_digits[:10]  # Take first 10 digits
+                    cc_name = f"{batch_digits} - {batch_digits} - AMB-W"
+                    frappe.logger().info(f"[DataQualityScanner] Found golden number from DN batch direct: {batch_digits}")
+                    return cc_name
+        
+        frappe.logger().info(f"[DataQualityScanner] No golden number found in DN/Batch lookup, will use fallback")
         
         frappe.logger().info(f"[DataQualityScanner] No golden number found from DN/Batches, trying item code fallback")
         
