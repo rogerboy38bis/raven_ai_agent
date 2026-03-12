@@ -176,6 +176,14 @@ class DataQualityScannerSkill(SkillBase):
             # Store validation pattern in memory (Memento)
             self._store_validation_pattern(doc_name, doc_type, result)
             
+            # Debug: add fix attempt info to result for display
+            if fix_mode in ["apply", "force"]:
+                result["_debug_fix_info"] = {
+                    "fix_mode": fix_mode,
+                    "fix_attempted": True,
+                    "fix_result": fix_result
+                }
+            
             # Format response
             response = self._format_scan_result(result, doc_name, doc_type, fix_result, fix_mode)
             frappe.logger().info(f"[DataQualityScanner] Response length: {len(response) if response else 0}")
@@ -1555,10 +1563,13 @@ class DataQualityScannerSkill(SkillBase):
             mode_indicator = "**[FORCED]** "
         elif fix_mode == "preview":
             mode_indicator = "**[PREVIEW]** "
-        elif fix_mode == "preview":
-            mode_indicator = "**[PREVIEW]** "
             
         response = f"## 🔍 Data Quality Scan: `{doc_name}`\n\n{mode_indicator}"
+        
+        # Debug info - show fix attempt details
+        debug_info = result.get("_debug_fix_info")
+        if debug_info and fix_mode in ["apply", "force"]:
+            response += f"**Debug:** fix_mode={debug_info.get('fix_mode')}, fix_result={debug_info.get('fix_result')}\n\n"
         
         # Add mode indicator
         if fix_result and fix_result.get("applied") and len(fix_result.get("applied", [])) > 0:
