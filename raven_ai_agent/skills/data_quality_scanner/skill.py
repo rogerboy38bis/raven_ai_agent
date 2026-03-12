@@ -141,12 +141,17 @@ class DataQualityScannerSkill(SkillBase):
             # If user wants to apply fixes, try to apply them
             fix_result = None
             frappe.logger().info(f"[DataQualityScanner] wants_fix={wants_fix}, has_issues={bool(result.get('issues'))}, issues_count={len(result.get('issues', []))}")
-            if wants_fix and result.get("issues"):
+            frappe.logger().info(f"[DataQualityScanner] Query: '{query}'")
+            
+            # Force fix for testing - remove in production
+            force_fix = True
+            
+            if (wants_fix or force_fix) and result.get("issues"):
                 frappe.logger().info(f"[DataQualityScanner] Calling _apply_fixes with {len(result['issues'])} issues")
                 fix_result = self._apply_fixes(doc_name, doc_type, result)
                 frappe.logger().info(f"[DataQualityScanner] _apply_fixes returned: {fix_result}")
-                if fix_result and fix_result.get("applied"):
-                    frappe.logger().info(f"[DataQualityScanner] Fixes applied successfully, re-scanning...")
+                if fix_result and fix_result.get("applied") and len(fix_result.get("applied", [])) > 0:
+                    frappe.logger().info(f"[DataQualityScanner] Fixes applied successfully: {fix_result['applied']}")
                     # Re-scan after applying fixes
                     if doc_type == "Sales Order":
                         result = self.scan_sales_order(doc_name)
