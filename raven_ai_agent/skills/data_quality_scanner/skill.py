@@ -62,6 +62,11 @@ class DataQualityScannerSkill(SkillBase):
         context = context or {}
         query_lower = query.lower()
         
+        # Check if this is a scan/validate command
+        is_scan = any(trigger in query_lower for trigger in self.triggers)
+        if not is_scan:
+            return None  # Let other skills handle it
+        
         # Extract document name from query
         doc_name = self._extract_document_name(query)
         
