@@ -965,11 +965,14 @@ class DataQualityScannerSkill(SkillBase):
                     # Use custom_golden_number if available, otherwise fall back to batch_id
                     golden = batch.custom_golden_number or batch.batch_id or batch.name
                     
+                    # Extract only digits for golden number check
+                    golden_digits = ''.join(filter(str.isdigit, str(golden)))
+                    
                     # Check if golden number looks valid (10 digits)
-                    if golden and golden.isdigit() and len(golden) == 10:
-                        cc_name = f"{golden} - {golden} - AMB-W"
+                    if golden_digits and len(golden_digits) == 10:
+                        cc_name = f"{golden_digits} - {golden_digits} - AMB-W"
                         
-                        frappe.logger().info(f"[DataQualityScanner] Found golden number from Batch: {golden}")
+                        frappe.logger().info(f"[DataQualityScanner] Found golden number from Batch: {golden_digits}")
                         if frappe.db.exists("Cost Center", cc_name):
                             return cc_name
                         return cc_name
@@ -990,9 +993,11 @@ class DataQualityScannerSkill(SkillBase):
                 for dni in dn_items:
                     if dni.batch_no:
                         batch_id = dni.batch_no
-                        if batch_id.isdigit() and len(batch_id) == 10:
-                            cc_name = f"{batch_id} - {batch_id} - AMB-W"
-                            frappe.logger().info(f"[DataQualityScanner] Found golden number from DN batch: {batch_id}")
+                        # Extract digits only
+                        batch_digits = ''.join(filter(str.isdigit, str(batch_id)))
+                        if batch_digits and len(batch_digits) == 10:
+                            cc_name = f"{batch_digits} - {batch_digits} - AMB-W"
+                            frappe.logger().info(f"[DataQualityScanner] Found golden number from DN batch: {batch_digits}")
                             if frappe.db.exists("Cost Center", cc_name):
                                 return cc_name
                             return cc_name
@@ -1528,20 +1533,22 @@ class DataQualityScannerSkill(SkillBase):
                         if item.batch_no:
                             try:
                                 batch = frappe.get_doc("Batch", item.batch_no)
-                                # Try to get golden number
-                                golden = batch.custom_golden_number or batch.batch_id or batch.name
+                                # Try to get golden number - extract digits only for CC check
+                                raw_golden = batch.custom_golden_number or batch.batch_id or batch.name
+                                # Extract only digits for golden number check
+                                golden_digits = ''.join(filter(str.isdigit, str(raw_golden)))
                                 plant_code = batch.custom_plant_code if hasattr(batch, 'custom_plant_code') else None
                                 
                                 report["batches"].append({
                                     "name": batch.name,
                                     "item": batch.item,
-                                    "golden_number": golden if (golden and len(str(golden)) >= 10) else None,
+                                    "golden_number": raw_golden if (raw_golden and len(str(raw_golden)) >= 10) else None,
                                     "plant_code": plant_code
                                 })
                                 
-                                # Check if Cost Center exists for this golden number
-                                if golden and str(golden).isdigit() and len(str(golden)) >= 10:
-                                    expected_cc = f"{golden} - {golden} - AMB-W"
+                                # Check if Cost Center exists for this golden number (using digits only)
+                                if golden_digits and len(golden_digits) >= 10:
+                                    expected_cc = f"{golden_digits} - {golden_digits} - AMB-W"
                                     cc_exists = frappe.db.exists("Cost Center", expected_cc)
                                     if not cc_exists:
                                         if expected_cc not in report["missing"]["cost_centers"]:
