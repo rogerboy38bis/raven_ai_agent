@@ -865,7 +865,6 @@ class DataQualityScannerSkill(SkillBase):
                 wo_consecutive = "000"
                 wo_year = "00"  # Default year placeholder
                 plant_code = plant
-                plant_code = plant
                 
                 cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
                 cc_name = f"{cc_code} - {cc_code} - AMB-W"
@@ -922,6 +921,36 @@ class DataQualityScannerSkill(SkillBase):
                         return cc_name
                 except:
                     pass
+            
+            # Try 4: Check Batch for golden number (lote_real)
+            # Look for batches with matching item_code
+            try:
+                batches = frappe.get_all(
+                    "Batch",
+                    filters={"item": item_code},
+                    fields=["name", "batch_id"],
+                    order_by="creation DESC",
+                    limit=5
+                )
+                for batch in batches:
+                    batch_id = batch.batch_id or batch.name
+                    # Check if batch_id looks like a golden number (10 digits)
+                    if batch_id and batch_id.isdigit() and len(batch_id) == 10:
+                        full_code = batch_id
+                        item_prefix = full_code[:4]
+                        plant_code = full_code[9]
+                        wo_consecutive = full_code[4:7]
+                        wo_year = full_code[7:9]
+                        
+                        cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
+                        cc_name = f"{cc_code} - {cc_code} - AMB-W"
+                        
+                        frappe.logger().info(f"[DataQualityScanner] Derived cost center from Batch: {cc_name}")
+                        if frappe.db.exists("Cost Center", cc_name):
+                            return cc_name
+                        return cc_name
+            except:
+                pass
         
         frappe.logger().info(f"[DataQualityScanner] Could not derive cost center from items")
         return None
