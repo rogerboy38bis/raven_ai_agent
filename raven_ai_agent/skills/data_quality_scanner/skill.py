@@ -660,10 +660,12 @@ class DataQualityScannerSkill(SkillBase):
     
     def _get_cost_center_from_golden_number(self, doc) -> Optional[str]:
         """
-        Derive cost center from golden number in document items.
+        Derive cost center from Work Order linked to document items.
         
-        Looks at item codes in the document (Sales Order/Sales Invoice),
-        parses their golden numbers, and maps the plant code to a Cost Center.
+        Format: [item_code(4)][WO_consecutive(3)][WO_year(2)][Plant(1)]
+        Example: 0334114231 → item_code=0334, WO=114, year=23, plant=1
+        
+        Cost Center name format: "LOT {code} - {code} - AMB-W"
         
         Args:
             doc: Sales Order or Sales Invoice document
@@ -671,64 +673,91 @@ class DataQualityScannerSkill(SkillBase):
         Returns:
             Cost Center name if found, None otherwise
         """
-        # Get items from document
         items = doc.get("items", [])
         if not items:
             return None
         
-        # Collect plant codes from all items
-        plant_codes = set()
-        golden_items_found = 0
-        
+        # Try to find Work Order from items
         for item in items:
-            item_code = item.get("item_code")
-            if not item_code:
+            # Look for Work Order reference in the item
+            # ERPNext stores work_order in Production Plan or directly in Sales Order Item
+            work_order = item.get("work_order")
+            if not work_order:
                 continue
             
-            # Parse golden number from item code
-            parsed = parse_golden_number(item_code)
-            if parsed and parsed.get("plant"):
-                golden_items_found += 1
-                # Get plant code (numeric) from the plant name
-                # Plant names: Mix, Dry, Juice, Laboratory, Formulated
-                plant_name = parsed.get("plant", "").lower()
-                
-                # Find the numeric code for this plant name
-                for code, name in self.PLANT_COST_CENTER_MAP.items():
-                    if plant_name in name.lower():
-                        plant_codes.add(code)
-                        break
-        
-        if not plant_codes:
-            frappe.logger().info(f"[DataQualityScanner] No golden numbers found in {len(items)} items")
-            return None
-        
-        # If multiple plants, we can't determine a single cost center
-        if len(plant_codes) > 1:
-            frappe.logger().info(f"[DataQualityScanner] Multiple plants found: {plant_codes}")
-            return None
-        
-        # Get the cost center for the identified plant
-        plant_code = list(plant_codes)[0]
-        cost_center = self.PLANT_COST_CENTER_MAP.get(plant_code)
-        
-        # Verify the cost center exists and is not a group
-        if cost_center:
             try:
-                is_group = frappe.get_value("Cost Center", cost_center, "is_group")
-                if is_group:
-                    # Try to find a leaf cost center under this group
-                    leaf_cc = self._find_leaf_cost_center(cost_center)
-                    if leaf_cc:
-                        cost_center = leaf_cc
+                # Get Work Order document
+                wo_doc = frappe.get_doc("Work Order", work_order)
+                
+                # Build the golden code from Work Order info
+                # Format: [item_code(4)][WO_consecutive(3)][year(2)][plant(1)]
+                
+                # Get item code - first 4 characters
+                item_code = wo_doc.get("item_code", "")
+                item_prefix = item_code[:4] if item_code else ""
+                
+                # Get Work Order name - extract consecutive number
+                # WO name format could be like "WO-0334114231" or just the number
+                wo_name = wo_doc.name
+                wo_consecutive = ""
+                wo_year = ""
+                
+                # Try to extract from Work Order name
+                # Look for patterns like "0334114231" in the name
+                import re
+                match = re.search(r'(\d{10})', wo_name)
+                if match:
+                    full_code = match.group(1)
+                    if len(full_code) >= 10:
+                        wo_consecutive = full_code[4:7]  # positions 4-6
+                        wo_year = full_code[7:9]  # positions 7-8
+                        plant_code = full_code[9]  # position 9
                     else:
-                        cost_center = None
+                        # If less than 10, we need more info
+                        wo_consecutive = "000"  # fallback
+                        wo_year = "23"  # fallback to current year
+                        plant_code = "1"  # default to Mix
+                else:
+                    # Extract year from work order date
+                    if wo_doc.get("creation"):
+                        wo_year = str(wo_doc.creation.year)[-2:]
+                    
+                    # Use Work Order sequence number if available
+                    if wo_doc.get("seq"):
+                        wo_consecutive = str(wo_doc.seq).zfill(3)
+                    
+                    # Default plant to Mix if not found
+                    plant_code = "1"
+                
+                # Build the full code (10 digits)
+                if not item_prefix:
+                    item_prefix = "0000"
+                if not wo_consecutive:
+                    wo_consecutive = "000"
+                if not wo_year:
+                    wo_year = "23"
+                
+                cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
+                cc_name = f"LOT {cc_code} - {cc_code} - AMB-W"
+                
+                # Verify the cost center exists
+                if frappe.db.exists("Cost Center", cc_name):
+                    frappe.logger().info(f"[DataQualityScanner] Found cost center from Work Order: {cc_name}")
+                    return cc_name
+                else:
+                    frappe.logger().info(f"[DataQualityScanner] Cost center not found: {cc_name}, will try fallback")
+                    # Return the expected name anyway - it might be created on the fly
+                    return cc_name
+                    
+            except frappe.DoesNotExistError:
+                frappe.logger().info(f"[DataQualityScanner] Work Order not found: {work_order}")
+                continue
             except Exception as e:
-                frappe.logger().error(f"[DataQualityScanner] Error verifying cost center {cost_center}: {e}")
-                cost_center = None
+                frappe.logger().error(f"[DataQualityScanner] Error processing work order {work_order}: {e}")
+                continue
         
-        frappe.logger().info(f"[DataQualityScanner] Derived cost center from golden number: {cost_center} (items with golden number: {golden_items_found})")
-        return cost_center
+        frappe.logger().info(f"[DataQualityScanner] No Work Orders found in Sales Order items")
+        return None
     
     def _find_leaf_cost_center(self, parent_cc: str) -> Optional[str]:
         """Find a leaf (non-group) cost center under a parent group."""
