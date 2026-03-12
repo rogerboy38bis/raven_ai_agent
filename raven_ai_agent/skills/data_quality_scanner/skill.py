@@ -115,32 +115,21 @@ class DataQualityScannerSkill(SkillBase):
             doc_type = self._infer_document_type(doc_name)
             frappe.logger().info(f"[DataQualityScanner] doc_type: {doc_type}")
             
-            # Check fix mode from prefix
+            # Check fix mode - look for !fix or #fix anywhere in query
             # @ai fix SO-123 → dry-run (preview only)
             # @ai !fix SO-123 → apply fixes
             # @ai #fix SO-123 → force apply (bypass validation)
             fix_mode = "none"  # none, preview, apply, force
             
-            # Use regex to find fix pattern anywhere in query
-            import re
-            query_clean = re.sub(r'^@\w+\s+', '', query.strip())  # Remove @ai prefix
-            
-            if query_clean.startswith("!fix") or query_clean.startswith("!Fix"):
+            # More aggressive detection - check entire query
+            if "!fix" in query_lower or "apply fix" in query_lower:
                 fix_mode = "apply"
-            elif query_clean.startswith("#fix") or query_clean.startswith("#Fix"):
+            elif "#fix" in query_lower or "force fix" in query_lower:
                 fix_mode = "force"
-            elif query_clean.startswith("fix") or query_clean.startswith("Fix"):
+            elif "fix" in query_lower:
                 fix_mode = "preview"
             
-            # Also check for keywords in the query (backwards compatibility)
-            fix_keywords = ["fix", "apply", "solve", "repair", "auto-fix", "autofix", "corregir"]
-            wants_fix_keyword = any(kw in query_lower for kw in fix_keywords)
-            
-            # If fix_mode is still none but keyword exists, default to preview
-            if fix_mode == "none" and wants_fix_keyword:
-                fix_mode = "preview"
-            
-            frappe.logger().info(f"[DataQualityScanner] fix_mode: {fix_mode}, query_clean: {query_clean}")
+            frappe.logger().info(f"[DataQualityScanner] fix_mode detected: {fix_mode}, full query: {query}")
             
             # Run validation
             if doc_type == "Sales Order":
@@ -188,7 +177,7 @@ class DataQualityScannerSkill(SkillBase):
             self._store_validation_pattern(doc_name, doc_type, result)
             
             # Format response
-            response = self._format_scan_result(result, doc_name, doc_type, fix_result)
+            response = self._format_scan_result(result, doc_name, doc_type, fix_result, fix_mode)
             frappe.logger().info(f"[DataQualityScanner] Response length: {len(response) if response else 0}")
             
             return_result = {
@@ -1549,7 +1538,7 @@ class DataQualityScannerSkill(SkillBase):
             # Don't fail the scan if memory storage fails
             frappe.logger().warning(f"DataQualityScanner: Failed to store memory: {e}")
     
-    def _format_scan_result(self, result: Dict, doc_name: str, doc_type: str, fix_result: Dict = None) -> str:
+    def _format_scan_result(self, result: Dict, doc_name: str, doc_type: str, fix_result: Dict = None, fix_mode: str = "none") -> str:
         """Format scan result for display - uses response formatter for consistency"""
         if not result.get("success"):
             return f"❌ Error: {result.get('error')}"
@@ -1559,7 +1548,17 @@ class DataQualityScannerSkill(SkillBase):
         confidence = result.get("confidence", 0)
         
         # Build response with consistent header
-        response = f"## 🔍 Data Quality Scan: `{doc_name}`\n\n"
+        mode_indicator = ""
+        if fix_mode == "apply":
+            mode_indicator = "**[APPLIED]** "
+        elif fix_mode == "force":
+            mode_indicator = "**[FORCED]** "
+        elif fix_mode == "preview":
+            mode_indicator = "**[PREVIEW]** "
+        elif fix_mode == "preview":
+            mode_indicator = "**[PREVIEW]** "
+            
+        response = f"## 🔍 Data Quality Scan: `{doc_name}`\n\n{mode_indicator}"
         
         # Add mode indicator
         if fix_result and fix_result.get("applied") and len(fix_result.get("applied", [])) > 0:
