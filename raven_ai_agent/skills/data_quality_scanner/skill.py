@@ -7,6 +7,8 @@ Detects: addresses, accounts, CFDI fields, cost centers, currency issues.
 
 Based on 30+ bug fix commits analysis - catches 80% of recurring issues.
 Integrates with Memory System (Memento) to store validation patterns.
+
+Uses response_formatter for consistent output formatting.
 """
 
 import frappe
@@ -16,6 +18,12 @@ from datetime import datetime
 
 from raven_ai_agent.skills.framework import SkillBase
 from raven_ai_agent.skills.formulation_reader.reader import parse_golden_number
+from raven_ai_agent.api.response_formatter import (
+    format_confidence_score,
+    format_issues,
+    format_table,
+    apply_post_processing
+)
 
 
 class DataQualityScannerSkill(SkillBase):
@@ -1402,7 +1410,7 @@ class DataQualityScannerSkill(SkillBase):
             frappe.logger().warning(f"DataQualityScanner: Failed to store memory: {e}")
     
     def _format_scan_result(self, result: Dict, doc_name: str, doc_type: str, fix_result: Dict = None) -> str:
-        """Format scan result for display"""
+        """Format scan result for display - uses response formatter for consistency"""
         if not result.get("success"):
             return f"❌ Error: {result.get('error')}"
         
@@ -1410,101 +1418,54 @@ class DataQualityScannerSkill(SkillBase):
         warnings = result.get("warnings", [])
         confidence = result.get("confidence", 0)
         
-        # Format confidence level
-        if confidence >= 0.9:
-            confidence_emoji = "🟢"
-            confidence_text = "HIGH"
-        elif confidence >= 0.7:
-            confidence_emoji = "🟡"
-            confidence_text = "MEDIUM"
-        else:
-            confidence_emoji = "🔴"
-            confidence_text = "LOW"
+        # Build response with consistent header
+        response = f"## 🔍 Data Quality Scan: `{doc_name}`\n\n"
         
-        # Build response
-        response = f"## 🔍 Data Quality Scan: {doc_name}\n\n"
-        response += f"{confidence_emoji} **CONFIDENCE:** {confidence_text} ({confidence*100:.0f}%)\n\n"
+        # Add confidence score with consistent formatting
+        response += format_confidence_score(confidence, "CONFIDENCE") + "\n\n"
         
-        # Show applied fixes
+        # Show applied fixes in table format
         if fix_result and fix_result.get("applied"):
-            response += "### ✨ Auto-Fixes Applied:\n"
+            response += "### ✨ Auto-Fixes Applied\n\n"
+            
+            fix_data = []
             for fix in fix_result["applied"]:
-                response += f"  ✅ {fix}\n"
+                fix_data.append({"Action": fix, "Status": "✅ Applied"})
+            
             if fix_result.get("failed"):
-                response += "\n⚠️ Some fixes failed:\n"
                 for fail in fix_result["failed"]:
-                    response += f"  ❌ {fail}\n"
-            response += "\n"
+                    fix_data.append({"Action": fail, "Status": "❌ Failed"})
+            
+            response += format_table(fix_data, ["Action", "Status"]) + "\n\n"
         
         if not issues and not warnings:
             response += "✅ **No issues found!** Document is ready for processing.\n"
-            return response
+            return apply_post_processing(response)
         
-        # Group issues by severity
-        critical = [i for i in issues if i.get("severity") == "CRITICAL"]
-        high = [i for i in issues if i.get("severity") == "HIGH"]
-        medium = [i for i in issues if i.get("severity") == "MEDIUM"]
-        low = [i for i in issues if i.get("severity") == "LOW"]
-        info = [i for i in issues if i.get("severity") == "INFO"]
+        # Use the formatter for issues
+        response += format_issues(issues, "Issues Found") + "\n"
         
-        if critical:
-            response += f"### 🔴 Critical Issues ({len(critical)})\n"
-            for issue in critical:
-                response += f"- **{issue['message']}**\n"
-                response += f"  - Field: `{issue.get('field')}`\n"
-                if issue.get("auto_fix"):
-                    response += f"  - Auto-fix: {issue['auto_fix']}"
-                    if issue.get("auto_fix_value"):
-                        response += f" → `{issue['auto_fix_value']}`"
-                    response += f" ({issue['fix_confidence']*100:.0f}% confidence)\n"
-            response += "\n"
-        
-        if high:
-            response += f"### 🟠 High Priority Issues ({len(high)})\n"
-            for issue in high:
-                response += f"- **{issue['message']}**\n"
-                response += f"  - Field: `{issue.get('field')}`\n"
-                if issue.get("auto_fix"):
-                    response += f"  - Auto-fix: {issue['auto_fix']}"
-                    if issue.get("auto_fix_value"):
-                        response += f" → `{issue['auto_fix_value']}`"
-                    response += f" ({issue['fix_confidence']*100:.0f}% confidence)\n"
-            response += "\n"
-        
-        if medium:
-            response += f"### 🟡 Medium Issues ({len(medium)})\n"
-            for issue in medium:
-                response += f"- {issue['message']}\n"
-                response += f"  - Field: `{issue.get('field')}`\n"
-                if issue.get("auto_fix"):
-                    response += f"  - Auto-fix: {issue['auto_fix']}"
-                    if issue.get("auto_fix_value"):
-                        response += f" → `{issue['auto_fix_value']}`"
-                    response += f" ({issue.get('fix_confidence', 0.8)*100:.0f}% confidence)\n"
-            response += "\n"
-        
-        if low:
-            response += f"### ⚪ Warnings ({len(low)})\n"
-            for issue in low:
-                response += f"- {issue['message']}\n"
-            response += "\n"
-        
-        # Summary
+        # Summary in table format
         fixable = len([i for i in issues if i.get("auto_fix")])
-        response += f"---\n\n"
-        response += f"**📊 Summary:** {len(issues)} issues found, {fixable} can be auto-fixed\n\n"
+        critical_count = len([i for i in issues if i.get("severity") == "CRITICAL"])
         
-        if not result.get("can_proceed"):
-            response += "⚠️ **Cannot proceed** - Critical issues must be resolved first.\n\n"
-        else:
-            response += "✅ **Can proceed** - Minor issues can be auto-fixed.\n\n"
+        summary_data = [
+            {"Metric": "Total Issues", "Value": str(len(issues))},
+            {"Metric": "Auto-Fixable", "Value": str(fixable)},
+            {"Metric": "Critical", "Value": str(critical_count)},
+            {"Metric": "Can Proceed", "Value": "✅ Yes" if result.get("can_proceed") else "❌ No"}
+        ]
+        
+        response += "\n---\n\n"
+        response += "### 📊 Summary\n\n"
+        response += format_table(summary_data, ["Metric", "Value"]) + "\n\n"
         
         # Add pipeline diagnosis if available
         pipeline_diagnosis = result.get("pipeline_diagnosis")
         if pipeline_diagnosis:
             response += "\n" + self._format_pipeline_diagnosis(pipeline_diagnosis)
         
-        return response
+        return apply_post_processing(response)
     
     # ===========================================
     # Pipeline Diagnosis Methods
@@ -1663,7 +1624,7 @@ class DataQualityScannerSkill(SkillBase):
             return {"error": str(e)}
     
     def _format_pipeline_diagnosis(self, report: Dict) -> str:
-        """Format pipeline diagnosis for display - human readable format"""
+        """Format pipeline diagnosis for display - uses response formatter for consistency"""
         if "error" in report:
             return f"\n\n❌ Pipeline Diagnosis Error: {report['error']}\n\n"
         
@@ -1672,142 +1633,189 @@ class DataQualityScannerSkill(SkillBase):
         
         output = ""
         
-        # Header Section
-        output += "\n\n" + "="*60 + "\n"
-        output += "📊 PIPELINE DIAGNOSIS\n"
-        output += "="*60 + "\n"
-        output += f"Sales Order: {so.get('name')}\n"
-        output += f"Customer: {so.get('customer')}\n"
-        output += f"Status: {so.get('status')}\n"
-        output += f"Company: {so.get('company')}\n"
-        output += "="*60 + "\n\n"
+        # Header with consistent formatting
+        output += "\n\n--- 📊 PIPELINE DIAGNOSIS ---\n\n"
         
-        # Summary Section
-        output += "--- PIPELINE SUMMARY ---\n\n"
-        output += f"📦 Items:           {summary.get('total_items', 0)}\n"
-        output += f"🔧 BOMs:            {summary.get('total_boms', 0)}\n"
-        output += f"🚚 Delivery Notes:  {summary.get('total_delivery_notes', 0)}\n"
-        output += f"🏷️ Batches:         {summary.get('total_batches', 0)}\n"
-        output += f"💰 Sales Invoices:  {summary.get('total_invoices', 0)}\n\n"
+        # Document info table
+        doc_info = [
+            {"Field": "Sales Order", "Value": f"`{so.get('name')}`"},
+            {"Field": "Customer", "Value": so.get('customer', 'N/A')},
+            {"Field": "Status", "Value": so.get('status', 'N/A')},
+            {"Field": "Company", "Value": so.get('company', 'N/A')}
+        ]
+        output += format_table(doc_info, ["Field", "Value"]) + "\n\n"
         
-        # Missing items
+        # Summary table
+        output += "### 📦 Pipeline Summary\n\n"
+        summary_data = [
+            {"Item": "Items", "Count": str(summary.get('total_items', 0)), "Emoji": "📦"},
+            {"Item": "BOMs", "Count": str(summary.get('total_boms', 0)), "Emoji": "🔧"},
+            {"Item": "Delivery Notes", "Count": str(summary.get('total_delivery_notes', 0)), "Emoji": "🚚"},
+            {"Item": "Batches", "Count": str(summary.get('total_batches', 0)), "Emoji": "🏷️"},
+            {"Item": "Sales Invoices", "Count": str(summary.get('total_invoices', 0)), "Emoji": "💰"}
+        ]
+        output += format_table(summary_data, ["Emoji", "Item", "Count"]) + "\n\n"
+        
+        # Missing items - format as table if many, otherwise as list
         missing_boms = report.get("missing", {}).get("boms", [])
         missing_ccs = report.get("missing", {}).get("cost_centers", [])
         
         if missing_boms or missing_ccs:
-            output += "--- ⚠️ MISSING DOCUMENTS ---\n\n"
+            output += "### ⚠️ Missing Documents\n\n"
             
             if missing_boms:
-                output += "🔴 Missing BOMs:\n"
-                for bom in missing_boms:
-                    output += f"   • {bom}\n"
-                output += "\n"
+                output += "**🔴 Missing BOMs:**\n"
+                bom_data = [{"BOM": bom} for bom in missing_boms]
+                output += format_table(bom_data, ["BOM"]) + "\n\n"
             
             if missing_ccs:
-                output += "🟠 Missing Cost Centers:\n"
-                for cc in missing_ccs:
-                    output += f"   • {cc}\n"
-                output += "\n"
+                output += "**🟠 Missing Cost Centers:**\n"
+                cc_data = [{"Cost Center": cc} for cc in missing_ccs]
+                output += format_table(cc_data, ["Cost Center"]) + "\n\n"
         
-        # Items details
+        # Items details as table
         if report.get("items"):
-            output += "--- 📦 ITEMS IN SALES ORDER ---\n\n"
+            output += "### 📦 Items in Sales Order\n\n"
+            item_data = []
             for item in report["items"]:
-                output += f"• Item: {item['item_code']}\n"
-                output += f"  Qty: {item['qty']} | BOM: {item['bom_no'] or 'NONE'}\n\n"
+                item_data.append({
+                    "Item": item['item_code'],
+                    "Qty": str(item['qty']),
+                    "BOM": item['bom_no'] or 'NONE'
+                })
+            output += format_table(item_data, ["Item", "Qty", "BOM"]) + "\n\n"
         
-        # BOMs
+        # BOMs as table
         if report.get("boms"):
-            output += "--- 🔧 BILL OF MATERIALS (BOMs) ---\n\n"
+            output += "### 🔧 Bill of Materials (BOMs)\n\n"
+            bom_data = []
             for bom in report["boms"]:
-                output += f"• {bom['name']}\n"
-                output += f"  Item: {bom['item']} | Cost: ${bom['total_cost']:.2f}\n\n"
+                bom_data.append({
+                    "BOM": bom['name'],
+                    "Item": bom['item'],
+                    "Cost": f"${bom['total_cost']:.2f}" if bom.get('total_cost') else "N/A"
+                })
+            output += format_table(bom_data, ["BOM", "Item", "Cost"]) + "\n\n"
         
-        # Delivery Notes
+        # Delivery Notes as table
         if report.get("delivery_notes"):
-            output += "--- 🚚 DELIVERY NOTES ---\n\n"
+            output += "### 🚚 Delivery Notes\n\n"
+            dn_data = []
             for dn in report["delivery_notes"]:
-                output += f"📋 {dn['name']}\n"
-                output += f"   Date: {dn['posting_date']} | Status: {dn['docstatus']}\n"
-                for item in dn.get("items", []):
-                    output += f"   → {item['item_code']}\n"
-                    output += f"      Batch: {item['batch_no'] or 'N/A'} | Qty: {item['qty']}\n"
-                output += "\n"
+                status_map = {0: "Draft", 1: "Submitted", 2: "Cancelled"}
+                status = status_map.get(dn.get('docstatus', 0), "Unknown")
+                dn_data.append({
+                    "DN": dn['name'],
+                    "Date": str(dn['posting_date']) if dn.get('posting_date') else 'N/A',
+                    "Status": status,
+                    "Items": str(len(dn.get('items', [])))
+                })
+            output += format_table(dn_data, ["DN", "Date", "Status", "Items"]) + "\n\n"
         
-        # Batches
+        # Batches as table
         if report.get("batches"):
-            output += "--- 🏷️ BATCHES ---\n\n"
+            output += "### 🏷️ Batches\n\n"
+            batch_data = []
             for batch in report["batches"]:
                 golden = batch.get('golden_number') or 'N/A'
-                output += f"• {batch['name']}\n"
-                output += f"   Item: {batch['item']} | Golden: {golden}\n\n"
+                batch_data.append({
+                    "Batch": batch['name'],
+                    "Item": batch['item'],
+                    "Golden #": str(golden)[:20] if golden != 'N/A' else 'N/A'
+                })
+            output += format_table(batch_data, ["Batch", "Item", "Golden #"]) + "\n\n"
         
-        # Sales Invoices
+        # Sales Invoices as table
         if report.get("sales_invoices"):
-            output += "--- 💰 SALES INVOICES ---\n\n"
+            output += "### 💰 Sales Invoices\n\n"
+            sin_data = []
             for sin in report["sales_invoices"]:
-                output += f"• {sin['name']} | Date: {sin['posting_date']}\n"
-            output += "\n"
+                sin_data.append({
+                    "Invoice": sin['name'],
+                    "Date": str(sin['posting_date']) if sin.get('posting_date') else 'N/A'
+                })
+            output += format_table(sin_data, ["Invoice", "Date"]) + "\n\n"
         
-        # Recommendations
-        output += "="*60 + "\n"
-        output += "💡 RECOMMENDED ACTIONS\n"
-        output += "="*60 + "\n\n"
+        # Recommendations section
+        output += "---\n\n"
+        output += "### 💡 Recommended Actions\n\n"
         
         has_recommendations = False
+        actions = []
         
         if missing_ccs:
-            output += "✅ Create missing Cost Centers for golden number tracking\n"
-            output += f"   Command: @ai fix {so.get('name')}\n\n"
+            actions.append({
+                "Action": "Create missing Cost Centers",
+                "Command": f"`@ai fix {so.get('name')}`"
+            })
             has_recommendations = True
         
         if summary.get('total_delivery_notes', 0) == 0:
-            output += "🚚 Create Delivery Notes from this Sales Order\n"
-            output += f"   Command: @sales_order_follow_up delivery {so.get('name')}\n\n"
+            actions.append({
+                "Action": "Create Delivery Notes",
+                "Command": f"`@sales_order_follow_up delivery {so.get('name')}`"
+            })
             has_recommendations = True
         
         if summary.get('total_invoices', 0) == 0:
-            output += "💳 Generate Sales Invoice for delivered items\n\n"
+            actions.append({
+                "Action": "Generate Sales Invoice",
+                "Command": "Create from delivered items"
+            })
             has_recommendations = True
         
         if not has_recommendations:
             output += "✅ Pipeline is complete! No actions needed.\n"
+        else:
+            output += format_table(actions, ["Action", "Command"]) + "\n"
         
-        output += "\n" + "="*60 + "\n\n"
-        
-        return output
+        return apply_post_processing(output)
     
     def _get_help_message(self) -> str:
-        """Return help message"""
-        return """
+        """Return help message with consistent formatting"""
+        from raven_ai_agent.api.response_formatter import format_table
+        
+        response = """
 ## 🔍 Data Quality Scanner
 
-Pre-flight validation for ERPNext documents.
+Pre-flight validation for ERPNext documents before operations.
 
-### Usage:
-```
-@ai scan SO-00769-COSMETILAB 18
-@ai validate ACC-SINV-2026-00070
-@ai check data SAL-QTN-2024-00763
-@ai scan pipeline SO-00752-LEGOSAN AB  # Full pipeline diagnosis
-@ai full scan SO-00769-COSMETILAB 18   # Complete scan with pipeline
-```
-
-### What it checks:
-- ✅ Customer Address (exists, valid, complete)
-- ✅ Shipping/Billing Addresses
-- ✅ Account Configuration (receivable, income)
-- ✅ MX CFDI Fields (for Mexico)
-- ✅ Cost Centers (not groups, auto-derive from golden number)
-- ✅ Currency matching
-- ✅ **Pipeline Diagnosis** (full scan only):
-  - BOMs, Delivery Notes, Batches, Sales Invoices
-  - Missing Cost Centers
-  - Missing Stock Entries
-
-### Returns:
-- Confidence score (HIGH/MEDIUM/LOW)
-- List of issues with severity
-- Auto-fix suggestions
-- Full pipeline diagnosis (if requested)
 """
+        
+        # Usage as table
+        usage_data = [
+            {"Command": "scan", "Target": "SO-XXXXX", "Example": "@ai scan SO-00769-COSMETILAB 18"},
+            {"Command": "validate", "Target": "ACC-SINV-XXXXX", "Example": "@ai validate ACC-SINV-2026-00070"},
+            {"Command": "check data", "Target": "SAL-QTN-XXXXX", "Example": "@ai check data SAL-QTN-2024-00763"},
+            {"Command": "pipeline", "Target": "SO-XXXXX", "Example": "@ai pipeline SO-00752-LEGOSAN AB"},
+            {"Command": "full scan", "Target": "SO-XXXXX", "Example": "@ai full scan SO-00769-COSMETILAB 18"}
+        ]
+        
+        response += "### 📋 Usage\n\n"
+        response += format_table(usage_data, ["Command", "Target", "Example"]) + "\n\n"
+        
+        # What it checks
+        checks = [
+            {"Category": "✅ Addresses", "Checks": "Customer, Shipping, Billing"},
+            {"Category": "✅ Accounts", "Checks": "Receivable, Income accounts"},
+            {"Category": "✅ MX CFDI", "Checks": "Tax regime, CFDI use, Payment method"},
+            {"Category": "✅ Cost Center", "Checks": "Not a group, derives from golden #"},
+            {"Category": "✅ Currency", "Checks": "MXN enforcement for Mexico"},
+            {"Category": "✅ Pipeline", "Checks": "BOMs, DNs, Batches, Invoices"}
+        ]
+        
+        response += "### 🔎 What It Checks\n\n"
+        response += format_table(checks, ["Category", "Checks"]) + "\n\n"
+        
+        # Returns
+        returns = [
+            {"Return": "Confidence Score", "Format": "HIGH/MEDIUM/LOW with %"},
+            {"Return": "Issues List", "Format": "Grouped by severity"},
+            {"Return": "Auto-fix Options", "Format": "With confidence %"},
+            {"Return": "Pipeline Report", "Format": "Full document flow"}
+        ]
+        
+        response += "### 📤 Returns\n\n"
+        response += format_table(returns, ["Return", "Format"])
+        
+        return apply_post_processing(response)

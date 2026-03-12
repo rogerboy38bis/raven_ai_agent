@@ -6,11 +6,15 @@ Contains the @frappe.whitelist() entry points:
 - handle_raven_message: Webhook handler for Raven messages with bot routing
 
 Updated 2026-03-03: Added manufacturing, payment, and orchestrator agent routing
+Updated 2026-03-13: Added response post-processing for consistent formatting
 """
 import frappe
 import json
 import re
 from typing import Optional, Dict, List
+
+# Import response formatter for post-processing
+from raven_ai_agent.api.response_formatter import apply_post_processing
 
 @frappe.whitelist()
 def process_message(message: str, conversation_history: str = None) -> Dict:
@@ -321,6 +325,10 @@ def handle_raven_message(doc, method):
                     frappe.logger().warning("[AI Agent] No bot found, using direct message")
         
         response_text = result.get("response") or result.get("message") or result.get("error") or "No response generated"
+        
+        # Apply post-processing for consistent formatting
+        response_text = apply_post_processing(response_text)
+        
         link_doctype = result.get("link_doctype")
         link_document = result.get("link_document")
         
