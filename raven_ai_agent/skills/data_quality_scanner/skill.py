@@ -106,7 +106,7 @@ class DataQualityScannerSkill(SkillBase):
         """Extract document name from query"""
         # Match patterns like SO-XXXXX, SAL-QTN-XXXXX, ACC-SINV-XXXXX
         patterns = [
-            r"(SO-\d+-[A-Za-z0-9.\s]+)",
+            r"(SO-\d+-[\w\s\.\-]+)",  # SO-00767-BARENTZ Italia or SO-00767-BARENTZ Italia S.p.A
             r"(SAL-QTN-\d+-\d+)",
             r"(ACC-SINV-\d+-\d+)",
             r"(ACC-DN-\d+-\d+)",
@@ -115,9 +115,55 @@ class DataQualityScannerSkill(SkillBase):
         for pattern in patterns:
             match = re.search(pattern, query, re.IGNORECASE)
             if match:
-                return match.group(1).strip()
+                doc_name = match.group(1).strip()
+                # Try to find the actual document if exact match fails
+                return self._resolve_document_name(doc_name)
         
         return None
+    
+    def _resolve_document_name(self, doc_name: str) -> Optional[str]:
+        """Resolve document name - try exact match, then fuzzy search"""
+        # Try exact match first
+        try:
+            if frappe.db.exists("Sales Order", doc_name):
+                return doc_name
+        except:
+            pass
+        
+        # Try fuzzy search - look for SO-XXXXX pattern
+        so_match = re.match(r"(SO-\d+)-(.+)", doc_name, re.IGNORECASE)
+        if so_match:
+            so_prefix = so_match.group(1)
+            customer_hint = so_match.group(2).strip()
+            
+            # Search for SOs with this prefix
+            try:
+                sos = frappe.get_all(
+                    "Sales Order",
+                    filters={"name": ["like", f"{so_prefix}%"]},
+                    fields=["name", "customer"],
+                    limit=10
+                )
+                
+                for so in sos:
+                    # Try exact name match
+                    if so.name.upper() == doc_name.upper():
+                        return so.name
+                    
+                    # Try partial match on customer name
+                    if so.customer:
+                        customer_upper = so.customer.upper()
+                        if customer_hint.upper() in customer_upper or customer_upper[:20] in doc_name.upper():
+                            return so.name
+                
+                # Return first match if nothing else worked
+                if sos:
+                    return sos[0].name
+            except:
+                pass
+        
+        # Return original if no resolution
+        return doc_name
     
     def _infer_document_type(self, doc_name: str) -> str:
         """Infer document type from name"""
