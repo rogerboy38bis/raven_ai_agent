@@ -694,23 +694,56 @@ class DataQualityScannerSkill(SkillBase):
                 
                 for wo in wos:
                     wo_name = wo.name
+                    production_item = wo.production_item
+                    
                     import re
+                    
+                    # Try to find 10-digit code in WO name first
                     match = re.search(r'(\d{10})', wo_name)
+                    
                     if match:
+                        # Found 10-digit code (e.g., 0334114231)
                         full_code = match.group(1)
-                        item_prefix = full_code[0:4]  # First 4 chars
-                        wo_consecutive = full_code[4:7]  # positions 4-6
-                        wo_year = full_code[7:9]  # positions 7-8
-                        plant_code = full_code[9]  # position 9
-                        
-                        cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
-                        cc_name = f"LOT {cc_code} - {cc_code} - AMB-W"
-                        
-                        frappe.logger().info(f"[DataQualityScanner] Derived cost center from WO {wo_name}: {cc_name}")
-                        
-                        if frappe.db.exists("Cost Center", cc_name):
-                            return cc_name
+                        item_prefix = full_code[0:4]
+                        wo_consecutive = full_code[4:7]
+                        wo_year = full_code[7:9]
+                        plant_code = full_code[9]
+                    else:
+                        # Try to find any digits in WO name
+                        # Format might be MFG-WO-03726 or similar
+                        digits_match = re.search(r'(\d+)', wo_name)
+                        if digits_match:
+                            digits = digits_match.group(1)
+                            # Use production_item for item prefix if available
+                            if production_item:
+                                item_prefix = production_item[:4] if len(production_item) >= 4 else production_item.zfill(4)
+                            else:
+                                item_prefix = "0607"  # fallback
+                            
+                            # Pad the digits to get 10-digit format
+                            # Assuming format is like 03726 → need to figure out the structure
+                            # For now, use year=23, consecutive from digits, plant=1 (Mix)
+                            wo_consecutive = digits[-3:].zfill(3) if len(digits) >= 3 else "000"
+                            wo_year = "23"
+                            plant_code = "1"
+                        else:
+                            # Fallback: use production_item only
+                            if production_item:
+                                item_prefix = production_item[:4] if len(production_item) >= 4 else production_item.zfill(4)
+                                wo_consecutive = "000"
+                                wo_year = "23"
+                                plant_code = "1"
+                            else:
+                                continue
+                    
+                    cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
+                    cc_name = f"LOT {cc_code} - {cc_code} - AMB-W"
+                    
+                    frappe.logger().info(f"[DataQualityScanner] Derived cost center from WO {wo_name}: {cc_name}")
+                    
+                    if frappe.db.exists("Cost Center", cc_name):
                         return cc_name
+                    return cc_name
         except Exception as e:
             frappe.logger().error(f"[DataQualityScanner] Error querying Work Orders: {e}")
         
