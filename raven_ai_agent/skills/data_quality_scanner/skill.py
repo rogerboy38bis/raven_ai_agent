@@ -120,13 +120,16 @@ class DataQualityScannerSkill(SkillBase):
             # @ai !fix SO-123 → apply fixes
             # @ai #fix SO-123 → force apply (bypass validation)
             fix_mode = "none"  # none, preview, apply, force
-            query_stripped = query.strip()
             
-            if query_stripped.startswith("!fix ") or query_stripped.startswith("! Fix "):
+            # Use regex to find fix pattern anywhere in query
+            import re
+            query_clean = re.sub(r'^@\w+\s+', '', query.strip())  # Remove @ai prefix
+            
+            if query_clean.startswith("!fix") or query_clean.startswith("!Fix"):
                 fix_mode = "apply"
-            elif query_stripped.startswith("#fix ") or query_stripped.startswith("# Fix "):
+            elif query_clean.startswith("#fix") or query_clean.startswith("#Fix"):
                 fix_mode = "force"
-            elif query_stripped.startswith("fix ") or query_stripped.startswith("Fix "):
+            elif query_clean.startswith("fix") or query_clean.startswith("Fix"):
                 fix_mode = "preview"
             
             # Also check for keywords in the query (backwards compatibility)
@@ -137,7 +140,7 @@ class DataQualityScannerSkill(SkillBase):
             if fix_mode == "none" and wants_fix_keyword:
                 fix_mode = "preview"
             
-            frappe.logger().info(f"[DataQualityScanner] fix_mode: {fix_mode}")
+            frappe.logger().info(f"[DataQualityScanner] fix_mode: {fix_mode}, query_clean: {query_clean}")
             
             # Run validation
             if doc_type == "Sales Order":
