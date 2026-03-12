@@ -941,31 +941,26 @@ class DataQualityScannerSkill(SkillBase):
                     pass
             
             # Try 4: Check Batch for golden number (lote_real)
-            # Look for batches with matching item_code
+            # Look for batches with matching item_code - get the most recent one
             try:
                 batches = frappe.get_all(
                     "Batch",
                     filters={"item": item_code},
                     fields=["name", "batch_id"],
                     order_by="creation DESC",
-                    limit=5
+                    limit=10
                 )
                 for batch in batches:
                     batch_id = batch.batch_id or batch.name
                     # Check if batch_id looks like a golden number (10 digits)
                     if batch_id and batch_id.isdigit() and len(batch_id) == 10:
-                        full_code = batch_id
-                        item_prefix = full_code[:4]
-                        plant_code = full_code[9]
-                        wo_consecutive = full_code[4:7]
-                        wo_year = full_code[7:9]
+                        # Use the golden number directly from batch!
+                        cc_name = f"{batch_id} - {batch_id} - AMB-W"
                         
-                        cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
-                        cc_name = f"{cc_code} - {cc_code} - AMB-W"
-                        
-                        frappe.logger().info(f"[DataQualityScanner] Derived cost center from Batch: {cc_name}")
+                        frappe.logger().info(f"[DataQualityScanner] Found golden number from Batch: {batch_id}")
                         if frappe.db.exists("Cost Center", cc_name):
                             return cc_name
+                        # Return the CC name even if it doesn't exist - user can create it
                         return cc_name
             except:
                 pass
