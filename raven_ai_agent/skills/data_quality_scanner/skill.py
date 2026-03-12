@@ -757,6 +757,55 @@ class DataQualityScannerSkill(SkillBase):
                 continue
         
         frappe.logger().info(f"[DataQualityScanner] No Work Orders found in Sales Order items")
+        
+        # FALLBACK: Try to derive cost center from Item Code directly
+        # Use the golden number format from formulation_reader: ITEM_[product(4)][folio(3)][year(2)][plant(1)]
+        # This extracts the plant code from the item code and maps to a generic Cost Center
+        return self._derive_cost_center_from_item_code(items)
+    
+    def _derive_cost_center_from_item_code(self, items) -> Optional[str]:
+        """
+        Fallback: Derive cost center from Item Code golden number.
+        
+        Uses the golden number format: ITEM_[product(4)][folio(3)][year(2)][plant(1)]
+        Example: ITEM_0617027231 → plant=1 (Mix)
+        
+        Returns generic plant-based Cost Center if golden number found.
+        """
+        from raven_ai_agent.skills.formulation_reader.reader import parse_golden_number
+        
+        # Plant code mapping to generic Cost Center names
+        plant_cc_map = {
+            '1': 'Mix - AMB',      # Mix Plant
+            '2': 'Dry - AMB',      # Dry Plant
+            '3': 'Juice - AMB',   # Juice Plant
+            '4': 'Laboratory - AMB',  # Laboratory
+            '5': 'Formulated - AMB'   # Formulated Products
+        }
+        
+        for item in items:
+            item_code = item.get("item_code")
+            if not item_code:
+                continue
+            
+            # Parse golden number from item code
+            parsed = parse_golden_number(item_code)
+            if parsed and parsed.get("plant"):
+                plant_name = parsed.get("plant", "").lower()
+                
+                # Find the cost center for this plant
+                for code, cc_name in plant_cc_map.items():
+                    if plant_name in cc_name.lower():
+                        # Verify the cost center exists
+                        if frappe.db.exists("Cost Center", cc_name):
+                            frappe.logger().info(f"[DataQualityScanner] Derived cost center from item code: {cc_name}")
+                            return cc_name
+                        else:
+                            frappe.logger().info(f"[DataQualityScanner] Cost center not found: {cc_name}")
+                            return cc_name
+        
+        frappe.logger().info(f"[DataQualityScanner] No golden numbers found in item codes")
+        return None
         return None
     
     def _find_leaf_cost_center(self, parent_cc: str) -> Optional[str]:
