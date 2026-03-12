@@ -1421,17 +1421,18 @@ class DataQualityScannerSkill(SkillBase):
         
         # Summary
         fixable = len([i for i in issues if i.get("auto_fix")])
-        response += f"---\n**Summary:** {len(issues)} issues, {fixable} auto-fixable\n"
+        response += f"---\n\n"
+        response += f"**📊 Summary:** {len(issues)} issues found, {fixable} can be auto-fixed\n\n"
         
         if not result.get("can_proceed"):
-            response += "\n⚠️ **Cannot proceed** - Critical issues must be resolved first.\n"
+            response += "⚠️ **Cannot proceed** - Critical issues must be resolved first.\n\n"
         else:
-            response += "\n✅ **Can proceed** - Minor issues can be auto-fixed during execution.\n"
+            response += "✅ **Can proceed** - Minor issues can be auto-fixed.\n\n"
         
         # Add pipeline diagnosis if available
         pipeline_diagnosis = result.get("pipeline_diagnosis")
         if pipeline_diagnosis:
-            response += "\n" + self._format_pipeline_diagnosis(pipeline_diagnosis)
+            response += self._format_pipeline_diagnosis(pipeline_diagnosis)
         
         return response
     
@@ -1600,74 +1601,97 @@ class DataQualityScannerSkill(SkillBase):
         summary = report.get("summary", {})
         
         output = ""
-        output += f"### 📊 Pipeline Diagnosis: {so.get('name')}"
-        output += f"\n\n**Customer:** {so.get('customer')} | **Status:** {so.get('status')}"
-        output += f"\n\n---"
+        output += f"### 📊 Pipeline Diagnosis: {so.get('name')}\n\n"
+        output += f"**Customer:** {so.get('customer')} | **Status:** {so.get('status')}\n\n"
+        output += "---\n\n"
         
         # Summary
-        output += f"\n\n**📈 Summary:**"
-        output += f"\n- Items: {summary.get('total_items', 0)}"
-        output += f"\n- BOMs: {summary.get('total_boms', 0)}"
-        output += f"\n- Delivery Notes: {summary.get('total_delivery_notes', 0)}"
-        output += f"\n- Batches: {summary.get('total_batches', 0)}"
-        output += f"\n- Sales Invoices: {summary.get('total_invoices', 0)}"
+        output += f"**📈 Pipeline Summary:**\n\n"
+        output += f"• Items: **{summary.get('total_items', 0)}**\n"
+        output += f"• BOMs: **{summary.get('total_boms', 0)}**\n"
+        output += f"• Delivery Notes: **{summary.get('total_delivery_notes', 0)}**\n"
+        output += f"• Batches: **{summary.get('total_batches', 0)}**\n"
+        output += f"• Sales Invoices: **{summary.get('total_invoices', 0)}**\n\n"
         
         # Missing items
         missing_boms = report.get("missing", {}).get("boms", [])
         missing_ccs = report.get("missing", {}).get("cost_centers", [])
         
-        if missing_boms:
-            output += f"\n\n⚠️ **Missing BOMs:**"
-            for bom in missing_boms:
-                output += f"\n- {bom}"
-        
-        if missing_ccs:
-            output += f"\n\n⚠️ **Missing Cost Centers:**"
-            for cc in missing_ccs:
-                output += f"\n- {cc}"
+        if missing_boms or missing_ccs:
+            output += "---\n\n"
+            output += "⚠️ **Missing Documents:**\n\n"
+            
+            if missing_boms:
+                output += f"• **Missing BOMs:** {', '.join(missing_boms)}\n"
+            
+            if missing_ccs:
+                output += f"• **Missing Cost Centers:**\n"
+                for cc in missing_ccs:
+                    output += f"   - `{cc}`\n"
+            output += "\n"
         
         # Items details
         if report.get("items"):
-            output += f"\n\n**📦 Items:**"
+            output += "---\n\n"
+            output += "**📦 Items:**\n\n"
             for item in report["items"]:
-                output += f"\n- {item['item_code']} | Qty: {item['qty']} | BOM: {item['bom_no'] or 'NONE'}"
+                output += f"• `{item['item_code']}` | Qty: {item['qty']} | BOM: `{item['bom_no'] or 'NONE'}`\n"
+            output += "\n"
         
         # BOMs
         if report.get("boms"):
-            output += f"\n\n**🔧 BOMs:**"
+            output += "**🔧 BOMs:**\n\n"
             for bom in report["boms"]:
-                output += f"\n- {bom['name']} | Item: {bom['item']} | Cost: ${bom['total_cost']:.2f}"
+                output += f"• `{bom['name']}` | Item: `{bom['item']}` | Cost: ${bom['total_cost']:.2f}\n"
+            output += "\n"
         
         # Delivery Notes
         if report.get("delivery_notes"):
-            output += f"\n\n**🚚 Delivery Notes:**"
+            output += "**🚚 Delivery Notes:**\n\n"
             for dn in report["delivery_notes"]:
-                output += f"\n- {dn['name']} | Date: {dn['posting_date']}"
+                output += f"• `{dn['name']}` | Date: {dn['posting_date']}\n"
                 for item in dn.get("items", []):
-                    output += f"\n    - {item['item_code']} | Batch: {item['batch_no'] or 'N/A'} | Qty: {item['qty']}"
+                    output += f"   ├─ {item['item_code']} | Batch: `{item['batch_no'] or 'N/A'}` | Qty: {item['qty']}\n"
+            output += "\n"
         
         # Batches
         if report.get("batches"):
-            output += f"\n\n**🏷️ Batches:**"
+            output += "**🏷️ Batches:**\n\n"
             for batch in report["batches"]:
-                output += f"\n- {batch['name']} | Item: {batch['item']} | Golden: {batch.get('golden_number') or 'N/A'}"
+                output += f"• `{batch['name']}` | Item: `{batch['item']}` | Golden: `{batch.get('golden_number') or 'N/A'}`\n"
+            output += "\n"
         
         # Sales Invoices
         if report.get("sales_invoices"):
-            output += f"\n\n**💰 Sales Invoices:**"
+            output += "**💰 Sales Invoices:**\n\n"
             for sin in report["sales_invoices"]:
-                output += f"\n- {sin['name']} | Date: {sin['posting_date']}"
-        
-        output += "\n\n---"
+                output += f"• `{sin['name']}` | Date: {sin['posting_date']}\n"
+            output += "\n"
         
         # Recommendations
-        output += "\n\n**💡 Recommendations:**"
+        output += "---\n\n"
+        output += "**💡 Recommended Actions:**\n\n"
+        
+        has_recommendations = False
+        
         if missing_ccs:
-            output += "\n1. Create missing Cost Centers for proper golden number tracking"
+            output += "1. ✅ Create missing Cost Centers for golden number tracking\n"
+            output += f"   Run: `@ai fix {so.get('name')}` to auto-create them\n\n"
+            has_recommendations = True
+        
         if summary.get('total_delivery_notes', 0) == 0:
-            output += "\n2. Create Delivery Notes for this Sales Order"
+            output += "2. 🚚 Create Delivery Notes from this Sales Order\n"
+            output += f"   Run: `@sales_order_follow_up delivery {so.get('name')}`\n\n"
+            has_recommendations = True
+        
         if summary.get('total_invoices', 0) == 0:
-            output += "\n3. Generate Sales Invoices from delivered items"
+            output += "3. 💳 Generate Sales Invoice for delivered items\n\n"
+            has_recommendations = True
+        
+        if not has_recommendations:
+            output += "✅ Pipeline is complete! No actions needed.\n"
+        
+        output += "\n---\n"
         
         return output
     
