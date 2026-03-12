@@ -421,9 +421,18 @@ def handle_raven_message(doc, method):
                 "audit bom", "check bom", "validate bom"
             ]
 
+            # === SCANNER/DATA QUALITY commands - route to SkillRouter (before SO check) ===
+            scanner_keywords = [
+                "scan ", "validate ", "check data", "pre-flight", "preflight",
+                "quality check", "check address", "check account", "check invoice",
+                "verificar ", "diagnose "
+            ]
+            if any(kw in q_lower for kw in scanner_keywords):
+                bot_name = None  # Will route to SkillRouter in else case below
+
             # === PRIORITY: SO-linked commands always go to sales agent ===
             # This must come FIRST to prevent payment_bot from intercepting SI/DN creation
-            if re.search(r'SO-\d+', q_lower, re.IGNORECASE) or re.search(r'from\s+SO', q_lower, re.IGNORECASE):
+            elif re.search(r'SO-\d+', q_lower, re.IGNORECASE) or re.search(r'from\s+SO', q_lower, re.IGNORECASE):
                 # Exclude actual payment commands
                 if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+)', q_lower, re.IGNORECASE):
                     bot_name = "sales_order_follow_up"
