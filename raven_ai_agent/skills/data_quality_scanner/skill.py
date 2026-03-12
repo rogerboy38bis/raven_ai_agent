@@ -59,15 +59,15 @@ class DataQualityScannerSkill(SkillBase):
         self.fixes_applied = []
         
         # Plant code to Cost Center mapping (from golden number)
-        # Golden number format: ITEM_[product(4)][folio(3)][year(2)][plant(1)]
+        # Golden number format: {product(4)}{folio(3)}{year(2)}{plant(1)}
+        # Example: 043300001 -> Cost Center: 043300001 - 043300001 - AMB-W
         # Plant codes: 1=Mix, 2=Dry, 3=Juice, 4=Laboratory, 5=Formulated
-        # Cost Center names in system: Main - 1, Main - 2, etc.
         self.PLANT_COST_CENTER_MAP = {
-            '1': 'Main - 1',      # Mix Plant
-            '2': 'Main - 2',      # Dry Plant
-            '3': 'Main - 3',       # Juice Plant
-            '4': 'Main - 4',       # Laboratory
-            '5': 'Main - 5'        # Formulated Products
+            '1': 'Main - 1',      # Mix Plant (legacy format)
+            '2': 'Main - 2',      # Dry Plant (legacy format)
+            '3': 'Main - 3',      # Juice Plant (legacy format)
+            '4': 'Main - 4',      # Laboratory (legacy format)
+            '5': 'Main - 5'       # Formulated Products (legacy format)
         }
     
     def handle(self, query: str, context: Dict = None) -> Optional[Dict]:
@@ -830,23 +830,18 @@ class DataQualityScannerSkill(SkillBase):
         """
         Fallback: Derive cost center from Item Code or BOM.
         
-        Tries multiple approaches:
-        1. Parse golden number from item code (ITEM_XXXXXXXXXX format)
-        2. Use simple item code (4 digits) - assume plant based on first digit
-        3. Check BOM for plant information
+        Uses golden number format: {item(4)}{wo(3)}{year(2)}{plant(1)}
+        Example: 043300001 -> 0433-000-01-1 -> Cost Center: 043300001 - 043300001 - AMB-W
+        
+        When Work Order info is unavailable, use placeholders:
+        - wo_consecutive: 000
+        - year: current year (25)
+        - plant: derived from first digit of item code or default 1
         """
         from raven_ai_agent.skills.formulation_reader.reader import parse_golden_number
+        from datetime import datetime
         
-        # Plant code mapping to Cost Center names (Main - 1, Main - 2, etc.)
-        # Default fallback for unknown plant codes (like '0')
-        plant_cc_map = {
-            '0': 'Main - 1',      # Default fallback (Mix Plant)
-            '1': 'Main - 1',      # Mix Plant
-            '2': 'Main - 2',      # Dry Plant
-            '3': 'Main - 3',      # Juice Plant
-            '4': 'Main - 4',      # Laboratory
-            '5': 'Main - 5'       # Formulated Products
-        }
+        current_year = datetime.now().strftime("%y")  # e.g., "25"
         
         for item in items:
             item_code = item.get("item_code")
@@ -857,39 +852,72 @@ class DataQualityScannerSkill(SkillBase):
             # Try 1: Parse golden number from item code (ITEM_XXXXXXXXXX format)
             parsed = parse_golden_number(item_code)
             if parsed and parsed.get("plant"):
-                plant_name = parsed.get("plant", "").lower()
-                for code, cc_name in plant_cc_map.items():
-                    if plant_name in cc_name.lower():
-                        if frappe.db.exists("Cost Center", cc_name):
-                            return cc_name
-                        return cc_name
-            
-            # Try 2: Simple 4-digit item code - use first digit as plant hint
-            # This is a guess - may need adjustment based on your product codes
-            if item_code.isdigit() and len(item_code) == 4:
-                first_digit = item_code[0]
-                if first_digit in plant_cc_map:
-                    cc_name = plant_cc_map[first_digit]
-                    frappe.logger().info(f"[DataQualityScanner] Derived cost center from item code digit: {cc_name}")
-                    if frappe.db.exists("Cost Center", cc_name):
-                        return cc_name
+                # Construct golden number format from parsed data
+                product = parsed.get("product", "")
+                plant = parsed.get("plant", "")
+                
+                if len(product) >= 4:
+                    item_prefix = product[:4].zfill(4)
+                else:
+                    item_prefix = item_code[:4].zfill(4) if len(item_code) >= 4 else item_code.zfill(4)
+                
+                wo_consecutive = "000"  # Default
+                wo_year = current_year
+                plant_code = plant
+                
+                cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
+                cc_name = f"{cc_code} - {cc_code} - AMB-W"
+                
+                if frappe.db.exists("Cost Center", cc_name):
                     return cc_name
+                return cc_name
             
-            # Try 3: Check BOM for more info
+            # Try 2: Simple 4-digit item code - construct golden number
+            if item_code.isdigit() and len(item_code) >= 4:
+                item_prefix = item_code[:4].zfill(4)
+                
+                # Try to derive plant from first digit
+                first_digit = item_code[0]
+                plant_map = {
+                    '0': '1',  # Default to Mix
+                    '1': '1',  # Mix
+                    '2': '2',  # Dry
+                    '3': '3',  # Juice
+                    '4': '4',  # Laboratory
+                    '5': '5'   # Formulated
+                }
+                plant_code = plant_map.get(first_digit, '1')
+                
+                wo_consecutive = "000"
+                wo_year = current_year
+                
+                cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
+                cc_name = f"{cc_code} - {cc_code} - AMB-W"
+                
+                frappe.logger().info(f"[DataQualityScanner] Derived cost center from item code: {cc_name}")
+                if frappe.db.exists("Cost Center", cc_name):
+                    return cc_name
+                return cc_name
+            
+            # Try 3: Check BOM for golden number info
             if bom_no:
                 try:
-                    # BOM names might have plant info
                     import re
                     match = re.search(r'(\d{10})', bom_no)
                     if match:
                         full_code = match.group(1)
-                        plant_code = full_code[9]  # Last digit is plant
-                        if plant_code in plant_cc_map:
-                            cc_name = plant_cc_map[plant_code]
-                            frappe.logger().info(f"[DataQualityScanner] Derived cost center from BOM: {cc_name}")
-                            if frappe.db.exists("Cost Center", cc_name):
-                                return cc_name
+                        item_prefix = full_code[:4]
+                        plant_code = full_code[9]
+                        wo_consecutive = "000"
+                        wo_year = current_year
+                        
+                        cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
+                        cc_name = f"{cc_code} - {cc_code} - AMB-W"
+                        
+                        frappe.logger().info(f"[DataQualityScanner] Derived cost center from BOM: {cc_name}")
+                        if frappe.db.exists("Cost Center", cc_name):
                             return cc_name
+                        return cc_name
                 except:
                     pass
         
