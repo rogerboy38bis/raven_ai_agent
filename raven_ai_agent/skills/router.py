@@ -22,12 +22,21 @@ class SkillRouter:
     
     def _load_skills(self):
         """Auto-discover and load available skills."""
+        # Load Formulation Orchestrator
         try:
             from raven_ai_agent.skills.formulation_orchestrator.skill import FormulationOrchestratorSkill
             skill = FormulationOrchestratorSkill()
             self.skills[skill.name] = skill
         except Exception as e:
             print(f"Warning: Could not load FormulationOrchestratorSkill: {e}")
+        
+        # Load Data Quality Scanner (high priority - runs before operations)
+        try:
+            from raven_ai_agent.skills.data_quality_scanner.skill import DataQualityScannerSkill
+            skill = DataQualityScannerSkill()
+            self.skills[skill.name] = skill
+        except Exception as e:
+            print(f"Warning: Could not load DataQualityScannerSkill: {e}")
     
     def register_skill(self, skill):
         """Manually register a skill."""
