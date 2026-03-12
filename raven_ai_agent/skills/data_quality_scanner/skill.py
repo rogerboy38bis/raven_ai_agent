@@ -61,12 +61,13 @@ class DataQualityScannerSkill(SkillBase):
         # Plant code to Cost Center mapping (from golden number)
         # Golden number format: ITEM_[product(4)][folio(3)][year(2)][plant(1)]
         # Plant codes: 1=Mix, 2=Dry, 3=Juice, 4=Laboratory, 5=Formulated
+        # Cost Center names in system: Main - 1, Main - 2, etc.
         self.PLANT_COST_CENTER_MAP = {
-            '1': 'Mix - AMB',      # Mix Plant
-            '2': 'Dry - AMB',      # Dry Plant
-            '3': 'Juice - AMB',   # Juice Plant
-            '4': 'Laboratory - AMB',  # Laboratory
-            '5': 'Formulated - AMB'   # Formulated Products
+            '1': 'Main - 1',      # Mix Plant
+            '2': 'Main - 2',      # Dry Plant
+            '3': 'Main - 3',       # Juice Plant
+            '4': 'Main - 4',       # Laboratory
+            '5': 'Main - 5'        # Formulated Products
         }
     
     def handle(self, query: str, context: Dict = None) -> Optional[Dict]:
@@ -836,14 +837,15 @@ class DataQualityScannerSkill(SkillBase):
         """
         from raven_ai_agent.skills.formulation_reader.reader import parse_golden_number
         
-        # Plant code mapping to generic Cost Center names
+        # Plant code mapping to Cost Center names (Main - 1, Main - 2, etc.)
+        # Default fallback for unknown plant codes (like '0')
         plant_cc_map = {
-            '0': 'Mix - AMB',      # Default fallback
-            '1': 'Mix - AMB',      # Mix Plant
-            '2': 'Dry - AMB',      # Dry Plant
-            '3': 'Juice - AMB',   # Juice Plant
-            '4': 'Laboratory - AMB',  # Laboratory
-            '5': 'Formulated - AMB'   # Formulated Products
+            '0': 'Main - 1',      # Default fallback (Mix Plant)
+            '1': 'Main - 1',      # Mix Plant
+            '2': 'Main - 2',      # Dry Plant
+            '3': 'Main - 3',      # Juice Plant
+            '4': 'Main - 4',      # Laboratory
+            '5': 'Main - 5'       # Formulated Products
         }
         
         for item in items:
