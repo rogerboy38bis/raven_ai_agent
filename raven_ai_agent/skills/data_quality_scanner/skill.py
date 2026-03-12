@@ -140,9 +140,13 @@ class DataQualityScannerSkill(SkillBase):
             
             # If user wants to apply fixes, try to apply them
             fix_result = None
+            frappe.logger().info(f"[DataQualityScanner] wants_fix={wants_fix}, has_issues={bool(result.get('issues'))}, issues_count={len(result.get('issues', []))}")
             if wants_fix and result.get("issues"):
+                frappe.logger().info(f"[DataQualityScanner] Calling _apply_fixes with {len(result['issues'])} issues")
                 fix_result = self._apply_fixes(doc_name, doc_type, result)
-                if fix_result.get("applied"):
+                frappe.logger().info(f"[DataQualityScanner] _apply_fixes returned: {fix_result}")
+                if fix_result and fix_result.get("applied"):
+                    frappe.logger().info(f"[DataQualityScanner] Fixes applied successfully, re-scanning...")
                     # Re-scan after applying fixes
                     if doc_type == "Sales Order":
                         result = self.scan_sales_order(doc_name)
@@ -150,6 +154,8 @@ class DataQualityScannerSkill(SkillBase):
                         result = self.scan_sales_invoice(doc_name)
                     elif doc_type == "Quotation":
                         result = self.scan_quotation(doc_name)
+                else:
+                    frappe.logger().warning(f"[DataQualityScanner] No fixes applied. fix_result={fix_result}")
             
             frappe.logger().info(f"[DataQualityScanner] Scan result keys: {result.keys() if result else 'None'}")
             
@@ -1379,11 +1385,13 @@ class DataQualityScannerSkill(SkillBase):
         
         for issue in result.get("issues", []):
             if not issue.get("auto_fix"):
+                frappe.logger().info(f"[DataQualityScanner] Skipping issue (no auto_fix): {issue.get('type')}")
                 continue
             
             fix_type = issue.get("auto_fix")
             field = issue.get("field")
             fix_value = issue.get("auto_fix_value")
+            frappe.logger().info(f"[DataQualityScanner] Processing fix: type={fix_type}, field={field}, current_value={issue.get('current_value', 'N/A')}")
             
             try:
                 # Cost Center Fix
@@ -1421,13 +1429,18 @@ class DataQualityScannerSkill(SkillBase):
                     account = issue.get("current_value", "")
                     currency = doc.get("currency", "USD")  # Get document currency
                     company = doc.get("company")
-                    frappe.logger().info(f"[DataQualityScanner] Finding leaf account for {account}, currency={currency}, company={company}")
+                    frappe.logger().info(f"[DataQualityScanner] === FIND LEAF ACCOUNT ===")
+                    frappe.logger().info(f"[DataQualityScanner] account={account}, currency={currency}, company={company}")
                     leaf = self._find_leaf_account(account, preferred_currency=currency, company=company)
+                    frappe.logger().info(f"[DataQualityScanner] _find_leaf_account returned: {leaf}")
                     if leaf:
                         doc.debit_to = leaf
                         doc.save(ignore_permissions=True)
                         frappe.db.commit()
                         applied.append(f"Set {field} = {leaf}")
+                    else:
+                        failed.append(f"Could not find leaf account for {account}")
+                        frappe.logger().error(f"[DataQualityScanner] FAILED: Could not find leaf account for {account}")
                     continue
                 
                 # Address Fixes
