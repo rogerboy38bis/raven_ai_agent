@@ -768,6 +768,7 @@ class DataQualityScannerSkill(SkillBase):
         
         # Plant code mapping to generic Cost Center names
         plant_cc_map = {
+            '0': 'Mix - AMB',      # Default fallback
             '1': 'Mix - AMB',      # Mix Plant
             '2': 'Dry - AMB',      # Dry Plant
             '3': 'Juice - AMB',   # Juice Plant
