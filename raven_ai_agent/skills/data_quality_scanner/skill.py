@@ -842,9 +842,9 @@ class DataQualityScannerSkill(SkillBase):
         # FALLBACK: Try to derive cost center from Item Code directly
         # Use the golden number format from formulation_reader: ITEM_[product(4)][folio(3)][year(2)][plant(1)]
         # This extracts the plant code from the item code and maps to a generic Cost Center
-        return self._derive_cost_center_from_item_code(items)
+        return self._derive_cost_center_from_item_code(items, doc)
     
-    def _derive_cost_center_from_item_code(self, items) -> Optional[str]:
+    def _derive_cost_center_from_item_code(self, items, doc=None) -> Optional[str]:
         """
         Fallback: Derive cost center from Item Code or BOM.
         
@@ -962,6 +962,29 @@ class DataQualityScannerSkill(SkillBase):
                             return cc_name
                         # Return the CC name even if it doesn't exist - user can create it
                         return cc_name
+            except:
+                pass
+            
+            # Try 5: Check Delivery Note items linked to this Sales Order for golden number
+            try:
+                dn_items = frappe.db.sql("""
+                    SELECT dni.item_code, dni.batch_no
+                    FROM `tabDelivery Note Item` dni
+                    INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+                    WHERE dn.against_sales_order = %s
+                    AND dni.item_code = %s
+                    LIMIT 5
+                """, (doc.name, item_code), as_dict=True)
+                
+                for dni in dn_items:
+                    if dni.batch_no:
+                        batch_id = dni.batch_no
+                        if batch_id.isdigit() and len(batch_id) == 10:
+                            cc_name = f"{batch_id} - {batch_id} - AMB-W"
+                            frappe.logger().info(f"[DataQualityScanner] Found golden number from DN batch: {batch_id}")
+                            if frappe.db.exists("Cost Center", cc_name):
+                                return cc_name
+                            return cc_name
             except:
                 pass
         
