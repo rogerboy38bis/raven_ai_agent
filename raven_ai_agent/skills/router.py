@@ -100,7 +100,14 @@ class SkillRouter:
         
         # Execute best match
         best_skill = matches[0][0]
-        return best_skill.handle(query, context)
+        frappe.logger().info(f"[SkillRouter] Calling skill: {best_skill.name}")
+        try:
+            result = best_skill.handle(query, context)
+            frappe.logger().info(f"[SkillRouter] Skill result: {result}")
+            return result
+        except Exception as e:
+            frappe.logger().error(f"[SkillRouter] Error in skill {best_skill.name}: {e}")
+            return None
     
     def can_handle(self, query: str) -> bool:
         """Check if any skill can handle this query."""

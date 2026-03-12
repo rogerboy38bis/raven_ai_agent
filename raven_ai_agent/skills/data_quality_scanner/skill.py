@@ -62,9 +62,13 @@ class DataQualityScannerSkill(SkillBase):
         context = context or {}
         query_lower = query.lower()
         
+        frappe.logger().info(f"[DataQualityScanner] Handling query: {query}")
+        
         # Check if this is a scan/validate command
         is_scan = any(trigger in query_lower for trigger in self.triggers)
+        frappe.logger().info(f"[DataQualityScanner] is_scan: {is_scan}, triggers: {self.triggers}")
         if not is_scan:
+            frappe.logger().info("[DataQualityScanner] Not a scan command, returning None")
             return None  # Let other skills handle it
         
         # Extract document name from query
@@ -100,12 +104,14 @@ class DataQualityScannerSkill(SkillBase):
         # Format response
         response = self._format_scan_result(result, doc_name, doc_type)
         
-        return {
+        return_result = {
             "handled": True,
             "response": response,
             "confidence": result.get("confidence", 0.8),
             "data": result
         }
+        frappe.logger().info(f"[DataQualityScanner] Returning: {return_result}")
+        return return_result
     
     def _extract_document_name(self, query: str) -> Optional[str]:
         """Extract document name from query"""

@@ -594,13 +594,16 @@ def handle_raven_message(doc, method):
                     from raven_ai_agent.skills.router import SkillRouter
                     router = SkillRouter()
                     router_result = router.route(query)
+                    frappe.logger().info(f"[AI Agent] SkillRouter result: {router_result}")
                     if router_result and router_result.get("handled"):
                         result = {"success": True, "response": router_result.get("response", "Skill executed.")}
                     else:
+                        frappe.logger().info("[AI Agent] SkillRouter did not handle, falling back to default agent")
                         agent = RaymondLucyAgent(user)
                         result = agent.process_query(query, channel_id=doc.channel_id)
-                except ImportError:
-                    frappe.logger().warning("[AI Agent] SkillRouter not available, using default agent")
+                except Exception as e:
+                    frappe.logger().error(f"[AI Agent] SkillRouter error: {e}")
+                    frappe.logger().info("[AI Agent] Exception in SkillRouter, falling back to default agent")
                     agent = RaymondLucyAgent(user)
                     result = agent.process_query(query, channel_id=doc.channel_id)
         finally:
