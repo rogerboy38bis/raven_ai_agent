@@ -32,6 +32,20 @@ def _detect_ai_intent(query: str) -> str:
     """
     query_lower = query.lower()
 
+    # === PRIORITY: Data Quality Scanner / Diagnosis commands ===
+    # These commands should ALWAYS go to the skills system, NOT sales_order_follow_up
+    diagnosis_commands = [
+        r'^fix\s+SO-',           # @ai fix SO-00752
+        r'^scan\s+SO-',          # @ai scan SO-00752
+        r'^diagnose\s+SO-',      # @ai diagnose SO-00752
+        r'^validate\s+SO-',       # @ai validate SO-00752
+        r'^check\s+data\s+SO-',  # @ai check data SO-00752
+        r'pipeline\s+SO-',       # @ai pipeline SO-00752
+        r'full\s+scan\s+SO-',    # @ai full scan SO-00752
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in diagnosis_commands):
+        return "data_quality_scanner"
+    
     # === PRIORITY: SO-linked commands always go to sales agent ===
     if re.search(r'SO-\d+', query, re.IGNORECASE) or re.search(r'from\s+SO', query, re.IGNORECASE):
         if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+)', query, re.IGNORECASE):
@@ -81,6 +95,7 @@ def _detect_ai_intent(query: str) -> str:
         return "payment_bot"
     
     # Task Validator / Diagnosis: diagnose, validate, audit pipeline, check payments
+    # Also handles fix commands for data quality issues
     validator_patterns = [
         r'diagnos[ei]',
         r'validate\b',
@@ -89,6 +104,8 @@ def _detect_ai_intent(query: str) -> str:
         r'check\s+pago',
         r'pipeline\s+health',
         r'verify\s+(?:SO|sales\s+order)',
+        r'^fix\s+SO-',           # @ai fix SO-00752
+        r'^scan\s+SO-',          # @ai scan SO-00752
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in validator_patterns):
         return "task_validator"
