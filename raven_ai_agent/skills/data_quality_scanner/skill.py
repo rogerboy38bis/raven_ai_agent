@@ -1284,10 +1284,11 @@ class DataQualityScannerSkill(SkillBase):
             match = re.match(r'^(\d+)', account_name)
             if match:
                 root_number = match.group(1)
-                # Look for accounts starting with this root
+                frappe.logger().info(f"[DataQualityScanner] Searching for accounts starting with: {root_number}.%")
+                
+                # First try without is_group filter (some nested accounts might be groups too)
                 filters = {
-                    "name": ["like", f"{root_number}.%"],
-                    "is_group": 0
+                    "name": ["like", f"{root_number}.%"]
                 }
                 if company:
                     filters["company"] = company
@@ -1295,22 +1296,35 @@ class DataQualityScannerSkill(SkillBase):
                 nested_accounts = frappe.get_all(
                     "Account",
                     filters=filters,
-                    fields=["name", "account_currency"],
-                    limit=10
+                    fields=["name", "account_currency", "is_group"],
+                    limit=20
                 )
                 
+                frappe.logger().info(f"[DataQualityScanner] Found {len(nested_accounts)} accounts starting with {root_number}.")
+                
                 if nested_accounts:
-                    frappe.logger().info(f"[DataQualityScanner] Found {len(nested_accounts)} nested accounts starting with {root_number}")
-                    if preferred_currency:
-                        for acc in nested_accounts:
-                            if acc.account_currency == preferred_currency:
-                                return acc.name
-                    return nested_accounts[0].name
+                    # Filter to get only leaf accounts (non-groups)
+                    leaf_accounts = [a for a in nested_accounts if not a.is_group]
+                    frappe.logger().info(f"[DataQualityScanner] {len(leaf_accounts)} are leaf accounts")
+                    
+                    if leaf_accounts:
+                        if preferred_currency:
+                            for acc in leaf_accounts:
+                                if acc.account_currency == preferred_currency:
+                                    return acc.name
+                        return leaf_accounts[0].name
+                    
+                    # If no leaf accounts, try groups (last resort)
+                    if nested_accounts:
+                        frappe.logger().warning(f"[DataQualityScanner] No leaf accounts found, returning first account")
+                        return nested_accounts[0].name
             
             # Strategy 3: Look for any Receivable account in the same company
             frappe.logger().warning(f"[DataQualityScanner] No child accounts found, trying Receivable accounts")
             if not company:
                 company = frappe.get_value("Account", account_name, "company")
+            
+            found_account = None
             
             if company:
                 filters = {
@@ -1330,7 +1344,21 @@ class DataQualityScannerSkill(SkillBase):
                 
                 if receivables:
                     frappe.logger().info(f"[DataQualityScanner] Found {len(receivables)} receivable accounts")
+                    # Prefer accounts with "Debtors" in name for generic fallback
+                    for acc in receivables:
+                        if "Debtors" in acc.name or "CLIENTES" in acc.name:
+                            return acc.name
                     return receivables[0].name
+            
+            # Strategy 4: Hardcoded fallback for known accounts (AMB-Wellness specific)
+            frappe.logger().warning(f"[DataQualityScanner] Using hardcoded fallback for AMB-Wellness")
+            if company == "AMB-Wellness":
+                # Try known USD receivable
+                if frappe.db.exists("Account", "1310 - Debtors - AMB-W"):
+                    return "1310 - Debtors - AMB-W"
+                # Try known MXN receivable  
+                if frappe.db.exists("Account", "1320 - Debtors - AMB-W"):
+                    return "1320 - Debtors - AMB-W"
             
             return None
             
