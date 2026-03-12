@@ -856,7 +856,7 @@ class SalesMixin:
                         pass
                 # BUG25: Always check BOTH so_name AND dn_name
                 existing_si = check_existing_si(so_name=_idem_so, dn_name=_idem_dn)
-                    if existing_si:
+                if existing_si:
                         site_name = frappe.local.site
                         si_link = f"[{existing_si}](https://{site_name}/app/sales-invoice/{existing_si})"
                         return {
@@ -987,6 +987,106 @@ class SalesMixin:
                     }
             except Exception as e:
                 return {"success": False, "error": str(e)}
+        
+        # ==================== BATCH OPERATIONS (Migration Helper) ====================
+        
+        # Batch create Sales Invoices for "To Bill" orders (has DN, needs SI)
+        if "batch" in query_lower and ("invoice" in query_lower or "factura" in query_lower):
+            if "to bill" in query_lower or "pending invoice" in query_lower:
+                try:
+                    # Get all SOs with status "To Bill" that have DN but no SI
+                    ordenes = frappe.db.sql("""
+                        SELECT 
+                            so.name,
+                            so.customer_name,
+                            so.grand_total,
+                            so.currency,
+                            so.status
+                        FROM `tabSales Order` so
+                        INNER JOIN `tabDelivery Note Item` dni ON dni.against_sales_order = so.name AND dni.docstatus = 1
+                        INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent AND dn.docstatus = 1
+                        LEFT JOIN `tabSales Invoice Item` sii ON sii.sales_order = so.name AND sii.docstatus = 1
+                        LEFT JOIN `tabSales Invoice` si ON si.name = sii.parent AND si.docstatus = 1
+                        WHERE so.status = 'To Bill'
+                          AND so.docstatus = 1
+                          AND si.name IS NULL
+                        GROUP BY so.name
+                        ORDER BY so.grand_total DESC
+                        LIMIT 20
+                    """, as_dict=True)
+                    
+                    if not ordenes:
+                        return {"success": True, "message": "✅ No hay órdenes 'To Bill' pendientes de facturar."}
+                    
+                    if not is_confirm:
+                        # Show preview
+                        msg = f"📋 **BATCH: Crear {len(ordenes)} Sales Invoices**\n\n"
+                        msg += "| SO | Cliente | Importe |\n"
+                        msg += "|-----|---------|---------|\n"
+                        for o in ordenes[:10]:
+                            msg += f"| {o.name} | {o.customer_name[:20]} | {o.currency} {o.grand_total:,.2f} |\n"
+                        if len(ordenes) > 10:
+                            msg += f"\n... y {len(ordenes) - 10} más\n"
+                        msg += f"\nTotal: {len(ordenes)} facturas\n"
+                        msg += "Say 'confirm' para proceder."
+                        return {"requires_confirmation": True, "preview": msg}
+                    
+                    # Execute batch
+                    resultados = []
+                    errores = []
+                    for so_name in [o.name for o in ordenes]:
+                        try:
+                            from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+                            si_dict = make_sales_invoice(so_name)
+                            
+                            # Apply intelligent CFDI fields (same logic as single invoice)
+                            so = frappe.get_doc("Sales Order", so_name)
+                            cfdi_fields = self._discover_mx_cfdi_fields(so)
+                            
+                            if hasattr(si_dict, 'update'):
+                                si_dict.update(cfdi_fields)
+                            elif isinstance(si_dict, dict):
+                                si_dict.update(cfdi_fields)
+                            
+                            si = frappe.get_doc(si_dict)
+                            for field, value in cfdi_fields.items():
+                                setattr(si, field, value)
+                            
+                            self._resolve_customer_address(si, so)
+                            correct_debit_to = self._discover_debit_to(si)
+                            if correct_debit_to:
+                                si.debit_to = correct_debit_to
+                            
+                            fx_info = self._discover_conversion_rate(si)
+                            for item in si.items:
+                                if not item.get("mx_product_service_key"):
+                                    psk = frappe.db.get_value("Item", item.item_code, "mx_product_service_key")
+                                    if psk:
+                                        item.mx_product_service_key = psk
+                            
+                            si.insert()
+                            resultados.append({"so": so_name, "si": si.name})
+                            
+                        except Exception as e:
+                            errores.append({"so": so_name, "error": str(e)})
+                    
+                    # Build response
+                    msg = f"📋 **BATCH: Resultados**\n\n"
+                    msg += f"✅ Creadas: {len(resultados)}\n"
+                    if errores:
+                        msg += f"❌ Errores: {len(errores)}\n\n"
+                        for e in errores[:5]:
+                            msg += f"  • {e['so']}: {e['error'][:50]}\n"
+                    
+                    if resultados:
+                        msg += "\n**Facturas creadas:**\n"
+                        for r in resultados[:10]:
+                            msg += f"  • [{r['si']}](https://{frappe.local.site}/app/sales-invoice/{r['si']}) de {r['so']}\n"
+                    
+                    return {"success": True, "message": msg}
+                    
+                except Exception as e:
+                    return {"success": False, "error": str(e)}
         
         # ==================== END SALES-TO-PURCHASE CYCLE SOP ====================
 

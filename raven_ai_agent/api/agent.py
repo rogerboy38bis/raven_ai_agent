@@ -22,6 +22,7 @@ Backward compatibility:
 """
 import frappe
 import json
+import re
 from typing import Optional, Dict, List
 from openai import OpenAI
 
@@ -408,6 +409,10 @@ def handle_raven_message(doc, method):
                 "pipeline status", "run full cycle", "run pipeline",
                 "dry run", "validate so", "full cycle", "complete workflow"
             ]
+            batch_keywords = [
+                "batch create", "batch run", "batch status", "batch process",
+                "lote crear", "lote ejecutar", "lote status"
+            ]
             validator_keywords = [
                 "diagnose", "diagnosis", "validate ", "audit pipeline",
                 "check payment", "check pago", "pipeline health",
@@ -416,8 +421,26 @@ def handle_raven_message(doc, method):
                 "audit bom", "check bom", "validate bom"
             ]
 
+            # === PRIORITY: SO-linked commands always go to sales agent ===
+            # This must come FIRST to prevent payment_bot from intercepting SI/DN creation
+            if re.search(r'SO-\d+', q_lower, re.IGNORECASE) or re.search(r'from\s+SO', q_lower, re.IGNORECASE):
+                # Exclude actual payment commands
+                if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+)', q_lower, re.IGNORECASE):
+                    bot_name = "sales_order_follow_up"
+                else:
+                    # It's a payment command, continue to payment routing below
+                    pass
+            # === BATCH commands - route to BatchOrchestrator for generic batch processing ===
+            elif q_lower.strip().startswith("batch "):
+                bot_name = "batch_orchestrator"
+            # === Batch commands via keywords ===
+            elif any(kw in q_lower for kw in batch_keywords):
+                bot_name = "batch_orchestrator"
+            # === Legacy: Specific batch invoice/delivery commands go to sales agent ===
+            elif "batch" in q_lower and ("invoice" in q_lower or "factura" in q_lower or "delivery" in q_lower):
+                bot_name = "sales_order_follow_up"
             # Route by priority (more specific first) — skip if analytics already matched
-            if is_analytics:
+            elif is_analytics:
                 pass  # Already set to sales_order_bot → RaymondLucyAgent
             elif any(kw in q_lower for kw in validator_keywords):
                 bot_name = "task_validator"
@@ -540,6 +563,11 @@ def handle_raven_message(doc, method):
                 from raven_ai_agent.agents.workflow_orchestrator import WorkflowOrchestrator
                 wf_agent = WorkflowOrchestrator(user)
                 response = wf_agent.process_command(query)
+                result = {"success": True, "response": response}
+            elif bot_name == "batch_orchestrator":
+                from raven_ai_agent.agents.batch_orchestrator import BatchOrchestrator
+                batcher = BatchOrchestrator(user)
+                response = batcher.process_command(query)
                 result = {"success": True, "response": response}
             elif bot_name == "task_validator":
                 from raven_ai_agent.api.handlers.task_validator import TaskValidatorMixin
