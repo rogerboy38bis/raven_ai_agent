@@ -134,7 +134,7 @@ class DataQualityScannerSkill(SkillBase):
         so_match = re.match(r"(SO-\d+)-(.+)", doc_name, re.IGNORECASE)
         if so_match:
             so_prefix = so_match.group(1)
-            customer_hint = so_match.group(2).strip()
+            customer_hint = so_match.group(2).strip().upper()
             
             # Search for SOs with this prefix
             try:
@@ -142,25 +142,43 @@ class DataQualityScannerSkill(SkillBase):
                     "Sales Order",
                     filters={"name": ["like", f"{so_prefix}%"]},
                     fields=["name", "customer"],
-                    limit=10
+                    limit=20
                 )
+                
+                best_match = None
+                best_score = 0
                 
                 for so in sos:
                     # Try exact name match
                     if so.name.upper() == doc_name.upper():
                         return so.name
                     
-                    # Try partial match on customer name
+                    # Score based on customer name similarity
                     if so.customer:
                         customer_upper = so.customer.upper()
-                        if customer_hint.upper() in customer_upper or customer_upper[:20] in doc_name.upper():
+                        
+                        # Exact customer match
+                        if customer_hint == customer_upper:
                             return so.name
+                        
+                        # Customer starts with hint
+                        if customer_hint in customer_upper or customer_upper[:len(customer_hint)] == customer_hint:
+                            return so.name
+                        
+                        # Partial match - track best
+                        words = customer_hint.split()
+                        for word in words:
+                            if len(word) > 2 and word in customer_upper:
+                                return so.name
                 
-                # Return first match if nothing else worked
+                # Return best match or first
+                if best_match:
+                    return best_match
                 if sos:
+                    # Return first one with warning
                     return sos[0].name
-            except:
-                pass
+            except Exception as e:
+                frappe.logger().warning(f"SO resolution error: {e}")
         
         # Return original if no resolution
         return doc_name
@@ -448,40 +466,46 @@ class DataQualityScannerSkill(SkillBase):
         
         customer = so.customer
         currency = so.currency
+        company = so.company
         
         if not customer:
             return issues
         
-        # Get default receivable account
-        receivable_account = frappe.get_value(
-            "Customer", customer, "default_receivable_account"
-        )
+        # Get default receivable account from Company/Party Defaults (not Customer directly)
+        receivable_account = None
+        try:
+            from erpnext.accounts.party import get_party_account
+            receivable_account = get_party_account("Customer", customer, company)
+        except:
+            # Fallback: try to get from Sales Order's debit_to
+            receivable_account = so.get("debit_to")
         
         if not receivable_account:
             issues.append({
                 "type": "missing_receivable_account",
                 "severity": "HIGH",
-                "message": f"Customer '{customer}' has no default receivable account",
-                "field": "customer",
+                "message": f"No receivable account found for customer '{customer}' in company '{company}'",
+                "field": "debit_to",
                 "auto_fix": "set_default_account",
                 "fix_confidence": 0.95
             })
             return issues
         
-        # Check if account is a group
-        is_group = frappe.get_value("Account", receivable_account, "is_group")
-        if is_group:
-            issues.append({
-                "type": "group_account",
-                "severity": "CRITICAL",
-                "message": f"Account '{receivable_account}' is a Group Account (cannot be used in transactions)",
-                "field": "customer",
-                "auto_fix": "find_leaf_account",
-                "fix_confidence": 0.80
-            })
-        
-        # Check currency
-        account_currency = frappe.get_value("Account", receivable_account, "account_currency")
+        # Check if account exists and is not a group
+        try:
+            account = frappe.get_doc("Account", receivable_account)
+            if account.is_group:
+                issues.append({
+                    "type": "group_account",
+                    "severity": "CRITICAL",
+                    "message": f"Account '{receivable_account}' is a Group Account (cannot be used in transactions)",
+                    "field": "debit_to",
+                    "auto_fix": "find_leaf_account",
+                    "fix_confidence": 0.80
+                })
+            
+            # Check currency
+            account_currency = account.account_currency
         if account_currency and account_currency != currency:
             issues.append({
                 "type": "currency_mismatch",
