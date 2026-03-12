@@ -1418,13 +1418,28 @@ class DataQualityScannerSkill(SkillBase):
             try:
                 # Cost Center Fix
                 if fix_type == "set_from_golden_number" and field == "cost_center" and fix_value:
-                    # Verify the Cost Center exists first
-                    if frappe.db.exists("Cost Center", fix_value):
-                        doc.cost_center = fix_value
-                        doc.save(ignore_permissions=True)
-                        frappe.db.commit()
-                        applied.append(f"Set {field} = {fix_value}")
-                        frappe.logger().info(f"[DataQualityScanner] Applied fix: {field} = {fix_value}")
+                    # Check if Cost Center exists or can be found
+                    cc_exists = frappe.db.exists("Cost Center", fix_value)
+                    
+                    # Also try finding it with different naming patterns
+                    if not cc_exists:
+                        # Try to find similar cost centers
+                        similar = frappe.get_all("Cost Center", 
+                            filters={"name": ["like", f"%{fix_value.split(' - ')[0]}%"]},
+                            limit=5)
+                        if similar:
+                            cc_exists = True
+                            fix_value = similar[0].name
+                            applied.append(f"Found existing CC: {fix_value}")
+                    
+                    if cc_exists:
+                        try:
+                            doc.db_set("cost_center", fix_value)
+                            frappe.db.commit()
+                            applied.append(f"Set {field} = {fix_value}")
+                            frappe.logger().info(f"[DataQualityScanner] Applied fix: {field} = {fix_value}")
+                        except Exception as cc_err:
+                            failed.append(f"Could not set CC: {cc_err}")
                     else:
                         # Try to create the Cost Center if it doesn't exist
                         try:
@@ -1438,12 +1453,12 @@ class DataQualityScannerSkill(SkillBase):
                             cc.insert(ignore_permissions=True)
                             frappe.db.commit()
                             
-                            doc.cost_center = fix_value
-                            doc.save(ignore_permissions=True)
+                            doc.db_set("cost_center", fix_value)
                             frappe.db.commit()
                             applied.append(f"Created and set {field} = {fix_value}")
                         except Exception as ce:
                             failed.append(f"Could not create CC {fix_value}: {ce}")
+                            frappe.logger().error(f"[DataQualityScanner] CC creation failed: {ce}")
                     continue
                 
                 # Account Fix - Find Leaf Account
@@ -1456,10 +1471,15 @@ class DataQualityScannerSkill(SkillBase):
                     leaf = self._find_leaf_account(account, preferred_currency=currency, company=company)
                     frappe.logger().info(f"[DataQualityScanner] _find_leaf_account returned: {leaf}")
                     if leaf:
-                        doc.debit_to = leaf
-                        doc.save(ignore_permissions=True)
-                        frappe.db.commit()
-                        applied.append(f"Set {field} = {leaf}")
+                        try:
+                            # Use db_set to update just this field without triggering full validation
+                            doc.db_set("debit_to", leaf)
+                            frappe.db.commit()
+                            applied.append(f"Set {field} = {leaf}")
+                            frappe.logger().info(f"[DataQualityScanner] Successfully set debit_to to {leaf}")
+                        except Exception as save_err:
+                            failed.append(f"Could not save: {save_err}")
+                            frappe.logger().error(f"[DataQualityScanner] Save failed: {save_err}")
                     else:
                         failed.append(f"Could not find leaf account for {account}")
                         frappe.logger().error(f"[DataQualityScanner] FAILED: Could not find leaf account for {account}")
@@ -1469,10 +1489,12 @@ class DataQualityScannerSkill(SkillBase):
                 if fix_type == "create_from_customer" and field == "customer_address":
                     addr = self._create_address_from_customer(doc)
                     if addr:
-                        doc.customer_address = addr
-                        doc.save(ignore_permissions=True)
-                        frappe.db.commit()
-                        applied.append(f"Created and set {field} = {addr}")
+                        try:
+                            doc.db_set("customer_address", addr)
+                            frappe.db.commit()
+                            applied.append(f"Created and set {field} = {addr}")
+                        except Exception as addr_err:
+                            failed.append(f"Could not set address: {addr_err}")
                     continue
                     
             except Exception as e:
