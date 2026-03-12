@@ -43,7 +43,8 @@ class DataQualityScannerSkill(SkillBase):
     triggers = [
         "scan", "validate", "check data", "quality check",
         "pre-flight", "preflight", "diagnose",
-        "check address", "check account", "check invoice"
+        "check address", "check account", "check invoice",
+        "fix", "repair", "solve", "apply"
     ]
     
     patterns = [
