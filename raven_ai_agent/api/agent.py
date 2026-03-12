@@ -369,22 +369,20 @@ def handle_raven_message(doc, method):
         bot_name = None
 
         # ==================== PRE-PROCESSOR: Data Quality Scanner ====================
-        # Run scanner FIRST for any scan/validate command - bypasses all routing complexity
+        # Run scanner FIRST for scan/validate commands - pre-flight validation
+        # This bypasses routing complexity and ensures data quality checks run before operations
         if plain_text.lower().startswith("@ai"):
             query = plain_text[3:].strip()
             q_lower = query.lower()
             
-            # Quick check for scanner keywords
-            scanner_precheck = ["scan", "validate", "check data", "pre-flight", "preflight", "diagnose"]
-            if any(kw in q_lower for kw in scanner_precheck):
-                frappe.logger().info(f"[AI Agent] PRE-PROCESSOR: Detected scanner command, running scanner...")
+            scanner_keywords = ["scan", "validate", "check data", "pre-flight", "preflight", "diagnose"]
+            if any(kw in q_lower for kw in scanner_keywords):
                 try:
                     from raven_ai_agent.skills.data_quality_scanner.skill import DataQualityScannerSkill
                     scanner = DataQualityScannerSkill()
                     scanner_result = scanner.handle(query, {"channel_id": doc.channel_id})
                     
                     if scanner_result and scanner_result.get("handled"):
-                        # Send scanner result directly and return
                         response_text = scanner_result.get("response", "Scan complete.")
                         reply_doc = frappe.get_doc({
                             "doctype": "Raven Message",
@@ -395,17 +393,15 @@ def handle_raven_message(doc, method):
                         })
                         reply_doc.insert(ignore_permissions=True)
                         return
-                except Exception as preproc_err:
-                    frappe.logger().error(f"[AI Agent] PRE-PROCESSOR ERROR: {preproc_err}")
+                except Exception:
                     # Continue with normal routing if scanner fails
+                    pass
         # ==================== END PRE-PROCESSOR ====================
 
         # Check for @ai trigger (now on plain text) — route to correct agent by intent
         if plain_text.lower().startswith("@ai"):
             # Detect intent to route to specialized agents
             q_lower = query.lower()
-            
-            frappe.logger().info(f"[AI Agent] === START ROUTING === Query: '{query}' | q_lower: '{q_lower}'")
 
             # Phase 4: Analytics commands route to RaymondLucyAgent (default)
             analytics_keywords = [
