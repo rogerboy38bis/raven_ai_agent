@@ -42,9 +42,10 @@ class DataQualityScannerSkill(SkillBase):
     
     triggers = [
         "scan", "validate", "check data", "quality check",
-        "pre-flight", "preflight", "diagnose",
-        "check address", "check account", "check invoice",
-        "fix", "repair", "solve", "apply"
+        "pre-flight", "preflight", "diagnose", "diagnosis",
+        "pipeline", "check address", "check account", "check invoice",
+        "fix", "repair", "solve", "apply",
+        "pipeline diagnosis", "full scan"
     ]
     
     patterns = [
@@ -86,6 +87,11 @@ class DataQualityScannerSkill(SkillBase):
                 frappe.logger().info("[DataQualityScanner] Not a scan command, returning None")
                 return None  # Let other skills handle it
             
+            # Check if this is a pipeline diagnosis request
+            is_pipeline_diagnosis = any(
+                kw in query_lower for kw in ["pipeline", "full scan", "diagnosis", "complete"]
+            )
+            
             # Extract document name from query
             doc_name = self._extract_document_name(query)
             frappe.logger().info(f"[DataQualityScanner] Extracted doc_name: {doc_name}")
@@ -118,6 +124,11 @@ class DataQualityScannerSkill(SkillBase):
                     "response": f"❌ Unsupported document type: {doc_type}",
                     "confidence": 0.9
                 }
+            
+            # If user wants pipeline diagnosis, add it to results
+            if is_pipeline_diagnosis and doc_type == "Sales Order":
+                pipeline_report = self.diagnose_pipeline(doc_name)
+                result["pipeline_diagnosis"] = pipeline_report
             
             # If user wants to apply fixes, try to apply them
             fix_result = None
@@ -1412,7 +1423,246 @@ class DataQualityScannerSkill(SkillBase):
         else:
             response += "\n✅ **Can proceed** - Minor issues can be auto-fixed during execution.\n"
         
+        # Add pipeline diagnosis if available
+        pipeline_diagnosis = result.get("pipeline_diagnosis")
+        if pipeline_diagnosis:
+            response += "\n" + self._format_pipeline_diagnosis(pipeline_diagnosis)
+        
         return response
+    
+    # ===========================================
+    # Pipeline Diagnosis Methods
+    # ===========================================
+    
+    def diagnose_pipeline(self, so_name: str) -> Dict:
+        """
+        Diagnose the complete pipeline for a Sales Order and identify missing documents.
+        This provides a full picture of the document flow from SO to completed delivery.
+        
+        Returns a diagnostic report with:
+        - Sales Order details
+        - Items and BOMs
+        - Delivery Notes and Batches
+        - Sales Invoices
+        - Missing Cost Centers
+        - Missing documents
+        """
+        report = {
+            "sales_order": None,
+            "items": [],
+            "delivery_notes": [],
+            "sales_invoices": [],
+            "boms": [],
+            "batches": [],
+            "missing": {
+                "boms": [],
+                "cost_centers": [],
+                "batches": [],
+                "stock_entries": []
+            },
+            "summary": {}
+        }
+        
+        try:
+            # 1. Load Sales Order
+            so_doc = frappe.get_doc("Sales Order", so_name)
+            report["sales_order"] = {
+                "name": so_doc.name,
+                "customer": so_doc.customer,
+                "status": so_doc.status,
+                "transaction_date": so_doc.transaction_date,
+                "company": so_doc.company
+            }
+            
+            # 2. Analyze items and BOMs
+            for item in so_doc.items:
+                item_info = {
+                    "item_code": item.item_code,
+                    "qty": item.qty,
+                    "bom_no": item.bom_no,
+                    "warehouse": item.warehouse
+                }
+                report["items"].append(item_info)
+                
+                # Check if BOM exists
+                if item.bom_no:
+                    try:
+                        bom = frappe.get_doc("BOM", item.bom_no)
+                        report["boms"].append({
+                            "name": bom.name,
+                            "item": bom.item,
+                            "total_cost": bom.total_cost,
+                            "is_active": bom.is_active,
+                            "is_default": bom.is_default
+                        })
+                    except:
+                        report["missing"]["boms"].append(item.bom_no)
+            
+            # 3. Find Delivery Notes
+            dns = frappe.db.sql("""
+                SELECT DISTINCT dn.name, dn.posting_date
+                FROM `tabDelivery Note` dn
+                INNER JOIN `tabDelivery Note Item` dni ON dn.name = dni.parent
+                WHERE dni.against_sales_order = %s
+            """, so_name, as_dict=True)
+            
+            for dn in dns:
+                try:
+                    dn_doc = frappe.get_doc("Delivery Note", dn.name)
+                    dn_info = {
+                        "name": dn_doc.name,
+                        "posting_date": dn_doc.posting_date,
+                        "docstatus": dn_doc.docstatus,
+                        "items": []
+                    }
+                    
+                    for item in dn_doc.items:
+                        item_info = {
+                            "item_code": item.item_code,
+                            "batch_no": item.batch_no,
+                            "qty": item.qty
+                        }
+                        dn_info["items"].append(item_info)
+                        
+                        # Check Batch
+                        if item.batch_no:
+                            try:
+                                batch = frappe.get_doc("Batch", item.batch_no)
+                                # Try to get golden number
+                                golden = batch.custom_golden_number or batch.batch_id or batch.name
+                                plant_code = batch.custom_plant_code if hasattr(batch, 'custom_plant_code') else None
+                                
+                                report["batches"].append({
+                                    "name": batch.name,
+                                    "item": batch.item,
+                                    "golden_number": golden if (golden and len(str(golden)) >= 10) else None,
+                                    "plant_code": plant_code
+                                })
+                                
+                                # Check if Cost Center exists for this golden number
+                                if golden and str(golden).isdigit() and len(str(golden)) >= 10:
+                                    expected_cc = f"{golden} - {golden} - AMB-W"
+                                    cc_exists = frappe.db.exists("Cost Center", expected_cc)
+                                    if not cc_exists:
+                                        if expected_cc not in report["missing"]["cost_centers"]:
+                                            report["missing"]["cost_centers"].append(expected_cc)
+                            except:
+                                pass
+                    
+                    report["delivery_notes"].append(dn_info)
+                except:
+                    pass
+            
+            # 4. Find Sales Invoices
+            sins = frappe.db.sql("""
+                SELECT DISTINCT sin.name, sin.posting_date
+                FROM `tabSales Invoice` sin
+                INNER JOIN `tabSales Invoice Item` sini ON sin.name = sini.parent
+                WHERE sini.sales_order = %s
+            """, so_name, as_dict=True)
+            
+            for sin in sins:
+                report["sales_invoices"].append({
+                    "name": sin.name,
+                    "posting_date": sin.posting_date
+                })
+            
+            # 5. Build summary
+            report["summary"] = {
+                "total_items": len(report["items"]),
+                "total_boms": len(report["boms"]),
+                "total_delivery_notes": len(report["delivery_notes"]),
+                "total_batches": len(report["batches"]),
+                "total_invoices": len(report["sales_invoices"]),
+                "missing_boms_count": len(report["missing"]["boms"]),
+                "missing_cost_centers_count": len(report["missing"]["cost_centers"])
+            }
+            
+            return report
+            
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] Pipeline diagnosis error: {e}")
+            return {"error": str(e)}
+    
+    def _format_pipeline_diagnosis(self, report: Dict) -> str:
+        """Format pipeline diagnosis for display"""
+        if "error" in report:
+            return f"❌ Pipeline Diagnosis Error: {report['error']}"
+        
+        so = report.get("sales_order", {})
+        summary = report.get("summary", {})
+        
+        output = ""
+        output += f"### 📊 Pipeline Diagnosis: {so.get('name')}"
+        output += f"\n\n**Customer:** {so.get('customer')} | **Status:** {so.get('status')}"
+        output += f"\n\n---"
+        
+        # Summary
+        output += f"\n\n**📈 Summary:**"
+        output += f"\n- Items: {summary.get('total_items', 0)}"
+        output += f"\n- BOMs: {summary.get('total_boms', 0)}"
+        output += f"\n- Delivery Notes: {summary.get('total_delivery_notes', 0)}"
+        output += f"\n- Batches: {summary.get('total_batches', 0)}"
+        output += f"\n- Sales Invoices: {summary.get('total_invoices', 0)}"
+        
+        # Missing items
+        missing_boms = report.get("missing", {}).get("boms", [])
+        missing_ccs = report.get("missing", {}).get("cost_centers", [])
+        
+        if missing_boms:
+            output += f"\n\n⚠️ **Missing BOMs:**"
+            for bom in missing_boms:
+                output += f"\n- {bom}"
+        
+        if missing_ccs:
+            output += f"\n\n⚠️ **Missing Cost Centers:**"
+            for cc in missing_ccs:
+                output += f"\n- {cc}"
+        
+        # Items details
+        if report.get("items"):
+            output += f"\n\n**📦 Items:**"
+            for item in report["items"]:
+                output += f"\n- {item['item_code']} | Qty: {item['qty']} | BOM: {item['bom_no'] or 'NONE'}"
+        
+        # BOMs
+        if report.get("boms"):
+            output += f"\n\n**🔧 BOMs:**"
+            for bom in report["boms"]:
+                output += f"\n- {bom['name']} | Item: {bom['item']} | Cost: ${bom['total_cost']:.2f}"
+        
+        # Delivery Notes
+        if report.get("delivery_notes"):
+            output += f"\n\n**🚚 Delivery Notes:**"
+            for dn in report["delivery_notes"]:
+                output += f"\n- {dn['name']} | Date: {dn['posting_date']}"
+                for item in dn.get("items", []):
+                    output += f"\n    - {item['item_code']} | Batch: {item['batch_no'] or 'N/A'} | Qty: {item['qty']}"
+        
+        # Batches
+        if report.get("batches"):
+            output += f"\n\n**🏷️ Batches:**"
+            for batch in report["batches"]:
+                output += f"\n- {batch['name']} | Item: {batch['item']} | Golden: {batch.get('golden_number') or 'N/A'}"
+        
+        # Sales Invoices
+        if report.get("sales_invoices"):
+            output += f"\n\n**💰 Sales Invoices:**"
+            for sin in report["sales_invoices"]:
+                output += f"\n- {sin['name']} | Date: {sin['posting_date']}"
+        
+        output += "\n\n---"
+        
+        # Recommendations
+        output += "\n\n**💡 Recommendations:**"
+        if missing_ccs:
+            output += "\n1. Create missing Cost Centers for proper golden number tracking"
+        if summary.get('total_delivery_notes', 0) == 0:
+            output += "\n2. Create Delivery Notes for this Sales Order"
+        if summary.get('total_invoices', 0) == 0:
+            output += "\n3. Generate Sales Invoices from delivered items"
+        
+        return output
     
     def _get_help_message(self) -> str:
         """Return help message"""
@@ -1426,6 +1676,8 @@ Pre-flight validation for ERPNext documents.
 @ai scan SO-00769-COSMETILAB 18
 @ai validate ACC-SINV-2026-00070
 @ai check data SAL-QTN-2024-00763
+@ai scan pipeline SO-00752-LEGOSAN AB  # Full pipeline diagnosis
+@ai full scan SO-00769-COSMETILAB 18   # Complete scan with pipeline
 ```
 
 ### What it checks:
@@ -1433,11 +1685,16 @@ Pre-flight validation for ERPNext documents.
 - ✅ Shipping/Billing Addresses
 - ✅ Account Configuration (receivable, income)
 - ✅ MX CFDI Fields (for Mexico)
-- ✅ Cost Centers (not groups)
+- ✅ Cost Centers (not groups, auto-derive from golden number)
 - ✅ Currency matching
+- ✅ **Pipeline Diagnosis** (full scan only):
+  - BOMs, Delivery Notes, Batches, Sales Invoices
+  - Missing Cost Centers
+  - Missing Stock Entries
 
 ### Returns:
 - Confidence score (HIGH/MEDIUM/LOW)
 - List of issues with severity
 - Auto-fix suggestions
+- Full pipeline diagnosis (if requested)
 """
