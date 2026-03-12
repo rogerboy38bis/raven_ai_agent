@@ -436,9 +436,7 @@ def handle_raven_message(doc, method):
             if any(kw in q_lower for kw in scanner_keywords):
                 frappe.logger().info(f"[AI Agent] MATCHED scanner keywords, bot_name=None")
                 bot_name = None  # Will route to SkillRouter in else case below
-            else:
-                frappe.logger().info(f"[AI Agent] Did NOT match scanner keywords")
-
+            
             # === PRIORITY: SO-linked commands always go to sales agent ===
             # This must come FIRST to prevent payment_bot from intercepting SI/DN creation
             elif re.search(r'SO-\d+', q_lower, re.IGNORECASE) or re.search(r'from\s+SO', q_lower, re.IGNORECASE):
