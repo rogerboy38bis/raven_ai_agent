@@ -532,14 +532,32 @@ class DataQualityScannerSkill(SkillBase):
             
             # Check currency
             account_currency = account.account_currency
-        if account_currency and account_currency != currency:
+            if account_currency and account_currency != currency:
+                issues.append({
+                    "type": "currency_mismatch",
+                    "severity": "HIGH",
+                    "message": f"Account currency '{account_currency}' doesn't match document currency '{currency}'",
+                    "field": "currency",
+                    "auto_fix": "find_matching_currency_account",
+                    "fix_confidence": 0.88
+                })
+        except frappe.DoesNotExistError:
             issues.append({
-                "type": "currency_mismatch",
+                "type": "account_not_found",
+                "severity": "CRITICAL",
+                "message": f"Receivable account '{receivable_account}' not found",
+                "field": "debit_to",
+                "auto_fix": "find_default_receivable",
+                "fix_confidence": 0.90
+            })
+        except Exception as e:
+            issues.append({
+                "type": "account_error",
                 "severity": "HIGH",
-                "message": f"Account currency '{account_currency}' doesn't match document currency '{currency}'",
-                "field": "currency",
-                "auto_fix": "find_matching_currency_account",
-                "fix_confidence": 0.88
+                "message": f"Error checking account: {str(e)}",
+                "field": "debit_to",
+                "auto_fix": None,
+                "fix_confidence": 0.0
             })
         
         return issues
