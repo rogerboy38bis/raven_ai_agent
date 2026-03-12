@@ -100,6 +100,10 @@ class DataQualityScannerSkill(SkillBase):
             doc_type = self._infer_document_type(doc_name)
             frappe.logger().info(f"[DataQualityScanner] doc_type: {doc_type}")
             
+            # Check if user wants to apply a fix
+            fix_keywords = ["fix", "apply", "solve", "repair", "auto-fix", "autofix", "corregir"]
+            wants_fix = any(kw in query_lower for kw in fix_keywords)
+            
             # Run validation
             if doc_type == "Sales Order":
                 result = self.scan_sales_order(doc_name)
@@ -114,13 +118,26 @@ class DataQualityScannerSkill(SkillBase):
                     "confidence": 0.9
                 }
             
+            # If user wants to apply fixes, try to apply them
+            fix_result = None
+            if wants_fix and result.get("issues"):
+                fix_result = self._apply_fixes(doc_name, doc_type, result)
+                if fix_result.get("applied"):
+                    # Re-scan after applying fixes
+                    if doc_type == "Sales Order":
+                        result = self.scan_sales_order(doc_name)
+                    elif doc_type == "Sales Invoice":
+                        result = self.scan_sales_invoice(doc_name)
+                    elif doc_type == "Quotation":
+                        result = self.scan_quotation(doc_name)
+            
             frappe.logger().info(f"[DataQualityScanner] Scan result keys: {result.keys() if result else 'None'}")
             
             # Store validation pattern in memory (Memento)
             self._store_validation_pattern(doc_name, doc_type, result)
             
             # Format response
-            response = self._format_scan_result(result, doc_name, doc_type)
+            response = self._format_scan_result(result, doc_name, doc_type, fix_result)
             frappe.logger().info(f"[DataQualityScanner] Response length: {len(response) if response else 0}")
             
             return_result = {
@@ -1111,6 +1128,151 @@ class DataQualityScannerSkill(SkillBase):
         
         return max(0.1, min(0.95, base_score))
     
+    def _find_leaf_account(self, account_name: str) -> Optional[str]:
+        """Find a leaf (non-group) account under the given account group"""
+        try:
+            # Check if the account itself is a leaf
+            is_group = frappe.get_value("Account", account_name, "is_group")
+            if not is_group:
+                return account_name
+            
+            # Find child accounts
+            children = frappe.get_all(
+                "Account",
+                filters={
+                    "parent_account": account_name,
+                    "is_group": 0
+                },
+                fields=["name"],
+                limit=1
+            )
+            if children:
+                return children[0].name
+            
+            return None
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] Error finding leaf account: {e}")
+            return None
+    
+    def _apply_fixes(self, doc_name: str, doc_type: str, result: Dict) -> Dict:
+        """Apply auto-fixes to the document"""
+        applied = []
+        failed = []
+        
+        try:
+            doc = frappe.get_doc(doc_type, doc_name)
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] Could not load document: {e}")
+            return {"applied": [], "failed": [str(e)]}
+        
+        for issue in result.get("issues", []):
+            if not issue.get("auto_fix"):
+                continue
+            
+            fix_type = issue.get("auto_fix")
+            field = issue.get("field")
+            fix_value = issue.get("auto_fix_value")
+            
+            try:
+                # Cost Center Fix
+                if fix_type == "set_from_golden_number" and field == "cost_center" and fix_value:
+                    # Verify the Cost Center exists first
+                    if frappe.db.exists("Cost Center", fix_value):
+                        doc.cost_center = fix_value
+                        doc.save(ignore_permissions=True)
+                        frappe.db.commit()
+                        applied.append(f"Set {field} = {fix_value}")
+                        frappe.logger().info(f"[DataQualityScanner] Applied fix: {field} = {fix_value}")
+                    else:
+                        # Try to create the Cost Center if it doesn't exist
+                        try:
+                            cc = frappe.get_doc({
+                                "doctype": "Cost Center",
+                                "cost_center_name": fix_value,
+                                "company": doc.company or "AMB-Wellness",
+                                "parent_cost_center": "AMB-Wellness - AMB-W",
+                                "is_group": 0
+                            })
+                            cc.insert(ignore_permissions=True)
+                            frappe.db.commit()
+                            
+                            doc.cost_center = fix_value
+                            doc.save(ignore_permissions=True)
+                            frappe.db.commit()
+                            applied.append(f"Created and set {field} = {fix_value}")
+                        except Exception as ce:
+                            failed.append(f"Could not create CC {fix_value}: {ce}")
+                    continue
+                
+                # Account Fix - Find Leaf Account
+                if fix_type == "find_leaf_account" and field == "debit_to":
+                    account = issue.get("current_value", "")
+                    leaf = self._find_leaf_account(account)
+                    if leaf:
+                        doc.debit_to = leaf
+                        doc.save(ignore_permissions=True)
+                        frappe.db.commit()
+                        applied.append(f"Set {field} = {leaf}")
+                    continue
+                
+                # Address Fixes
+                if fix_type == "create_from_customer" and field == "customer_address":
+                    addr = self._create_address_from_customer(doc)
+                    if addr:
+                        doc.customer_address = addr
+                        doc.save(ignore_permissions=True)
+                        frappe.db.commit()
+                        applied.append(f"Created and set {field} = {addr}")
+                    continue
+                    
+            except Exception as e:
+                failed.append(f"Fix {fix_type} failed: {str(e)}")
+                frappe.logger().error(f"[DataQualityScanner] Fix failed: {fix_type} - {e}")
+        
+        return {"applied": applied, "failed": failed}
+    
+    def _create_address_from_customer(self, doc) -> Optional[str]:
+        """Create address from customer"""
+        try:
+            customer = frappe.get_doc("Customer", doc.customer)
+            
+            # Try to get existing address
+            addresses = frappe.get_all(
+                "Address",
+                filters={"link_doctype": "Customer", "link_name": doc.customer},
+                fields=["name"],
+                limit=1
+            )
+            
+            if addresses:
+                return addresses[0].name
+            
+            # Create new address
+            addr_name = f"{customer.customer_name} - Billing"
+            addr = frappe.get_doc({
+                "doctype": "Address",
+                "address_title": customer.customer_name,
+                "address_type": "Billing",
+                "address_line1": customer.address_line1 or "",
+                "city": customer.city or "",
+                "state": customer.state or "",
+                "pincode": customer.pincode or "",
+                "country": customer.country or "Mexico",
+                "phone": customer.phone or "",
+                "email_id": customer.email_id or "",
+                "links": [{
+                    "link_doctype": "Customer",
+                    "link_name": doc.customer
+                }]
+            })
+            addr.insert(ignore_permissions=True)
+            frappe.db.commit()
+            return addr.name
+            
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] Failed to create address: {e}")
+            return None
+    
     def _store_validation_pattern(self, doc_name: str, doc_type: str, result: Dict):
         """Store validation result in Memory (Memento) for learning"""
         try:
@@ -1134,7 +1296,7 @@ class DataQualityScannerSkill(SkillBase):
             # Don't fail the scan if memory storage fails
             frappe.logger().warning(f"DataQualityScanner: Failed to store memory: {e}")
     
-    def _format_scan_result(self, result: Dict, doc_name: str, doc_type: str) -> str:
+    def _format_scan_result(self, result: Dict, doc_name: str, doc_type: str, fix_result: Dict = None) -> str:
         """Format scan result for display"""
         if not result.get("success"):
             return f"❌ Error: {result.get('error')}"
@@ -1157,6 +1319,17 @@ class DataQualityScannerSkill(SkillBase):
         # Build response
         response = f"## 🔍 Data Quality Scan: {doc_name}\n\n"
         response += f"{confidence_emoji} **CONFIDENCE:** {confidence_text} ({confidence*100:.0f}%)\n\n"
+        
+        # Show applied fixes
+        if fix_result and fix_result.get("applied"):
+            response += "### ✨ Auto-Fixes Applied:\n"
+            for fix in fix_result["applied"]:
+                response += f"  ✅ {fix}\n"
+            if fix_result.get("failed"):
+                response += "\n⚠️ Some fixes failed:\n"
+                for fail in fix_result["failed"]:
+                    response += f"  ❌ {fail}\n"
+            response += "\n"
         
         if not issues and not warnings:
             response += "✅ **No issues found!** Document is ready for processing.\n"
@@ -1197,6 +1370,12 @@ class DataQualityScannerSkill(SkillBase):
             response += f"### 🟡 Medium Issues ({len(medium)})\n"
             for issue in medium:
                 response += f"- {issue['message']}\n"
+                response += f"  - Field: `{issue.get('field')}`\n"
+                if issue.get("auto_fix"):
+                    response += f"  - Auto-fix: {issue['auto_fix']}"
+                    if issue.get("auto_fix_value"):
+                        response += f" → `{issue['auto_fix_value']}`"
+                    response += f" ({issue.get('fix_confidence', 0.8)*100:.0f}% confidence)\n"
             response += "\n"
         
         if low:
