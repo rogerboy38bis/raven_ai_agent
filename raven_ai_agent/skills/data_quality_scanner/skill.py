@@ -59,59 +59,74 @@ class DataQualityScannerSkill(SkillBase):
     
     def handle(self, query: str, context: Dict = None) -> Optional[Dict]:
         """Handle validation query"""
-        context = context or {}
-        query_lower = query.lower()
-        
-        frappe.logger().info(f"[DataQualityScanner] Handling query: {query}")
-        
-        # Check if this is a scan/validate command
-        is_scan = any(trigger in query_lower for trigger in self.triggers)
-        frappe.logger().info(f"[DataQualityScanner] is_scan: {is_scan}, triggers: {self.triggers}")
-        if not is_scan:
-            frappe.logger().info("[DataQualityScanner] Not a scan command, returning None")
-            return None  # Let other skills handle it
-        
-        # Extract document name from query
-        doc_name = self._extract_document_name(query)
-        
-        if not doc_name:
+        try:
+            context = context or {}
+            query_lower = query.lower()
+            
+            frappe.logger().info(f"[DataQualityScanner] Handling query: {query}")
+            
+            # Check if this is a scan/validate command
+            is_scan = any(trigger in query_lower for trigger in self.triggers)
+            frappe.logger().info(f"[DataQualityScanner] is_scan: {is_scan}, triggers: {self.triggers}")
+            if not is_scan:
+                frappe.logger().info("[DataQualityScanner] Not a scan command, returning None")
+                return None  # Let other skills handle it
+            
+            # Extract document name from query
+            doc_name = self._extract_document_name(query)
+            frappe.logger().info(f"[DataQualityScanner] Extracted doc_name: {doc_name}")
+            
+            if not doc_name:
+                return {
+                    "handled": True,
+                    "response": self._get_help_message(),
+                    "confidence": 0.5
+                }
+            
+            # Determine document type
+            doc_type = self._infer_document_type(doc_name)
+            frappe.logger().info(f"[DataQualityScanner] doc_type: {doc_type}")
+            
+            # Run validation
+            if doc_type == "Sales Order":
+                result = self.scan_sales_order(doc_name)
+            elif doc_type == "Sales Invoice":
+                result = self.scan_sales_invoice(doc_name)
+            elif doc_type == "Quotation":
+                result = self.scan_quotation(doc_name)
+            else:
+                return {
+                    "handled": True,
+                    "response": f"❌ Unsupported document type: {doc_type}",
+                    "confidence": 0.9
+                }
+            
+            frappe.logger().info(f"[DataQualityScanner] Scan result keys: {result.keys() if result else 'None'}")
+            
+            # Store validation pattern in memory (Memento)
+            self._store_validation_pattern(doc_name, doc_type, result)
+            
+            # Format response
+            response = self._format_scan_result(result, doc_name, doc_type)
+            frappe.logger().info(f"[DataQualityScanner] Response length: {len(response) if response else 0}")
+            
+            return_result = {
+                "handled": True,
+                "response": response,
+                "confidence": result.get("confidence", 0.8),
+                "data": result
+            }
+            frappe.logger().info(f"[DataQualityScanner] Returning success result")
+            return return_result
+            
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] CRITICAL ERROR: {str(e)}")
+            frappe.log_error(f"DataQualityScanner.handle() error: {str(e)}", "Scanner Skill Error")
             return {
                 "handled": True,
-                "response": self._get_help_message(),
-                "confidence": 0.5
+                "response": f"❌ Scanner Error: {str(e)}",
+                "confidence": 0.0
             }
-        
-        # Determine document type
-        doc_type = self._infer_document_type(doc_name)
-        
-        # Run validation
-        if doc_type == "Sales Order":
-            result = self.scan_sales_order(doc_name)
-        elif doc_type == "Sales Invoice":
-            result = self.scan_sales_invoice(doc_name)
-        elif doc_type == "Quotation":
-            result = self.scan_quotation(doc_name)
-        else:
-            return {
-                "handled": True,
-                "response": f"❌ Unsupported document type: {doc_type}",
-                "confidence": 0.9
-            }
-        
-        # Store validation pattern in memory (Memento)
-        self._store_validation_pattern(doc_name, doc_type, result)
-        
-        # Format response
-        response = self._format_scan_result(result, doc_name, doc_type)
-        
-        return_result = {
-            "handled": True,
-            "response": response,
-            "confidence": result.get("confidence", 0.8),
-            "data": result
-        }
-        frappe.logger().info(f"[DataQualityScanner] Returning: {return_result}")
-        return return_result
     
     def _extract_document_name(self, query: str) -> Optional[str]:
         """Extract document name from query"""
