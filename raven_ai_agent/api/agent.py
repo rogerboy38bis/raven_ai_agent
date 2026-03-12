@@ -373,6 +373,8 @@ def handle_raven_message(doc, method):
             query = plain_text[3:].strip()
             # Detect intent to route to specialized agents
             q_lower = query.lower()
+            
+            frappe.logger().info(f"[AI Agent] === START ROUTING === Query: '{query}' | q_lower: '{q_lower}'")
 
             # Phase 4: Analytics commands route to RaymondLucyAgent (default)
             analytics_keywords = [
@@ -423,12 +425,19 @@ def handle_raven_message(doc, method):
 
             # === SCANNER/DATA QUALITY commands - route to SkillRouter (before SO check) ===
             scanner_keywords = [
-                "scan ", "validate ", "check data", "pre-flight", "preflight",
+                "scan", "validate", "check data", "pre-flight", "preflight",
                 "quality check", "check address", "check account", "check invoice",
-                "verificar ", "diagnose "
+                "verificar", "diagnose"
             ]
+            
+            # DEBUG: Log the query and matching
+            frappe.logger().info(f"[AI Agent] Query: '{q_lower}' | Scanner keywords: {scanner_keywords}")
+            
             if any(kw in q_lower for kw in scanner_keywords):
+                frappe.logger().info(f"[AI Agent] MATCHED scanner keywords, bot_name=None")
                 bot_name = None  # Will route to SkillRouter in else case below
+            else:
+                frappe.logger().info(f"[AI Agent] Did NOT match scanner keywords")
 
             # === PRIORITY: SO-linked commands always go to sales agent ===
             # This must come FIRST to prevent payment_bot from intercepting SI/DN creation
@@ -590,6 +599,29 @@ def handle_raven_message(doc, method):
                     result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
             else:
                 # Try SkillRouter first for specialized skills
+                frappe.logger().info(f"[AI Agent] ELSE block reached with bot_name: {bot_name}")
+                
+                # DIRECT CALL: Try DataQualityScanner FIRST for scan/validate commands
+                q_lower_check = query.lower() if query else ""
+                scanner_keywords_direct = ["scan", "validate", "check data", "pre-flight", "diagnose"]
+                
+                if any(kw in q_lower_check for kw in scanner_keywords_direct):
+                    frappe.logger().info(f"[AI Agent] DIRECT SCANNER CALL for query: {query}")
+                    try:
+                        from raven_ai_agent.skills.data_quality_scanner.skill import DataQualityScannerSkill
+                        scanner = DataQualityScannerSkill()
+                        scanner_result = scanner.handle(query, {"channel_id": doc.channel_id})
+                        frappe.logger().info(f"[AI Agent] Direct scanner result: {scanner_result}")
+                        if scanner_result and scanner_result.get("handled"):
+                            result = {"success": True, "response": scanner_result.get("response", "Scan complete.")}
+                        else:
+                            frappe.logger().info("[AI Agent] Direct scanner did not handle, trying SkillRouter")
+                            # Fall through to SkillRouter
+                            raise Exception("Direct scanner returned False")
+                    except Exception as scan_error:
+                        frappe.logger().info(f"[AI Agent] Direct scanner failed: {scan_error}")
+                        # Continue to SkillRouter
+                
                 try:
                     from raven_ai_agent.skills.router import SkillRouter
                     router = SkillRouter()
