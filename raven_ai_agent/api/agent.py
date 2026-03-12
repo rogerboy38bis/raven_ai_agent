@@ -368,9 +368,40 @@ def handle_raven_message(doc, method):
         query = None
         bot_name = None
 
-        # Check for @ai trigger (now on plain text) — route to correct agent by intent
+        # ==================== PRE-PROCESSOR: Data Quality Scanner ====================
+        # Run scanner FIRST for any scan/validate command - bypasses all routing complexity
         if plain_text.lower().startswith("@ai"):
             query = plain_text[3:].strip()
+            q_lower = query.lower()
+            
+            # Quick check for scanner keywords
+            scanner_precheck = ["scan", "validate", "check data", "pre-flight", "preflight", "diagnose"]
+            if any(kw in q_lower for kw in scanner_precheck):
+                frappe.logger().info(f"[AI Agent] PRE-PROCESSOR: Detected scanner command, running scanner...")
+                try:
+                    from raven_ai_agent.skills.data_quality_scanner.skill import DataQualityScannerSkill
+                    scanner = DataQualityScannerSkill()
+                    scanner_result = scanner.handle(query, {"channel_id": doc.channel_id})
+                    
+                    if scanner_result and scanner_result.get("handled"):
+                        # Send scanner result directly and return
+                        response_text = scanner_result.get("response", "Scan complete.")
+                        reply_doc = frappe.get_doc({
+                            "doctype": "Raven Message",
+                            "channel_id": doc.channel_id,
+                            "text": response_text,
+                            "message_type": "Text",
+                            "is_bot_message": 1
+                        })
+                        reply_doc.insert(ignore_permissions=True)
+                        return
+                except Exception as preproc_err:
+                    frappe.logger().error(f"[AI Agent] PRE-PROCESSOR ERROR: {preproc_err}")
+                    # Continue with normal routing if scanner fails
+        # ==================== END PRE-PROCESSOR ====================
+
+        # Check for @ai trigger (now on plain text) — route to correct agent by intent
+        if plain_text.lower().startswith("@ai"):
             # Detect intent to route to specialized agents
             q_lower = query.lower()
             
@@ -596,44 +627,18 @@ def handle_raven_message(doc, method):
                 else:
                     result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
             else:
-                # Try SkillRouter first for specialized skills
-                frappe.logger().info(f"[AI Agent] ELSE block reached with bot_name: {bot_name}")
-                
-                # DIRECT CALL: Try DataQualityScanner FIRST for scan/validate commands
-                q_lower_check = query.lower() if query else ""
-                scanner_keywords_direct = ["scan", "validate", "check data", "pre-flight", "diagnose"]
-                
-                if any(kw in q_lower_check for kw in scanner_keywords_direct):
-                    frappe.logger().info(f"[AI Agent] DIRECT SCANNER CALL for query: {query}")
-                    try:
-                        from raven_ai_agent.skills.data_quality_scanner.skill import DataQualityScannerSkill
-                        scanner = DataQualityScannerSkill()
-                        scanner_result = scanner.handle(query, {"channel_id": doc.channel_id})
-                        frappe.logger().info(f"[AI Agent] Direct scanner result: {scanner_result}")
-                        if scanner_result and scanner_result.get("handled"):
-                            result = {"success": True, "response": scanner_result.get("response", "Scan complete.")}
-                        else:
-                            frappe.logger().info("[AI Agent] Direct scanner did not handle, trying SkillRouter")
-                            # Fall through to SkillRouter
-                            raise Exception("Direct scanner returned False")
-                    except Exception as scan_error:
-                        frappe.logger().info(f"[AI Agent] Direct scanner failed: {scan_error}")
-                        # Continue to SkillRouter
-                
+                # Try SkillRouter for other specialized skills
                 try:
                     from raven_ai_agent.skills.router import SkillRouter
                     router = SkillRouter()
                     router_result = router.route(query)
-                    frappe.logger().info(f"[AI Agent] SkillRouter result: {router_result}")
                     if router_result and router_result.get("handled"):
                         result = {"success": True, "response": router_result.get("response", "Skill executed.")}
                     else:
-                        frappe.logger().info("[AI Agent] SkillRouter did not handle, falling back to default agent")
                         agent = RaymondLucyAgent(user)
                         result = agent.process_query(query, channel_id=doc.channel_id)
                 except Exception as e:
                     frappe.logger().error(f"[AI Agent] SkillRouter error: {e}")
-                    frappe.logger().info("[AI Agent] Exception in SkillRouter, falling back to default agent")
                     agent = RaymondLucyAgent(user)
                     result = agent.process_query(query, channel_id=doc.channel_id)
         finally:
