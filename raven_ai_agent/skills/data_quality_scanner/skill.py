@@ -841,7 +841,8 @@ class DataQualityScannerSkill(SkillBase):
         from raven_ai_agent.skills.formulation_reader.reader import parse_golden_number
         from datetime import datetime
         
-        current_year = datetime.now().strftime("%y")  # e.g., "25"
+        # Don't use current year - use placeholder "00" to match existing CC format
+        # current_year = datetime.now().strftime("%y")  # e.g., "25"
         
         for item in items:
             item_code = item.get("item_code")
@@ -861,8 +862,9 @@ class DataQualityScannerSkill(SkillBase):
                 else:
                     item_prefix = item_code[:4].zfill(4) if len(item_code) >= 4 else item_code.zfill(4)
                 
-                wo_consecutive = "000"  # Default
-                wo_year = current_year
+                wo_consecutive = "000"
+                wo_year = "00"  # Default year placeholder
+                plant_code = plant
                 plant_code = plant
                 
                 cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
@@ -889,7 +891,7 @@ class DataQualityScannerSkill(SkillBase):
                 plant_code = plant_map.get(first_digit, '1')
                 
                 wo_consecutive = "000"
-                wo_year = current_year
+                wo_year = "00"
                 
                 cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
                 cc_name = f"{cc_code} - {cc_code} - AMB-W"
@@ -909,7 +911,7 @@ class DataQualityScannerSkill(SkillBase):
                         item_prefix = full_code[:4]
                         plant_code = full_code[9]
                         wo_consecutive = "000"
-                        wo_year = current_year
+                        wo_year = "00"
                         
                         cc_code = f"{item_prefix}{wo_consecutive}{wo_year}{plant_code}"
                         cc_name = f"{cc_code} - {cc_code} - AMB-W"
