@@ -115,9 +115,29 @@ class DataQualityScannerSkill(SkillBase):
             doc_type = self._infer_document_type(doc_name)
             frappe.logger().info(f"[DataQualityScanner] doc_type: {doc_type}")
             
-            # Check if user wants to apply a fix
+            # Check fix mode from prefix
+            # @ai fix SO-123 → dry-run (preview only)
+            # @ai !fix SO-123 → apply fixes
+            # @ai #fix SO-123 → force apply (bypass validation)
+            fix_mode = "none"  # none, preview, apply, force
+            query_stripped = query.strip()
+            
+            if query_stripped.startswith("!fix ") or query_stripped.startswith("! Fix "):
+                fix_mode = "apply"
+            elif query_stripped.startswith("#fix ") or query_stripped.startswith("# Fix "):
+                fix_mode = "force"
+            elif query_stripped.startswith("fix ") or query_stripped.startswith("Fix "):
+                fix_mode = "preview"
+            
+            # Also check for keywords in the query (backwards compatibility)
             fix_keywords = ["fix", "apply", "solve", "repair", "auto-fix", "autofix", "corregir"]
-            wants_fix = any(kw in query_lower for kw in fix_keywords)
+            wants_fix_keyword = any(kw in query_lower for kw in fix_keywords)
+            
+            # If fix_mode is still none but keyword exists, default to preview
+            if fix_mode == "none" and wants_fix_keyword:
+                fix_mode = "preview"
+            
+            frappe.logger().info(f"[DataQualityScanner] fix_mode: {fix_mode}")
             
             # Run validation
             if doc_type == "Sales Order":
@@ -138,16 +158,13 @@ class DataQualityScannerSkill(SkillBase):
                 pipeline_report = self.diagnose_pipeline(doc_name)
                 result["pipeline_diagnosis"] = pipeline_report
             
-            # If user wants to apply fixes, try to apply them
+            # Handle fix mode
             fix_result = None
-            frappe.logger().info(f"[DataQualityScanner] wants_fix={wants_fix}, has_issues={bool(result.get('issues'))}, issues_count={len(result.get('issues', []))}")
-            frappe.logger().info(f"[DataQualityScanner] Query: '{query}'")
+            frappe.logger().info(f"[DataQualityScanner] fix_mode={fix_mode}, has_issues={bool(result.get('issues'))}, issues_count={len(result.get('issues', []))}")
             
-            # Force fix for testing - remove in production
-            force_fix = True
-            
-            if (wants_fix or force_fix) and result.get("issues"):
-                frappe.logger().info(f"[DataQualityScanner] Calling _apply_fixes with {len(result['issues'])} issues")
+            # Preview mode or Apply mode
+            if fix_mode in ["apply", "force"] and result.get("issues"):
+                frappe.logger().info(f"[DataQualityScanner] Applying fixes (mode={fix_mode})")
                 fix_result = self._apply_fixes(doc_name, doc_type, result)
                 frappe.logger().info(f"[DataQualityScanner] _apply_fixes returned: {fix_result}")
                 if fix_result and fix_result.get("applied") and len(fix_result.get("applied", [])) > 0:
@@ -1540,6 +1557,10 @@ class DataQualityScannerSkill(SkillBase):
         
         # Build response with consistent header
         response = f"## 🔍 Data Quality Scan: `{doc_name}`\n\n"
+        
+        # Add mode indicator
+        if fix_result and fix_result.get("applied") and len(fix_result.get("applied", [])) > 0:
+            response += "**✨ Fixes Applied**\n\n"
         
         # Add confidence score with consistent formatting
         response += format_confidence_score(confidence, "CONFIDENCE") + "\n\n"
