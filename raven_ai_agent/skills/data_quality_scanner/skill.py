@@ -848,9 +848,52 @@ class DataQualityScannerSkill(SkillBase):
         
         frappe.logger().info(f"[DataQualityScanner] No Work Orders/Production Orders found")
         
-        # FALLBACK: Try to derive cost center from Item Code directly
+        # PRIORITY: Try to get golden number from Delivery Notes/Batches
+        # This is more accurate than deriving from item code
+        # Check BOTH against_sales_order AND sales_order fields for compatibility
+        try:
+            dn_items = frappe.db.sql("""
+                SELECT dni.item_code, dni.batch_no
+                FROM `tabDelivery Note Item` dni
+                INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+                WHERE dn.against_sales_order = %s OR dn.sales_order = %s
+                LIMIT 20
+            """, (doc.name, doc.name,), as_dict=True)
+            
+            frappe.logger().info(f"[DataQualityScanner] Found {len(dn_items)} DN items for SO {doc.name}")
+            
+            for dni in dn_items:
+                if dni.batch_no:
+                    # FIRST: Try to get from Batch doctype (most reliable)
+                    # This handles cases where batch_no is short name like "LOTE016"
+                    try:
+                        batch = frappe.get_doc("Batch", dni.batch_no)
+                        raw_golden = batch.custom_golden_number or batch.batch_id or batch.name
+                        golden_digits = ''.join(filter(str.isdigit, str(raw_golden)))
+                        if golden_digits and len(golden_digits) >= 10:
+                            # Take first 10 digits
+                            golden_digits = golden_digits[:10]
+                            cc_name = f"{golden_digits} - {golden_digits} - AMB-W"
+                            frappe.logger().info(f"[DataQualityScanner] Found golden from Batch doctype: {golden_digits}")
+                            return cc_name
+                    except Exception as e:
+                        frappe.logger().warning(f"[DataQualityScanner] Error fetching Batch {dni.batch_no}: {e}")
+                        pass
+                    
+                    # SECOND: Try to extract digits directly from batch_no
+                    # This works if batch_no contains full golden number like "LOTE-0612185231"
+                    batch_digits = ''.join(filter(str.isdigit, str(dni.batch_no)))
+                    if batch_digits and len(batch_digits) >= 10:
+                        batch_digits = batch_digits[:10]  # Take first 10 digits
+                        cc_name = f"{batch_digits} - {batch_digits} - AMB-W"
+                        frappe.logger().info(f"[DataQualityScanner] Found golden number from DN batch direct: {batch_digits}")
+                        return cc_name
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] Error checking DN batches: {e}")
         
-        # FALLBACK: Try to derive cost center from Item Code directly
+        frappe.logger().info(f"[DataQualityScanner] No golden number found from DN/Batches, trying item code fallback")
+        
+        # LAST RESORT: Try to derive cost center from Item Code directly
         # Use the golden number format from formulation_reader: ITEM_[product(4)][folio(3)][year(2)][plant(1)]
         # This extracts the plant code from the item code and maps to a generic Cost Center
         return self._derive_cost_center_from_item_code(items, doc)
@@ -1432,7 +1475,7 @@ class DataQualityScannerSkill(SkillBase):
         # Add pipeline diagnosis if available
         pipeline_diagnosis = result.get("pipeline_diagnosis")
         if pipeline_diagnosis:
-            response += self._format_pipeline_diagnosis(pipeline_diagnosis)
+            response += "\n" + self._format_pipeline_diagnosis(pipeline_diagnosis)
         
         return response
     
@@ -1593,105 +1636,132 @@ class DataQualityScannerSkill(SkillBase):
             return {"error": str(e)}
     
     def _format_pipeline_diagnosis(self, report: Dict) -> str:
-        """Format pipeline diagnosis for display"""
+        """Format pipeline diagnosis for display - human readable format"""
         if "error" in report:
-            return f"❌ Pipeline Diagnosis Error: {report['error']}"
+            return f"\n❌ Pipeline Diagnosis Error: {report['error']}\n"
         
         so = report.get("sales_order", {})
         summary = report.get("summary", {})
         
         output = ""
-        output += f"### 📊 Pipeline Diagnosis: {so.get('name')}\n\n"
-        output += f"**Customer:** {so.get('customer')} | **Status:** {so.get('status')}\n\n"
-        output += "---\n\n"
         
-        # Summary
-        output += f"**📈 Pipeline Summary:**\n\n"
-        output += f"• Items: **{summary.get('total_items', 0)}**\n"
-        output += f"• BOMs: **{summary.get('total_boms', 0)}**\n"
-        output += f"• Delivery Notes: **{summary.get('total_delivery_notes', 0)}**\n"
-        output += f"• Batches: **{summary.get('total_batches', 0)}**\n"
-        output += f"• Sales Invoices: **{summary.get('total_invoices', 0)}**\n\n"
+        # Header Section
+        output += "\n" + "="*60 + "\n"
+        output += f"📊 PIPELINE DIAGNOSIS: {so.get('name')}\n"
+        output += "="*60 + "\n\n"
+        output += f"🏢 Customer: **{so.get('customer')}**\n"
+        output += f"📌 Status: {so.get('status')}\n"
+        output += f"🏭 Company: {so.get('company')}\n\n"
+        
+        # Summary Section
+        output += "-"*60 + "\n"
+        output += "📈 PIPELINE SUMMARY\n"
+        output += "-"*60 + "\n"
+        output += f"  📦 Items:           {summary.get('total_items', 0)}\n"
+        output += f"  🔧 BOMs:            {summary.get('total_boms', 0)}\n"
+        output += f"  🚚 Delivery Notes:  {summary.get('total_delivery_notes', 0)}\n"
+        output += f"  🏷️ Batches:         {summary.get('total_batches', 0)}\n"
+        output += f"  💰 Sales Invoices:  {summary.get('total_invoices', 0)}\n\n"
         
         # Missing items
         missing_boms = report.get("missing", {}).get("boms", [])
         missing_ccs = report.get("missing", {}).get("cost_centers", [])
         
         if missing_boms or missing_ccs:
-            output += "---\n\n"
-            output += "⚠️ **Missing Documents:**\n\n"
+            output += "-"*60 + "\n"
+            output += "⚠️  MISSING DOCUMENTS\n"
+            output += "-"*60 + "\n"
             
             if missing_boms:
-                output += f"• **Missing BOMs:** {', '.join(missing_boms)}\n"
+                output += f"  🔴 Missing BOMs:\n"
+                for bom in missing_boms:
+                    output += f"      • {bom}\n"
+                output += "\n"
             
             if missing_ccs:
-                output += f"• **Missing Cost Centers:**\n"
+                output += f"  🟠 Missing Cost Centers:\n"
                 for cc in missing_ccs:
-                    output += f"   - `{cc}`\n"
-            output += "\n"
+                    output += f"      • {cc}\n"
+                output += "\n"
         
         # Items details
         if report.get("items"):
-            output += "---\n\n"
-            output += "**📦 Items:**\n\n"
+            output += "-"*60 + "\n"
+            output += "📦 ITEMS IN SALES ORDER\n"
+            output += "-"*60 + "\n"
             for item in report["items"]:
-                output += f"• `{item['item_code']}` | Qty: {item['qty']} | BOM: `{item['bom_no'] or 'NONE'}`\n"
+                output += f"  • {item['item_code']}\n"
+                output += f"      Qty: {item['qty']} | BOM: {item['bom_no'] or 'NONE'}\n"
             output += "\n"
         
         # BOMs
         if report.get("boms"):
-            output += "**🔧 BOMs:**\n\n"
+            output += "-"*60 + "\n"
+            output += "🔧 BILL OF MATERIALS (BOMs)\n"
+            output += "-"*60 + "\n"
             for bom in report["boms"]:
-                output += f"• `{bom['name']}` | Item: `{bom['item']}` | Cost: ${bom['total_cost']:.2f}\n"
+                output += f"  • {bom['name']}\n"
+                output += f"      Item: {bom['item']} | Cost: ${bom['total_cost']:.2f}\n"
             output += "\n"
         
         # Delivery Notes
         if report.get("delivery_notes"):
-            output += "**🚚 Delivery Notes:**\n\n"
+            output += "-"*60 + "\n"
+            output += "🚚 DELIVERY NOTES\n"
+            output += "-"*60 + "\n"
             for dn in report["delivery_notes"]:
-                output += f"• `{dn['name']}` | Date: {dn['posting_date']}\n"
+                output += f"  📋 {dn['name']}\n"
+                output += f"     Date: {dn['posting_date']} | Status: {dn['docstatus']}\n"
                 for item in dn.get("items", []):
-                    output += f"   ├─ {item['item_code']} | Batch: `{item['batch_no'] or 'N/A'}` | Qty: {item['qty']}\n"
+                    output += f"      → {item['item_code']}\n"
+                    output += f"         Batch: {item['batch_no'] or 'N/A'} | Qty: {item['qty']}\n"
             output += "\n"
         
         # Batches
         if report.get("batches"):
-            output += "**🏷️ Batches:**\n\n"
+            output += "-"*60 + "\n"
+            output += "🏷️ BATCHES\n"
+            output += "-"*60 + "\n"
             for batch in report["batches"]:
-                output += f"• `{batch['name']}` | Item: `{batch['item']}` | Golden: `{batch.get('golden_number') or 'N/A'}`\n"
+                golden = batch.get('golden_number') or 'N/A'
+                output += f"  • {batch['name']}\n"
+                output += f"      Item: {batch['item']} | Golden: {golden}\n"
             output += "\n"
         
         # Sales Invoices
         if report.get("sales_invoices"):
-            output += "**💰 Sales Invoices:**\n\n"
+            output += "-"*60 + "\n"
+            output += "💰 SALES INVOICES\n"
+            output += "-"*60 + "\n"
             for sin in report["sales_invoices"]:
-                output += f"• `{sin['name']}` | Date: {sin['posting_date']}\n"
+                output += f"  • {sin['name']} | Date: {sin['posting_date']}\n"
             output += "\n"
         
         # Recommendations
-        output += "---\n\n"
-        output += "**💡 Recommended Actions:**\n\n"
+        output += "="*60 + "\n"
+        output += "💡 RECOMMENDED ACTIONS\n"
+        output += "="*60 + "\n\n"
         
         has_recommendations = False
         
         if missing_ccs:
-            output += "1. ✅ Create missing Cost Centers for golden number tracking\n"
-            output += f"   Run: `@ai fix {so.get('name')}` to auto-create them\n\n"
+            output += "  ✅ Create missing Cost Centers for golden number tracking\n"
+            output += f"     Command: @ai fix {so.get('name')}\n\n"
             has_recommendations = True
         
         if summary.get('total_delivery_notes', 0) == 0:
-            output += "2. 🚚 Create Delivery Notes from this Sales Order\n"
-            output += f"   Run: `@sales_order_follow_up delivery {so.get('name')}`\n\n"
+            output += "  🚚 Create Delivery Notes from this Sales Order\n"
+            output += f"     Command: @sales_order_follow_up delivery {so.get('name')}\n\n"
             has_recommendations = True
         
         if summary.get('total_invoices', 0) == 0:
-            output += "3. 💳 Generate Sales Invoice for delivered items\n\n"
+            output += "  💳 Generate Sales Invoice for delivered items\n\n"
             has_recommendations = True
         
         if not has_recommendations:
-            output += "✅ Pipeline is complete! No actions needed.\n"
+            output += "  ✅ Pipeline is complete! No actions needed.\n"
         
-        output += "\n---\n"
+        output += "\n" + "="*60 + "\n"
         
         return output
     
