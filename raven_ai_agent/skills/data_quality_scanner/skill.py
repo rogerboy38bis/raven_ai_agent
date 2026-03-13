@@ -464,11 +464,22 @@ class DataQualityScannerSkill(SkillBase):
         
         confidence = self._calculate_confidence(issues, warnings)
         
+        # Get item count and total
+        item_count = len(qtn.items) if hasattr(qtn, 'items') else 0
+        total_value = qtn.grand_total if hasattr(qtn, 'grand_total') else 0
+        
         return {
             "success": True,
             "document_type": "Quotation",
             "document_name": qtn_name,
             "customer": qtn.party_name,
+            "customer_name": qtn.customer_name if hasattr(qtn, 'customer_name') else None,
+            "transaction_date": str(qtn.transaction_date) if hasattr(qtn, 'transaction_date') else None,
+            "valid_till": str(qtn.valid_till) if hasattr(qtn, 'valid_till') else None,
+            "status": qtn.status if hasattr(qtn, 'status') else None,
+            "total": total_value,
+            "currency": qtn.currency if hasattr(qtn, 'currency') else 'MXN',
+            "item_count": item_count,
             "total_issues": len(issues),
             "issues": issues,
             "warnings": warnings,
@@ -1697,6 +1708,23 @@ class DataQualityScannerSkill(SkillBase):
             response += format_table(fix_data, ["Action", "Status"]) + "\n\n"
         
         if not issues and not warnings:
+            # Show document details even when no issues found
+            doc_info = []
+            
+            # Add document-specific info based on type
+            if result.get("document_type") == "Quotation":
+                doc_info = [
+                    {"Field": "Quotation", "Value": f"`{result.get('document_name')}`"},
+                    {"Field": "Customer", "Value": result.get('customer', 'N/A')},
+                    {"Field": "Date", "Value": result.get('transaction_date', 'N/A')},
+                    {"Field": "Valid Till", "Value": result.get('valid_till', 'N/A')},
+                    {"Field": "Status", "Value": result.get('status', 'N/A')},
+                    {"Field": "Items", "Value": str(result.get('item_count', 0))},
+                    {"Field": "Total", "Value": f"{result.get('total', 0):,.2f} {result.get('currency', 'MXN')}"}
+                ]
+                response += "### 📋 Quotation Details\n\n"
+                response += format_table(doc_info, ["Field", "Value"]) + "\n\n"
+            
             response += "✅ **No issues found!** Document is ready for processing.\n"
             return apply_post_processing(response)
         
@@ -1715,6 +1743,18 @@ class DataQualityScannerSkill(SkillBase):
         ]
         
         response += "\n---\n\n"
+        
+        # Add document details section
+        if result.get("document_type") == "Quotation":
+            doc_details = [
+                {"Field": "Quotation", "Value": f"`{result.get('document_name')}`"},
+                {"Field": "Customer", "Value": result.get('customer', 'N/A')},
+                {"Field": "Items", "Value": str(result.get('item_count', 0))},
+                {"Field": "Total", "Value": f"{result.get('total', 0):,.2f} {result.get('currency', 'MXN')}"}
+            ]
+            response += "### 📋 Document Details\n\n"
+            response += format_table(doc_details, ["Field", "Value"]) + "\n\n"
+        
         response += "### 📊 Summary\n\n"
         response += format_table(summary_data, ["Metric", "Value"]) + "\n\n"
         
