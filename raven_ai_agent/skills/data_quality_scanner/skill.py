@@ -1398,12 +1398,13 @@ class DataQualityScannerSkill(SkillBase):
         """Apply auto-fixes to the document"""
         applied = []
         failed = []
+        skipped = []
         
         try:
             doc = frappe.get_doc(doc_type, doc_name)
         except Exception as e:
             frappe.logger().error(f"[DataQualityScanner] Could not load document: {e}")
-            return {"applied": [], "failed": [str(e)]}
+            return {"applied": [], "failed": [str(e)], "skipped": []}
         
         for issue in result.get("issues", []):
             if not issue.get("auto_fix"):
@@ -1461,8 +1462,14 @@ class DataQualityScannerSkill(SkillBase):
                             frappe.logger().error(f"[DataQualityScanner] CC creation failed: {ce}")
                     continue
                 
-                # Account Fix - Find Leaf Account
+                # Account Fix - Find Leaf Account (only for Invoices, not Orders)
                 if fix_type == "find_leaf_account" and field == "debit_to":
+                    # Sales Orders don't have debit_to - it's set at invoice time
+                    if doc_type == "Sales Order":
+                        skipped.append("Skipped debit_to fix - accounts are set at Invoice level for Sales Orders")
+                        frappe.logger().info(f"[DataQualityScanner] Skipping debit_to fix for Sales Order - set at invoice time")
+                        continue
+                    
                     account = issue.get("current_value", "")
                     currency = doc.get("currency", "USD")  # Get document currency
                     company = doc.get("company")
@@ -1505,7 +1512,7 @@ class DataQualityScannerSkill(SkillBase):
                 failed.append(f"Fix {fix_type} failed: {str(e)}")
                 frappe.logger().error(f"[DataQualityScanner] Fix failed: {fix_type} - {e}")
         
-        return {"applied": applied, "failed": failed}
+        return {"applied": applied, "failed": failed, "skipped": skipped}
     
     def _create_address_from_customer(self, doc) -> Optional[str]:
         """Create address from customer"""
