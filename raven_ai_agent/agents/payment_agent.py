@@ -50,7 +50,8 @@ class PaymentAgent:
 
     def create_payment_entry(self, si_name: str, amount: float = None,
                              mode_of_payment: str = None,
-                             payment_date: str = None) -> Dict:
+                             payment_date: str = None,
+                             payment_form: str = None) -> Dict:
         """Create a Payment Entry from a Sales Invoice.
         
         Applies Banxico FIX T-1 exchange rate for the payment date.
@@ -62,6 +63,7 @@ class PaymentAgent:
             amount: Payment amount in invoice currency. If None, uses full outstanding.
             mode_of_payment: Mode of payment (e.g. 'Wire Transfer', 'Cash')
             payment_date: Payment posting date (YYYY-MM-DD). If None, uses today.
+            payment_form: SAT payment form code (01=Efectivo, 02=Cheque, 03=Transferencia, 04=Tarjeta, 28=Otros)
         
         Returns:
             Dict with Payment Entry details including exchange gain/loss info
@@ -167,6 +169,24 @@ class PaymentAgent:
                     "default_account")
                 if mop_account and not pe.paid_to:
                     pe.paid_to = mop_account
+            
+            # CRITICAL: Set payment_form - SAT Mexico requirement (custom field)
+            # Valid codes: 01=Efectivo, 02=Cheque, 03=Transferencia, 04=Tarjeta, 28=Otros
+            # Use parameter if provided, otherwise infer from mode_of_payment
+            if payment_form:
+                pe.payment_form = payment_form
+            elif not getattr(pe, 'payment_form', None):
+                mop_lower = (pe.mode_of_payment or "").lower()
+                if "transfer" in mop_lower:
+                    pe.payment_form = "03"  # Transferencia
+                elif "cash" in mop_lower or "efectivo" in mop_lower:
+                    pe.payment_form = "01"  # Efectivo
+                elif "cheque" in mop_lower:
+                    pe.payment_form = "02"  # Cheque
+                elif "tarjeta" in mop_lower or "card" in mop_lower:
+                    pe.payment_form = "04"  # Tarjeta
+                else:
+                    pe.payment_form = "01"  # Default to Efectivo
 
             # --- Banxico FIX T-1 Exchange Rate for Payment Date ---
             fx_info = None
@@ -495,7 +515,10 @@ class PaymentAgent:
             amount = float(amount_match.group(1)) if amount_match else None
             mode_match = re.search(r'(?:mode|modo)\s+(.+?)(?:\s|$)', message, re.IGNORECASE)
             mode = mode_match.group(1).strip() if mode_match else None
-            result = self.create_payment_entry(si_name, amount=amount, mode_of_payment=mode)
+            # Parse payment_form (SAT code: 01, 02, 03, 04, 28)
+            form_match = re.search(r'(?:form|forma)\s+(\d+)', message, re.IGNORECASE)
+            payment_form = form_match.group(1) if form_match else None
+            result = self.create_payment_entry(si_name, amount=amount, mode_of_payment=mode, payment_form=payment_form)
             return result.get("message", result.get("error", "Unknown error"))
 
         # ---- SUBMIT PAYMENT ----
