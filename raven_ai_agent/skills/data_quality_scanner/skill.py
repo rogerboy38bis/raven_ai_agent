@@ -1513,16 +1513,36 @@ class DataQualityScannerSkill(SkillBase):
                         frappe.logger().error(f"[DataQualityScanner] FAILED: Could not find leaf account for {account}")
                     continue
                 
-                # Address Fixes
-                if fix_type == "create_from_customer" and field == "customer_address":
-                    addr = self._create_address_from_customer(doc)
-                    if addr:
-                        try:
-                            doc.db_set("customer_address", addr)
-                            frappe.db.commit()
-                            applied.append(f"Created and set {field} = {addr}")
-                        except Exception as addr_err:
-                            failed.append(f"Could not set address: {addr_err}")
+                # Address Fixes - Handle various address types
+                if fix_type in ["create_from_customer", "copy_from_customer_address"]:
+                    # Determine which address field to set
+                    if field == "customer_address":
+                        addr = self._create_address_from_customer(doc)
+                        if addr:
+                            try:
+                                doc.db_set("customer_address", addr)
+                                frappe.db.commit()
+                                applied.append(f"Created and set {field} = {addr}")
+                            except Exception as addr_err:
+                                failed.append(f"Could not set address: {addr_err}")
+                    elif field == "billing_address_name":
+                        addr = self._create_address_from_customer(doc, address_type="Billing")
+                        if addr:
+                            try:
+                                doc.db_set("billing_address_name", addr)
+                                frappe.db.commit()
+                                applied.append(f"Created and set {field} = {addr}")
+                            except Exception as addr_err:
+                                failed.append(f"Could not set billing address: {addr_err}")
+                    elif field == "shipping_address_name":
+                        addr = self._create_address_from_customer(doc, address_type="Shipping")
+                        if addr:
+                            try:
+                                doc.db_set("shipping_address_name", addr)
+                                frappe.db.commit()
+                                applied.append(f"Created and set {field} = {addr}")
+                            except Exception as addr_err:
+                                failed.append(f"Could not set shipping address: {addr_err}")
                     continue
                     
             except Exception as e:
@@ -1531,28 +1551,35 @@ class DataQualityScannerSkill(SkillBase):
         
         return {"applied": applied, "failed": failed, "skipped": skipped}
     
-    def _create_address_from_customer(self, doc) -> Optional[str]:
+    def _create_address_from_customer(self, doc, address_type: str = "Billing") -> Optional[str]:
         """Create address from customer"""
         try:
             customer = frappe.get_doc("Customer", doc.customer)
             
-            # Try to get existing address
+            # Try to get existing address of the requested type
             addresses = frappe.get_all(
                 "Address",
                 filters={"link_doctype": "Customer", "link_name": doc.customer},
-                fields=["name"],
-                limit=1
+                fields=["name", "address_type"],
             )
             
+            # First, try to find an address of the requested type
+            for addr in addresses:
+                if address_type == "Billing" and addr.address_type == "Billing":
+                    return addr.name
+                if address_type == "Shipping" and addr.address_type == "Shipping":
+                    return addr.name
+            
+            # If no address of the requested type, return first available
             if addresses:
                 return addresses[0].name
             
             # Create new address
-            addr_name = f"{customer.customer_name} - Billing"
+            addr_name = f"{customer.customer_name} - {address_type}"
             addr = frappe.get_doc({
                 "doctype": "Address",
                 "address_title": customer.customer_name,
-                "address_type": "Billing",
+                "address_type": address_type,
                 "address_line1": customer.address_line1 or "",
                 "city": customer.city or "",
                 "state": customer.state or "",
