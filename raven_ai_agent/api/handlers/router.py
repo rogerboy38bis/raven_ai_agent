@@ -92,6 +92,8 @@ def _detect_ai_intent(query: str) -> str:
         r'check\s+pago',
         r'pipeline\s+health',
         r'verify\s+(?:SO|sales\s+order)',
+        r'pipeline\s+SAL-QTN-',  # Pipeline diagnosis for quotations
+        r'pipeline\s+QUOT-',      # Pipeline diagnosis for quotations (alternative prefix)
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in validator_patterns):
         return "task_validator"

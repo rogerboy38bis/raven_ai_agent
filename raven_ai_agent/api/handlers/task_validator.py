@@ -217,6 +217,20 @@ class TaskValidatorMixin:
                     "error": "**Usage:** `@ai audit pipeline SAL-QTN-2024-XXXXX`"
                 }
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # PIPELINE: Quick pipeline diagnosis (shorthand for diagnose)
+        # @ai pipeline SAL-QTN-XXXX
+        # ═══════════════════════════════════════════════════════════════════════
+        if "pipeline" in query_lower and "audit" not in query_lower:
+            qtn_match = re.search(r'(SAL-QTN-\d+-\d+)', query, re.IGNORECASE)
+            if qtn_match:
+                return self._diagnose_from_quotation(qtn_match.group(1).upper())
+            else:
+                return {
+                    "success": False,
+                    "error": "**Usage:** `@ai pipeline SAL-QTN-2024-XXXXX`"
+                }
+
         # ═══════════════════════════════════════════════════════════
         # CHECK PAYMENTS: Verify payment terms consistency
         # @ai check payments SAL-QTN-XXXX
