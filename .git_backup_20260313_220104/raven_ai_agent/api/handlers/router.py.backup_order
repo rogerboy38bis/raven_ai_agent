@@ -39,35 +39,13 @@ def _detect_ai_intent(query: str) -> str:
         if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+-\d+)', query, re.IGNORECASE):
             return "sales_order_follow_up"
 
-    # Pipeline commands for quotations - explicit check
-    if re.search(r'pipeline\s+SAL-QTN-', query, re.IGNORECASE):
-        return "task_validator"
-    if re.search(r'pipeline\s+QUOT-', query, re.IGNORECASE):
-        return "task_validator"
-
-    # Task Validator / Diagnosis: diagnose, validate, audit pipeline, check payments
-    validator_patterns = [
-        r"diagnos[ei]",
-        r"validate\s+",
-        r"audit\s+pipeline",
-        r"check\s+payment",
-        r"check\s+pago",
-        r"pipeline\s+health",
-        r"verify\s+(?:SO|sales\s+order)",
-        r"pipeline\s+SAL-QTN-",  # Pipeline diagnosis for quotations
-        r"pipeline\s+QUOT-",      # Pipeline diagnosis for quotations (alternative prefix)
-    ]
-    if any(re.search(p, query, re.IGNORECASE) for p in validator_patterns):
-        return "task_validator"
-
-  
     # Orchestrator: pipeline, full cycle, validate, dry run
     orch_patterns = [
         r'pipeline\s+status',
         r'(?:run|start)\s+full\s+cycle',
         r'dry\s+run',
         r'validate\s+SO-',
-        r'validate\s+SAL-QTN',
+        r'validate\s+(?:pipeline\s+)?SAL-QTN',
         r'validate\s+pipeline',
         r'run\s+pipeline',
     ]
@@ -104,7 +82,21 @@ def _detect_ai_intent(query: str) -> str:
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in pay_patterns):
         return "payment_bot"
- # aqui  
+    
+    # Task Validator / Diagnosis: diagnose, validate, audit pipeline, check payments
+    validator_patterns = [
+        r'diagnos[ei]',
+        r'validate\b',
+        r'audit\s+pipeline',
+        r'check\s+payment',
+        r'check\s+pago',
+        r'pipeline\s+health',
+        r'verify\s+(?:SO|sales\s+order)',
+        r'pipeline\s+SAL-QTN-',  # Pipeline diagnosis for quotations
+        r'pipeline\s+QUOT-',      # Pipeline diagnosis for quotations (alternative prefix)
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in validator_patterns):
+        return "task_validator"
     
     # Sales-specific patterns (DN, invoice, pending orders, next steps)
     sales_patterns = [
@@ -246,7 +238,7 @@ def handle_raven_message(doc, method):
                 result = {"success": True, "response": response}
             
             # NEW: Task Validator / Diagnosis Agent
-            # NEW: Task Validator / Diagnosis Agent
+            # Task Validator / Diagnosis Agent - Usando nuestra implementación
             elif bot_name == "task_validator":
                 from raven_ai_agent.agents.task_validator import TaskValidator
                 validator = TaskValidator()
@@ -264,7 +256,7 @@ def handle_raven_message(doc, method):
                 so_agent = SalesOrderFollowupAgent(user)
                 response = so_agent.process_command(query)
                 result = {"success": True, "response": response}
-
+            
             # EXISTING: R&D Agent
             elif bot_name == "rnd_bot":
                 from raven_ai_agent.agents import RnDAgent

@@ -206,11 +206,17 @@ class DataQualityScannerSkill(SkillBase):
             frappe.logger().info(f"[DataQualityScanner] Returning success result")
             return return_result
             
+        
+        
         except Exception as e:
             return {
                 "success": False,
                 "error": str(e)
             }
+
+
+        except Exception as e:
+            return {"error": str(e)}
     
     def _format_pipeline_diagnosis(self, report: Dict) -> str:
         """Format pipeline diagnosis for display - uses response formatter for consistency"""
@@ -555,189 +561,3 @@ Pre-flight validation for ERPNext documents before operations.
         response += format_table(returns, ["Return", "Format"])
         
         return apply_post_processing(response)
-
-
-# Métodos añadidos para soporte de quotations
-
-    def _extract_document_name(self, query):
-        """Extract document name from query"""
-        import re
-        patterns = [
-            r'(SO-[\w-]+)',
-            r'(SAL-QTN-\d+-\d+)',
-            r'(QUOT-\d+-\d+)',
-            r'(ACC-SINV-\d+-\d+)',
-            r'(MFG-WO-\d+)'
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, query, re.IGNORECASE)
-            if match:
-                return match.group(1).upper()
-        return None
-
-    def _infer_document_type(self, query):
-        """Infer the document type from the query"""
-        import re
-        if re.search(r'SO-', query, re.IGNORECASE):
-            return "Sales Order"
-        elif re.search(r'SAL-QTN-|QUOT-', query, re.IGNORECASE):
-            return "Quotation"
-        elif re.search(r'ACC-SINV-', query, re.IGNORECASE):
-            return "Sales Invoice"
-        elif re.search(r'MFG-WO-', query, re.IGNORECASE):
-            return "Work Order"
-        return None
-
-    def scan_quotation(self, quotation_name):
-        """Scan a quotation for issues"""
-        try:
-            qtn = frappe.get_doc("Quotation", quotation_name)
-            
-            issues = []
-            customer = qtn.party_name or qtn.customer_name
-            if not customer:
-                issues.append({
-                    "severity": "HIGH",
-                    "field": "customer",
-                    "message": "Quotation has no customer assigned"
-                })
-            
-            if not qtn.items or len(qtn.items) == 0:
-                issues.append({
-                    "severity": "CRITICAL",
-                    "field": "items",
-                    "message": "Quotation has no items"
-                })
-            else:
-                for i, item in enumerate(qtn.items):
-                    if not item.rate or item.rate <= 0:
-                        issues.append({
-                            "severity": "HIGH",
-                            "field": f"items[{i}].rate",
-                            "message": f"Item {item.item_code or item.item_name} has no rate"
-                        })
-            
-            if not qtn.transaction_date:
-                issues.append({
-                    "severity": "MEDIUM",
-                    "field": "transaction_date",
-                    "message": "Transaction date is missing"
-                })
-            
-            company_currency = frappe.db.get_value("Company", qtn.company, "default_currency")
-            if qtn.currency != company_currency:
-                issues.append({
-                    "severity": "INFO",
-                    "field": "currency",
-                    "message": f"Multi-currency: Quotation in '{qtn.currency}', company in {company_currency} - Normal for exports"
-                })
-            
-            return {
-                "success": True,
-                "document_type": "Quotation",
-                "document_name": qtn.name,
-                "customer": customer,
-                "date": str(qtn.transaction_date) if qtn.transaction_date else None,
-                "items_count": len(qtn.items),
-                "total": qtn.total or 0,
-                "currency": qtn.currency,
-                "status": qtn.status,
-                "issues": issues,
-                "issue_counts": {
-                    "CRITICAL": len([i for i in issues if i["severity"] == "CRITICAL"]),
-                    "HIGH": len([i for i in issues if i["severity"] == "HIGH"]),
-                    "MEDIUM": len([i for i in issues if i["severity"] == "MEDIUM"]),
-                    "INFO": len([i for i in issues if i["severity"] == "INFO"])
-                }
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    def diagnose_quotation_pipeline(self, qtn_name):
-        """Diagnose quotation pipeline"""
-        try:
-            result = self.scan_quotation(qtn_name)
-            if result.get("success"):
-                qtn = frappe.get_doc("Quotation", qtn_name)
-                next_steps = []
-                
-                if qtn.status == "Draft":
-                    next_steps.append({"action": "submit", "message": "Submit the quotation"})
-                elif qtn.status == "Submitted":
-                    if not frappe.db.exists("Sales Order", {"quotation": qtn_name}):
-                        next_steps.append({"action": "convert", "message": "Convert to Sales Order"})
-                    else:
-                        next_steps.append({"action": "view_so", "message": "Sales Order already created"})
-                elif qtn.status == "Ordered":
-                    next_steps.append({"action": "view_so", "message": "Quotation already converted"})
-                
-                return {
-                    "success": True,
-                    "quotation": {
-                        "name": result.get("document_name"),
-                        "customer": result.get("customer"),
-                        "date": result.get("date"),
-                        "status": result.get("status"),
-                        "total": result.get("total"),
-                        "currency": result.get("currency"),
-                        "items_count": result.get("items_count")
-                    },
-                    "issues": result.get("issues", []),
-                    "issue_counts": result.get("issue_counts", {}),
-                    "pipeline_status": "ready" if result.get("issue_counts", {}).get("CRITICAL", 0) == 0 else "blocked",
-                    "next_steps": next_steps
-                }
-            return result
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    def _store_validation_pattern(self, *args, **kwargs):
-        """Store validation pattern"""
-        return True
-
-    def _format_scan_result(self, *args, **kwargs):
-        """Format scan result"""
-        try:
-            result_data = args[0] if args else kwargs.get('result_data', {})
-            if not isinstance(result_data, dict):
-                return str(result_data)
-            
-            if result_data.get("success") is False:
-                return f"❌ Error: {result_data.get('error', 'Unknown error')}"
-            
-            output = []
-            doc_type = result_data.get("document_type", "Document")
-            doc_name = result_data.get("document_name", "Unknown")
-            output.append(f"## 📋 {doc_type}: {doc_name}")
-            
-            output.append("\n### 📊 Summary")
-            output.append(f"| Metric | Value |")
-            output.append(f"|--------|-------|")
-            output.append(f"| Customer | {result_data.get('customer', 'N/A')} |")
-            output.append(f"| Date | {result_data.get('date', 'N/A')} |")
-            output.append(f"| Items | {result_data.get('items_count', 0)} |")
-            output.append(f"| Total | {result_data.get('total', 0)} {result_data.get('currency', '')} |")
-            output.append(f"| Status | {result_data.get('status', 'N/A')} |")
-            
-            issues = result_data.get("issues", [])
-            if issues:
-                output.append("\n### ⚠️ Issues Found")
-                for issue in issues:
-                    severity = issue.get("severity", "INFO")
-                    icon = "🔴" if severity == "CRITICAL" else "🟠" if severity == "HIGH" else "🟡" if severity == "MEDIUM" else "ℹ️"
-                    output.append(f"- {icon} **{severity}**: {issue.get('message')} (Field: {issue.get('field')})")
-            else:
-                output.append("\n### ✅ No issues found")
-            
-            counts = result_data.get("issue_counts", {})
-            output.append("\n### 📊 Issue Summary")
-            output.append(f"| Severity | Count |")
-            output.append(f"|----------|-------|")
-            output.append(f"| 🔴 CRITICAL | {counts.get('CRITICAL', 0)} |")
-            output.append(f"| 🟠 HIGH | {counts.get('HIGH', 0)} |")
-            output.append(f"| 🟡 MEDIUM | {counts.get('MEDIUM', 0)} |")
-            output.append(f"| ℹ️ INFO | {counts.get('INFO', 0)} |")
-            
-            return "\n".join(output)
-        except Exception as e:
-            return f"Error formatting: {str(e)}"

@@ -1,4 +1,4 @@
-"""
+""""""
 Data Quality Scanner Skill
 ==========================
 
@@ -740,4 +740,5 @@ Pre-flight validation for ERPNext documents before operations.
             
             return "\n".join(output)
         except Exception as e:
-            return f"Error formatting: {str(e)}"
+            return f"Error formatting: {str(e)}"""
+
