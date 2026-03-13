@@ -68,10 +68,23 @@ def _detect_ai_intent(query: str) -> str:
         return "data_quality_scanner"
     
     # === PRIORITY: SO-linked commands always go to sales agent ===
+    # BUT: pipeline/diagnose commands for SAL-QTN should go to data_quality_scanner
     if re.search(r'SO-\d+', query, re.IGNORECASE) or re.search(r'from\s+SO', query, re.IGNORECASE):
-        if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+)', query, re.IGNORECASE):
+        # Exception: if it's a pipeline/diagnose command, send to scanner instead
+        if re.search(r'(?:pipeline|diagnose|scan)\s+SO-', query, re.IGNORECASE):
+            return "data_quality_scanner"
+        elif not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+)', query, re.IGNORECASE):
             return "sales_order_follow_up"
-
+    
+    # === PRIORITY: SAL-QTN pipeline/diagnose goes to data_quality_scanner ===
+    if re.search(r'(?:pipeline|diagnose|scan|validate)\s+SAL-QTN-', query, re.IGNORECASE):
+        return "data_quality_scanner"
+    
+    # === PRIORITY: SAL-QTN standalone (without prefix) also goes to scanner ===
+    if re.search(r'SAL-QTN-\d+-\d+', query, re.IGNORECASE):
+        # Check if it's a pipeline/diagnose/scan command
+        if any(kw in query.lower() for kw in ['pipeline', 'diagnose', 'scan', 'validate', 'fix']):
+            return "data_quality_scanner"
     
     # Orchestrator: pipeline, full cycle, validate, dry run
     orch_patterns = [

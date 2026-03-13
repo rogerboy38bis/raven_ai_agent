@@ -97,8 +97,10 @@ class DataQualityScannerSkill(SkillBase):
             
             # Check if this is a pipeline diagnosis request
             is_pipeline_diagnosis = any(
-                kw in query_lower for kw in ["pipeline", "full scan", "diagnosis", "complete", "diagnose"]
+                kw in query_lower for kw in ["pipeline", "full scan", "diagnosis", "complete", "diagnose", "full"]
             )
+            
+            frappe.logger().info(f"[DataQualityScanner] is_pipeline_diagnosis: {is_pipeline_diagnosis}, query: {query}")
             
             # Extract document name from query
             doc_name = self._extract_document_name(query)
@@ -146,11 +148,14 @@ class DataQualityScannerSkill(SkillBase):
                 }
             
             # If user wants pipeline diagnosis, add it to results
-            if is_pipeline_diagnosis:
+            # For SAL-QTN, always try to get pipeline diagnosis when diagnose/pipeline is in query
+            if is_pipeline_diagnosis or "quotation" in query_lower:
                 if doc_type == "Sales Order":
                     pipeline_report = self.diagnose_pipeline(doc_name)
                     result["pipeline_diagnosis"] = pipeline_report
-                elif doc_type == "Quotation":
+                elif doc_type == "Quotation" or "SAL-QTN" in doc_name.upper():
+                    # Force Quotation pipeline for SAL-QTN documents
+                    frappe.logger().info(f"[DataQualityScanner] Running Quotation pipeline diagnosis for {doc_name}")
                     pipeline_report = self.diagnose_quotation_pipeline(doc_name)
                     result["pipeline_diagnosis"] = pipeline_report
             
