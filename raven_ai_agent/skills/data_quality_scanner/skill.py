@@ -146,9 +146,13 @@ class DataQualityScannerSkill(SkillBase):
                 }
             
             # If user wants pipeline diagnosis, add it to results
-            if is_pipeline_diagnosis and doc_type == "Sales Order":
-                pipeline_report = self.diagnose_pipeline(doc_name)
-                result["pipeline_diagnosis"] = pipeline_report
+            if is_pipeline_diagnosis:
+                if doc_type == "Sales Order":
+                    pipeline_report = self.diagnose_pipeline(doc_name)
+                    result["pipeline_diagnosis"] = pipeline_report
+                elif doc_type == "Quotation":
+                    pipeline_report = self.diagnose_quotation_pipeline(doc_name)
+                    result["pipeline_diagnosis"] = pipeline_report
             
             # Handle fix mode
             fix_result = None
@@ -208,11 +212,13 @@ class DataQualityScannerSkill(SkillBase):
     
     def _extract_document_name(self, query: str) -> Optional[str]:
         """Extract document name from query"""
-        # Match patterns like SO-XXXXX, SAL-QTN-XXXXX, ACC-SINV-XXXXX
+        # Match patterns like SO-XXXXX, QUOT-XXXXX, SAL-QTN-XXXXX, ACC-SINV-XXXXX
         patterns = [
             r"(SO-\d+-[\w\s\.\-]+)",  # SO-00767-BARENTZ Italia or SO-00767-BARENTZ Italia S.p.A
+            r"(QUOT-\d+-\d+)",         # QUOT-2026-00001 or QUOT-26-00001
             r"(SAL-QTN-\d+-\d+)",
             r"(ACC-SINV-\d+-\d+)",
+            r"(ACC-PAY-\d+-\d+)",
             r"(ACC-DN-\d+-\d+)",
         ]
         
@@ -227,12 +233,21 @@ class DataQualityScannerSkill(SkillBase):
     
     def _resolve_document_name(self, doc_name: str) -> Optional[str]:
         """Resolve document name - try exact match, then fuzzy search"""
-        # Try exact match first
-        try:
-            if frappe.db.exists("Sales Order", doc_name):
-                return doc_name
-        except:
-            pass
+        # Try exact match first - check all document types
+        doctypes_to_check = [
+            "Sales Order",
+            "Quotation",
+            "Sales Invoice",
+            "Payment Entry",
+            "Delivery Note"
+        ]
+        
+        for doctype in doctypes_to_check:
+            try:
+                if frappe.db.exists(doctype, doc_name):
+                    return doc_name
+            except:
+                pass
         
         # Try fuzzy search - look for SO-XXXXX pattern
         so_match = re.match(r"(SO-\d+)-(.+)", doc_name, re.IGNORECASE)
@@ -295,8 +310,13 @@ class DataQualityScannerSkill(SkillBase):
             return "Sales Order"
         elif doc_name_upper.startswith("SAL-QTN"):
             return "Quotation"
+        elif doc_name_upper.startswith("QUOT-"):
+            # Handle patterns like QUOT-2026-00001, QUOT-26-00001, etc.
+            return "Quotation"
         elif doc_name_upper.startswith("ACC-SINV"):
             return "Sales Invoice"
+        elif doc_name_upper.startswith("ACC-PAY"):
+            return "Payment Entry"
         elif doc_name_upper.startswith("ACC-DN"):
             return "Delivery Note"
         else:
@@ -1701,7 +1721,11 @@ class DataQualityScannerSkill(SkillBase):
         # Add pipeline diagnosis if available
         pipeline_diagnosis = result.get("pipeline_diagnosis")
         if pipeline_diagnosis:
-            response += "\n" + self._format_pipeline_diagnosis(pipeline_diagnosis)
+            # Check if it's a Sales Order or Quotation report
+            if pipeline_diagnosis.get("sales_order"):
+                response += "\n" + self._format_pipeline_diagnosis(pipeline_diagnosis)
+            elif pipeline_diagnosis.get("quotation"):
+                response += "\n" + self._format_quotation_diagnosis(pipeline_diagnosis)
         
         return apply_post_processing(response)
     
@@ -1861,6 +1885,142 @@ class DataQualityScannerSkill(SkillBase):
             frappe.logger().error(f"[DataQualityScanner] Pipeline diagnosis error: {e}")
             return {"error": str(e)}
     
+    def diagnose_quotation_pipeline(self, qtn_name: str) -> Dict:
+        """
+        Diagnose the complete pipeline for a Quotation and identify next steps.
+        This provides a full picture of the document flow from Quotation to Sales Order.
+        
+        Returns a diagnostic report with:
+        - Quotation details
+        - Items and pricing
+        - Customer info
+        - Next steps (convert to SO)
+        """
+        report = {
+            "quotation": None,
+            "items": [],
+            "customer": None,
+            "next_steps": [],
+            "pipeline_status": "pending_conversion",
+            "summary": {}
+        }
+        
+        try:
+            # 1. Load Quotation
+            qtn_doc = frappe.get_doc("Quotation", qtn_name)
+            report["quotation"] = {
+                "name": qtn_doc.name,
+                "customer": qtn_doc.customer,
+                "party_name": qtn_doc.party_name,
+                "status": qtn_doc.status,
+                "transaction_date": qtn_doc.transaction_date,
+                "valid_till": qtn_doc.valid_till,
+                "company": qtn_doc.company,
+                "total": qtn_doc.total,
+                "grand_total": qtn_doc.grand_total,
+                "currency": qtn_doc.currency
+            }
+            
+            # Check if quotation is expired
+            from datetime import datetime
+            if qtn_doc.valid_till:
+                try:
+                    valid_till = datetime.strptime(str(qtn_doc.valid_till), "%Y-%m-%d")
+                    today = datetime.strptime(str(frappe.utils.today()), "%Y-%m-%d")
+                    if valid_till < today:
+                        report["next_steps"].append({
+                            "action": "warning",
+                            "message": "⚠️ Quotation has expired - consider creating a new one"
+                        })
+                except:
+                    pass
+            
+            # 2. Analyze items
+            for item in qtn_doc.items:
+                item_info = {
+                    "item_code": item.item_code,
+                    "item_name": item.item_name,
+                    "qty": item.qty,
+                    "rate": item.rate,
+                    "amount": item.amount,
+                    "uom": item.uom
+                }
+                report["items"].append(item_info)
+            
+            # 3. Get customer info
+            if qtn_doc.customer:
+                try:
+                    customer = frappe.get_doc("Customer", qtn_doc.customer)
+                    report["customer"] = {
+                        "name": customer.name,
+                        "customer_name": customer.customer_name,
+                        "customer_type": customer.customer_type,
+                        "territory": customer.territory,
+                        "customer_group": customer.customer_group
+                    }
+                except:
+                    pass
+            
+            # 4. Determine next steps based on quotation status
+            if qtn_doc.status == "Draft":
+                report["next_steps"].append({
+                    "action": "submit",
+                    "message": "📝 Submit the Quotation to make it valid"
+                })
+                report["pipeline_status"] = "draft"
+            elif qtn_doc.status == "Submitted":
+                report["next_steps"].append({
+                    "action": "convert",
+                    "message": "🎯 Convert to Sales Order to proceed with fulfillment"
+                })
+                report["pipeline_status"] = "ready_to_convert"
+            elif qtn_doc.status == "Ordered":
+                # Check if Sales Order was created
+                so_linked = frappe.db.sql("""
+                    SELECT name FROM `tabSales Order`
+                    WHERE quotation = %s
+                """, qtn_name)
+                
+                if so_linked:
+                    report["next_steps"].append({
+                        "action": "view_so",
+                        "message": f"✅ Sales Order created: {so_linked[0][0]}"
+                    })
+                    report["pipeline_status"] = "converted"
+                else:
+                    report["next_steps"].append({
+                        "action": "investigate",
+                        "message": "⚠️ Quotation marked as Ordered but no SO found"
+                    })
+                    report["pipeline_status"] = "issue"
+            elif qtn_doc.status == "Lost":
+                report["next_steps"].append({
+                    "action": "lost",
+                    "message": "❌ Quotation was lost - no further action possible"
+                })
+                report["pipeline_status"] = "lost"
+            elif qtn_doc.status == "Expired":
+                report["next_steps"].append({
+                    "action": "renew",
+                    "message": "🔄 Quotation expired - create a new one if customer is interested"
+                })
+                report["pipeline_status"] = "expired"
+            
+            # 5. Build summary
+            report["summary"] = {
+                "total_items": len(report["items"]),
+                "total_value": qtn_doc.grand_total,
+                "currency": qtn_doc.currency,
+                "status": qtn_doc.status,
+                "pipeline_status": report["pipeline_status"]
+            }
+            
+            return report
+            
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] Quotation pipeline diagnosis error: {e}")
+            return {"error": str(e)}
+    
     def _format_pipeline_diagnosis(self, report: Dict) -> str:
         """Format pipeline diagnosis for display - uses response formatter for consistency"""
         if "error" in report:
@@ -2009,6 +2169,149 @@ class DataQualityScannerSkill(SkillBase):
         
         return apply_post_processing(output)
     
+    def _format_quotation_diagnosis(self, report: Dict) -> str:
+        """Format Quotation pipeline diagnosis for display"""
+        if "error" in report:
+            return f"\n\n❌ Quotation Pipeline Diagnosis Error: {report['error']}\n\n"
+        
+        qtn = report.get("quotation", {})
+        summary = report.get("summary", {})
+        next_steps = report.get("next_steps", [])
+        
+        output = ""
+        
+        # Header with consistent formatting
+        output += "\n\n--- 📊 QUOTATION PIPELINE DIAGNOSIS ---\n\n"
+        
+        # Document info table
+        doc_info = [
+            {"Field": "Quotation", "Value": f"`{qtn.get('name')}`"},
+            {"Field": "Customer", "Value": qtn.get('customer', 'N/A')},
+            {"Field": "Status", "Value": qtn.get('status', 'N/A')},
+            {"Field": "Valid Till", "Value": str(qtn.get('valid_till', 'N/A'))},
+            {"Field": "Total", "Value": f"{qtn.get('total', 0):,.2f} {qtn.get('currency', 'MXN')}"}
+        ]
+        output += format_table(doc_info, ["Field", "Value"]) + "\n\n"
+        
+        # Pipeline Status
+        status_emoji = {
+            "draft": "📝",
+            "ready_to_convert": "🎯",
+            "converted": "✅",
+            "expired": "⏰",
+            "lost": "❌",
+            "pending_conversion": "⏳",
+            "issue": "⚠️"
+        }
+        status = summary.get("pipeline_status", "unknown")
+        emoji = status_emoji.get(status, "❓")
+        
+        output += f"### {emoji} Pipeline Status: {status.replace('_', ' ').title()}\n\n"
+        
+        # Summary table
+        summary_data = [
+            {"Item": "Items", "Count": str(summary.get('total_items', 0)), "Emoji": "📦"},
+            {"Item": "Total Value", "Value": f"{summary.get('total_value', 0):,.2f}", "Emoji": "💵"}
+        ]
+        output += format_table(summary_data, ["Emoji", "Item", "Count", "Value"]) + "\n\n"
+        
+        # Next Steps
+        if next_steps:
+            output += "### 🎯 Next Steps\n\n"
+            actions = []
+            for step in next_steps:
+                action_type = step.get("action", "info")
+                message = step.get("message", "")
+                
+                action_emoji = {
+                    "submit": "📝",
+                    "convert": "🎯",
+                    "view_so": "📋",
+                    "warning": "⚠️",
+                    "renew": "🔄",
+                    "lost": "❌",
+                    "investigate": "🔍"
+                }
+                emoji = action_emoji.get(action_type, "➡️")
+                actions.append({
+                    "Action": f"{emoji} {message}",
+                    "Type": action_type
+                })
+            
+            for action in actions:
+                output += f"- {action['Action']}\n"
+            output += "\n"
+        
+        # Items details as table
+        if report.get("items"):
+            output += "### 📦 Items in Quotation\n\n"
+            item_data = []
+            for item in report["items"]:
+                item_data.append({
+                    "Item": item['item_code'][:30] if item.get('item_code') else 'N/A',
+                    "Name": item.get('item_name', 'N/A')[:25],
+                    "Qty": str(item.get('qty', 0)),
+                    "Rate": f"{item.get('rate', 0):,.2f}",
+                    "Amount": f"{item.get('amount', 0):,.2f}"
+                })
+            output += format_table(item_data, ["Item", "Name", "Qty", "Rate", "Amount"]) + "\n\n"
+        
+        # Customer info
+        if report.get("customer"):
+            cust = report["customer"]
+            output += "### 👤 Customer Information\n\n"
+            cust_info = [
+                {"Field": "Customer Name", "Value": cust.get('customer_name', 'N/A')},
+                {"Field": "Type", "Value": cust.get('customer_type', 'N/A')},
+                {"Field": "Territory", "Value": cust.get('territory', 'N/A')},
+                {"Field": "Group", "Value": cust.get('customer_group', 'N/A')}
+            ]
+            output += format_table(cust_info, ["Field", "Value"]) + "\n\n"
+        
+        # Recommendations based on status
+        output += "### 💡 Recommendations\n\n"
+        
+        recommendations = []
+        
+        if status == "draft":
+            recommendations.append({
+                "Action": "Submit Quotation",
+                "Command": f"Submit `{qtn.get('name')}` in ERPNext"
+            })
+            recommendations.append({
+                "Action": "Send to Customer",
+                "Command": "Share via email or print"
+            })
+        elif status == "ready_to_convert":
+            recommendations.append({
+                "Action": "Convert to Sales Order",
+                "Command": "Click 'Make Sales Order' button in Quotation"
+            })
+            recommendations.append({
+                "Action": "Create SO via AI",
+                "Command": f"`@ai create sales order from {qtn.get('name')}`"
+            })
+        elif status == "converted":
+            recommendations.append({
+                "Action": "Check Sales Order",
+                "Command": "View linked SO in Quotation"
+            })
+        elif status == "expired":
+            recommendations.append({
+                "Action": "Create New Quotation",
+                "Command": "Create new quotation with updated pricing"
+            })
+        elif status == "lost":
+            recommendations.append({
+                "Action": "Analyze Loss Reason",
+                "Command": "Update lost reason in Quotation for analytics"
+            })
+        
+        if recommendations:
+            output += format_table(recommendations, ["Action", "Command"]) + "\n"
+        
+        return apply_post_processing(output)
+    
     def _get_help_message(self) -> str:
         """Return help message with consistent formatting"""
         from raven_ai_agent.api.response_formatter import format_table
@@ -2026,7 +2329,11 @@ Pre-flight validation for ERPNext documents before operations.
             {"Command": "validate", "Target": "ACC-SINV-XXXXX", "Example": "@ai validate ACC-SINV-2026-00070"},
             {"Command": "check data", "Target": "SAL-QTN-XXXXX", "Example": "@ai check data SAL-QTN-2024-00763"},
             {"Command": "pipeline", "Target": "SO-XXXXX", "Example": "@ai pipeline SO-00752-LEGOSAN AB"},
-            {"Command": "full scan", "Target": "SO-XXXXX", "Example": "@ai full scan SO-00769-COSMETILAB 18"}
+            {"Command": "full scan", "Target": "SO-XXXXX", "Example": "@ai full scan SO-00769-COSMETILAB 18"},
+            # Quotation Commands (NEW)
+            {"Command": "scan", "Target": "QUOT-XXXXX", "Example": "@ai scan QUOT-2026-00001"},
+            {"Command": "pipeline", "Target": "QUOT-XXXXX", "Example": "@ai diagnose pipeline of quotation QUOT-2026-00001"},
+            {"Command": "diagnose", "Target": "QUOT-XXXXX", "Example": "@ai diagnose quotation QUOT-2026-00001"}
         ]
         
         response += "### 📋 Usage\n\n"

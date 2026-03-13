@@ -82,12 +82,21 @@ class TaskValidatorMixin:
         
         site_name = frappe.local.site
 
-        # ═══════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════════════════════
+        # PARTY ACCOUNTS: Create missing Party Accounts for customers
+        # @ai create party accounts
+        # @ai create party accounts dry-run
+        # @ai check party accounts
+        # ═══════════════════════════════════════════════════════════════════════
+        if "party" in query_lower and "account" in query_lower:
+            return self._handle_party_account_commands(query, query_lower)
+
+        # ═══════════════════════════════════════════════════════════════════════
         # SYNC/FIX: Apply quotation truth to downstream SO
         # @ai !sync SO-XXXXX from quotation
         # @ai !fix SO-XXXXX from quotation  
         # @ai sync sales order SO-XXXXX
-        # ═══════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════════════════════
         if any(kw in query_lower for kw in ["sync so", "sync sales order", "fix so", "fix sales order"]):
             so_match = _resolve_so_name(query)
             if so_match:
@@ -370,6 +379,90 @@ class TaskValidatorMixin:
 
         # ── Build Report ──
         return self._build_diagnosis_report(qtn_name, qtn_link, pipeline, issues, warnings, info)
+
+    def _handle_party_account_commands(self, query: str, query_lower: str) -> Dict:
+        """
+        Handle Party Account creation and checking commands.
+        
+        Commands:
+        - @ai create party accounts - Create all missing Party Accounts
+        - @ai create party accounts dry-run - Preview what would be created
+        - @ai check party accounts - Show status of Party Accounts
+        """
+        try:
+            # Import the batch creator
+            from raven_ai_agent.scripts.batch_party_account_creator import (
+                create_all_party_accounts,
+                get_customers_without_party_account
+            )
+            
+            company = frappe.defaults.get_user_default("company") or "AMB Wellmart"
+            
+            # Check if it's a dry-run
+            is_dry_run = "dry-run" in query_lower or "dry run" in query_lower or "preview" in query_lower
+            
+            # Check if it's just a status check
+            is_status_check = "status" in query_lower or "check" in query_lower or "how many" in query_lower
+            
+            if is_status_check:
+                # Just show status - don't create anything
+                customers = get_customers_without_party_account(company)
+                total_customers = frappe.db.count("Customer", {"disabled": 0})
+                configured = total_customers - len(customers)
+                percentage = (configured / total_customers * 100) if total_customers > 0 else 0
+                
+                msg = f"""### 📊 Party Accounts Status
+
+| Metric | Value |
+|--------|-------|
+| Total Active Customers | {total_customers} |
+| With Specific Account | {configured} |
+| Without Specific Account | {len(customers)} |
+| Coverage | {percentage:.1f}% |
+
+**Recommendation:** {f"⚠️ {len(customers)} customers need Party Accounts" if len(customers) > 0 else "✅ All customers have Party Accounts"}
+
+**Command to create:** `@ai create party accounts`
+**Preview first:** `@ai create party accounts dry-run`
+"""
+                return {"success": True, "message": msg}
+            
+            # Execute the creation (or dry-run)
+            result = create_all_party_accounts(dry_run=is_dry_run, company=company)
+            
+            if is_dry_run:
+                msg = f"""### 🔍 Preview: Party Accounts to Create
+
+**Found {result['total_customers']} customers without Party Accounts**
+
+| Metric | Value |
+|--------|-------|
+| Would Create | {result['created']} |
+| Already Exists | {result['skipped']} |
+
+**To execute:** `@ai create party accounts`
+"""
+                return {"success": True, "message": msg}
+            else:
+                msg = f"""### ✅ Party Accounts Created
+
+| Metric | Value |
+|--------|-------|
+| Total Processed | {result['total_customers']} |
+| Created | {result['created']} |
+| Skipped | {result['skipped']} |
+
+{'-' * 50}
+
+**Tip:** Run `@ai check party accounts` to verify the changes.
+"""
+                return {"success": True, "message": msg}
+                
+        except ImportError as e:
+            return {"success": False, "error": f"Party Account module not available: {str(e)}"}
+        except Exception as e:
+            frappe.logger().error(f"Party Account command error: {e}")
+            return {"success": False, "error": f"Error: {str(e)}"}
 
     def _diagnose_from_sales_order(self, so_name: str) -> Dict:
         """Diagnose starting from a Sales Order — find source QTN and trace forward"""
