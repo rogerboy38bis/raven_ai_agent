@@ -71,7 +71,7 @@ def _detect_ai_intent(query: str) -> str:
     
     # Payment Agent: payment, pay, ACC-SINV, ACC-PAY, unpaid, outstanding
     pay_patterns = [
-        r'ACC-SINV-\d+',
+        r'ACC-SINV-\d+-\d+',
         r'ACC-PAY-\d+',
         r'SINV-\d+',
         r'(?:create|make)\s+payment',

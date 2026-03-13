@@ -454,7 +454,7 @@ class PaymentAgent:
         message_lower = message.lower().strip()
 
         # Extract document names - Updated to match ACC-SINV-2026-00001 format
-        si_pattern = r'(ACC-SINV-\d+|SINV-\d+|SI-[\w-]+|SAL-INV-[\d-]+)'
+        si_pattern = r'(ACC-SINV-\d+-\d+|SINV-\d+|SI-[\w-]+|SAL-INV-[\d-]+)'
         si_match = re.search(si_pattern, message, re.IGNORECASE)
         si_name = si_match.group(1) if si_match else None
 
@@ -472,7 +472,7 @@ class PaymentAgent:
         # Handle "create payment for ACC-SINV-XXX" pattern
         if "for" in message_lower and si_name:
             # Extract SI from "create payment for ACC-SINV-XXX"
-            for_match = re.search(r'for\s+(ACC-SINV-\d+|SINV-\d+)', message, re.IGNORECASE)
+            for_match = re.search(r'for\s+(ACC-SINV-\d+-\d+|SINV-\d+)', message, re.IGNORECASE)
             if for_match:
                 si_name = for_match.group(1)
         
