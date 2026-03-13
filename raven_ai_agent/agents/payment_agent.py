@@ -118,13 +118,41 @@ class PaymentAgent:
             if payment_date:
                 pe.posting_date = payment_date
 
-            # Ensure required fields are set
+            # Ensure required fields are set - comprehensive fix
+            # For Receive Payment (from customer), we need:
+            # - paid_from: Bank/Cash account (where money goes INTO)
+            # - paid_to: Receivable account ( customer's debt to us)
+            
+            # Get the customer's receivable account
             if not pe.paid_from:
-                company_default = frappe.db.get_value("Company", si.company, "default_bank_account")
-                pe.paid_from = company_default
+                # This should be set by get_payment_entry but ensure it
+                party_account = frappe.db.get_value("Party Account", 
+                    {"parent": si.customer, "parenttype": "Customer", "company": si.company},
+                    "account")
+                if party_account:
+                    pe.paid_from = party_account
+                else:
+                    # Fallback to company default receivable
+                    pe.paid_from = frappe.db.get_value("Company", si.company, "default_receivable_account")
+            
+            #paid_to should be our bank/cash account
             if not pe.paid_to:
-                company_receivable = frappe.db.get_value("Company", si.company, "default_receivable_account")
-                pe.paid_to = company_receivable
+                # Get default cash or bank account from company
+                cash_account = frappe.db.get_value("Company", si.company, "default_cash_account")
+                bank_account = frappe.db.get_value("Company", si.company, "default_bank_account")
+                pe.paid_to = cash_account or bank_account or "Cash - AMB-W"
+            
+            # Ensure we have a valid mode of payment with proper account
+            if not pe.mode_of_payment:
+                pe.mode_of_payment = "Wire Transfer"
+            
+            # If mode_of_payment is set, ensure we have the payment account from MOP
+            if pe.mode_of_payment:
+                mop_account = frappe.db.get_value("Mode of Payment Account", 
+                    {"parent": pe.mode_of_payment, "company": si.company},
+                    "default_account")
+                if mop_account and not pe.paid_to:
+                    pe.paid_to = mop_account
 
             # --- Banxico FIX T-1 Exchange Rate for Payment Date ---
             fx_info = None
