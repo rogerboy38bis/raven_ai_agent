@@ -238,15 +238,13 @@ def handle_raven_message(doc, method):
                 result = {"success": True, "response": response}
             
             # NEW: Task Validator / Diagnosis Agent
+            # Task Validator / Diagnosis Agent - Usando nuestra implementación
             elif bot_name == "task_validator":
-                from raven_ai_agent.api.handlers.task_validator import TaskValidatorMixin
-                # Create a lightweight wrapper to use the mixin
-                class _ValidatorAgent(TaskValidatorMixin):
-                    pass
-                validator = _ValidatorAgent()
-                validator_result = validator._handle_validator_commands(query, query.lower())
-                if validator_result:
-                    result = {"success": True, "response": validator_result.get("message") or validator_result.get("error", "No result")}
+                from raven_ai_agent.agents.task_validator import TaskValidator
+                validator = TaskValidator()
+                result = validator.handle(query, {})
+                if not isinstance(result, dict):
+                    result = {"success": True, "response": str(result)}
                 else:
                     result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
             
