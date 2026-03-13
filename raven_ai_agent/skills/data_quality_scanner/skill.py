@@ -338,7 +338,7 @@ class DataQualityScannerSkill(SkillBase):
         issues.extend(billing_issues)
         
         # Check 4: Customer Account
-        account_issues = self._validate_customer_account(so)
+        account_issues = self._validate_customer_account(so, doc_type="Sales Order")
         issues.extend(account_issues)
         
         # Check 5: MX CFDI Fields
@@ -564,7 +564,7 @@ class DataQualityScannerSkill(SkillBase):
         
         return issues
     
-    def _validate_customer_account(self, so) -> List[Dict]:
+    def _validate_customer_account(self, so, doc_type: str = "Sales Order") -> List[Dict]:
         """Check if customer has valid receivable account"""
         issues = []
         
@@ -574,6 +574,9 @@ class DataQualityScannerSkill(SkillBase):
         
         if not customer:
             return issues
+        
+        # Check if this is a Sales Order (account handled by Server Script at Invoice level)
+        is_sales_order = doc_type == "Sales Order"
         
         # Get default receivable account from Company/Party Defaults (not Customer directly)
         receivable_account = None
@@ -599,15 +602,29 @@ class DataQualityScannerSkill(SkillBase):
         try:
             account = frappe.get_doc("Account", receivable_account)
             if account.is_group:
-                issues.append({
-                    "type": "group_account",
-                    "severity": "CRITICAL",
-                    "message": f"Account '{receivable_account}' is a Group Account (cannot be used in transactions)",
-                    "field": "debit_to",
-                    "current_value": receivable_account,
-                    "auto_fix": "find_leaf_account",
-                    "fix_confidence": 0.80
-                })
+                # For Sales Orders, account is set at Invoice level via Server Script
+                # So we mark this as INFO instead of CRITICAL
+                if is_sales_order:
+                    issues.append({
+                        "type": "group_account",
+                        "severity": "INFO",
+                        "message": f"Account '{receivable_account}' is a Group Account - Will be auto-fixed at Invoice level via Server Script",
+                        "field": "debit_to",
+                        "current_value": receivable_account,
+                        "auto_fix": None,  # No auto-fix needed - Server Script handles it
+                        "fix_confidence": 1.0,
+                        "note": "Handled by Server Script at Invoice creation"
+                    })
+                else:
+                    issues.append({
+                        "type": "group_account",
+                        "severity": "CRITICAL",
+                        "message": f"Account '{receivable_account}' is a Group Account (cannot be used in transactions)",
+                        "field": "debit_to",
+                        "current_value": receivable_account,
+                        "auto_fix": "find_leaf_account",
+                        "fix_confidence": 0.80
+                    })
             
             # Check currency - Multi-currency is normal in ERPNext (USD invoices in MXN company)
             # This is handled by exchange rate at invoice time, NOT an error
