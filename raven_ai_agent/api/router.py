@@ -41,16 +41,23 @@ def _detect_ai_intent(query: str) -> str:
     diagnosis_commands = [
         r'^fix\s+SO-',           # @ai fix SO-00752
         r'^scan\s+SO-',          # @ai scan SO-00752
+        r'^scan\s+SAL-QTN-',     # @ai scan SAL-QTN-2024-00752
         r'^diagnose\s+SO-',      # @ai diagnose SO-00752
+        r'^diagnose\s+SAL-QTN-', # @ai diagnose SAL-QTN-2024-00752
         r'^validate\s+SO-',       # @ai validate SO-00752
         r'^check\s+data\s+SO-',  # @ai check data SO-00752
         r'pipeline\s+SO-',       # @ai pipeline SO-00752
+        r'pipeline\s+SAL-QTN-',  # @ai pipeline SAL-QTN-2024-00752
         r'full\s+scan\s+SO-',    # @ai full scan SO-00752
         # === Quotation Diagnostics (NEW) ===
         r'diagnose\s+pipeline\s+of\s+quotation',  # @ai diagnose pipeline of quotation
         r'diagnose\s+quotation',   # @ai diagnose quotation QUOT-XXX or SAL-QTN-XXX
+        r'diagnose\s+SAL-QTN-',    # @ai diagnose SAL-QTN-2024-00752 (direct)
+        r'diagnose\s+QUOT-',       # @ai diagnose QUOT-2026-00001 (direct)
         r'scan\s+quotation',       # @ai scan quotation QUOT-XXX or SAL-QTN-XXX
+        r'scan\s+SAL-QTN-',        # @ai scan SAL-QTN-2024-00752 (direct)
         r'pipeline\s+quotation',   # @ai pipeline quotation QUOT-XXX
+        r'pipeline\s+SAL-QTN-',     # @ai pipeline SAL-QTN-2024-00752 (direct)
         r'validate\s+quotation',   # @ai validate quotation QUOT-XXX
         r'^fix\s+QUOT-',          # @ai fix QUOT-XXX
         r'^fix\s+SAL-QTN-',       # @ai fix SAL-QTN-XXX

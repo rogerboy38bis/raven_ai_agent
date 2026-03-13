@@ -320,14 +320,15 @@ class DataQualityScannerSkill(SkillBase):
         elif doc_name_upper.startswith("ACC-DN"):
             return "Delivery Note"
         else:
-            # Try to get from database
-            try:
-                doc = frappe.get_doc({
-                    "doctype": "DocType",
-                    "name": doc_name
-                })
-            except:
-                pass
+            # Fallback: Check database for the document type
+            doctypes = ["Sales Order", "Quotation", "Sales Invoice", "Delivery Note", "Payment Entry"]
+            for dt in doctypes:
+                try:
+                    if frappe.db.exists(dt, doc_name):
+                        frappe.logger().info(f"[DataQualityScanner] Found {doc_name} as {dt}")
+                        return dt
+                except:
+                    pass
             
             return "Unknown"
     
