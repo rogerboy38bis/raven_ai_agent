@@ -1526,12 +1526,13 @@ class DataQualityScannerSkill(SkillBase):
                             except Exception as addr_err:
                                 failed.append(f"Could not set address: {addr_err}")
                     elif field == "billing_address_name":
+                        # Sales Orders don't have billing_address_name - use customer_address instead
                         addr = self._create_address_from_customer(doc, address_type="Billing")
                         if addr:
                             try:
-                                doc.db_set("billing_address_name", addr)
+                                doc.db_set("customer_address", addr)  # Use customer_address for billing
                                 frappe.db.commit()
-                                applied.append(f"Created and set {field} = {addr}")
+                                applied.append(f"Created and set customer_address (for billing) = {addr}")
                             except Exception as addr_err:
                                 failed.append(f"Could not set billing address: {addr_err}")
                     elif field == "shipping_address_name":
