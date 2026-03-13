@@ -105,13 +105,26 @@ class PaymentAgent:
 
             pe = get_payment_entry("Sales Invoice", si_name, party_amount=payment_amount)
 
+            # Set mode_of_payment - default to Wire Transfer if not provided
             if mode_of_payment:
                 pe.mode_of_payment = mode_of_payment
+            elif not pe.mode_of_payment:
+                # Try to get from customer defaults, otherwise use Wire Transfer
+                default_mop = frappe.db.get_value("Customer", si.customer, "default_mode_of_payment")
+                pe.mode_of_payment = default_mop or "Wire Transfer"
 
             pe.reference_no = f"PAY-{si_name}"
             pe.reference_date = payment_date or nowdate()
             if payment_date:
                 pe.posting_date = payment_date
+
+            # Ensure required fields are set
+            if not pe.paid_from:
+                company_default = frappe.db.get_value("Company", si.company, "default_bank_account")
+                pe.paid_from = company_default
+            if not pe.paid_to:
+                company_receivable = frappe.db.get_value("Company", si.company, "default_receivable_account")
+                pe.paid_to = company_receivable
 
             # --- Banxico FIX T-1 Exchange Rate for Payment Date ---
             fx_info = None
@@ -197,7 +210,16 @@ class PaymentAgent:
         except frappe.DoesNotExistError:
             return {"success": False, "error": f"Sales Invoice '{si_name}' not found."}
         except Exception as e:
-            return {"success": False, "error": f"Error creating Payment Entry: {str(e)}"}
+            import traceback
+            error_detail = str(e)
+            # Try to get more details from the validation error
+            if hasattr(frappe, 'local') and hasattr(frappe.local, 'form_dict'):
+                error_detail += f" | Form: {frappe.local.form_dict.get('form_name', 'unknown')}"
+            return {
+                "success": False, 
+                "error": f"Error creating Payment Entry: {error_detail}",
+                "traceback": traceback.format_exc()
+            }
 
     def submit_payment_entry(self, pe_name: str) -> Dict:
         """Submit a Payment Entry.
@@ -403,12 +425,12 @@ class PaymentAgent:
         """
         message_lower = message.lower().strip()
 
-        # Extract document names
-        si_pattern = r'(ACC-SINV-\d+-\d+|SINV-\d+|SI-[\w-]+|SAL-INV-[\d-]+)'
+        # Extract document names - Updated to match ACC-SINV-2026-00001 format
+        si_pattern = r'(ACC-SINV-\d+|SINV-\d+|SI-[\w-]+|SAL-INV-[\d-]+)'
         si_match = re.search(si_pattern, message, re.IGNORECASE)
         si_name = si_match.group(1) if si_match else None
 
-        pe_pattern = r'(ACC-PAY-\d+-\d+|PE-[\w-]+|PAY-[\w-]+)'
+        pe_pattern = r'(ACC-PAY-\d+|PE-[\w-]+|PAY-[\w-]+)'
         pe_match = re.search(pe_pattern, message, re.IGNORECASE)
         pe_name = pe_match.group(1) if pe_match else None
 
@@ -419,6 +441,13 @@ class PaymentAgent:
         # ---- CREATE PAYMENT ----
         # Match: explicit "create" OR just having an SI name (default action for SI = create payment)
         # Also matches: "payment from ACC-SINV-XXX", "pay ACC-SINV-XXX", "pago ACC-SINV-XXX"
+        # Handle "create payment for ACC-SINV-XXX" pattern
+        if "for" in message_lower and si_name:
+            # Extract SI from "create payment for ACC-SINV-XXX"
+            for_match = re.search(r'for\s+(ACC-SINV-\d+|SINV-\d+)', message, re.IGNORECASE)
+            if for_match:
+                si_name = for_match.group(1)
+        
         if si_name and not any(kw in message_lower for kw in ["submit", "reconcile", "status", "estado"]):
             amount_match = re.search(r'(?:amount|monto)\s+(\d+\.?\d*)', message, re.IGNORECASE)
             amount = float(amount_match.group(1)) if amount_match else None
