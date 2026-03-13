@@ -492,7 +492,7 @@ class PaymentAgent:
         si_match = re.search(si_pattern, message, re.IGNORECASE)
         si_name = si_match.group(1) if si_match else None
 
-        pe_pattern = r'(ACC-PAY-\d+|PE-[\w-]+|PAY-[\w-]+)'
+        pe_pattern = r'(ACC-PAY-\d+-\d+|PE-[\w-]+|PAY-[\w-]+)'
         pe_match = re.search(pe_pattern, message, re.IGNORECASE)
         pe_name = pe_match.group(1) if pe_match else None
 

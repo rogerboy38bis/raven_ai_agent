@@ -36,7 +36,7 @@ def _detect_ai_intent(query: str) -> str:
     # This must come FIRST to prevent payment_bot from intercepting SI creation
     if re.search(r'SO-\d+', query, re.IGNORECASE) or re.search(r'from\s+SO', query, re.IGNORECASE):
         # Exclude actual payment commands
-        if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+)', query, re.IGNORECASE):
+        if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+-\d+)', query, re.IGNORECASE):
             return "sales_order_follow_up"
 
     # Orchestrator: pipeline, full cycle, validate, dry run
@@ -72,11 +72,11 @@ def _detect_ai_intent(query: str) -> str:
     # Payment Agent: payment, pay, ACC-SINV, ACC-PAY, unpaid, outstanding
     pay_patterns = [
         r'ACC-SINV-\d+-\d+',
-        r'ACC-PAY-\d+',
+        r'ACC-PAY-\d+-\d+',
         r'SINV-\d+',
         r'(?:create|make)\s+payment',
-        r'submit\s+ACC-PAY',
-        r'reconcile\s+ACC-PAY',
+        r'submit\s+ACC-PAY-\d+-\d+',
+        r'reconcile\s+ACC-PAY-\d+-\d+',
         r'unpaid\s+invoices?',
         r'outstanding',
     ]
