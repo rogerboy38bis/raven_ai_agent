@@ -101,9 +101,23 @@ class PaymentAgent:
                 }
 
             # Use ERPNext's built-in Payment Entry creation
-            from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
-
-            pe = get_payment_entry("Sales Invoice", si_name, party_amount=payment_amount)
+            # Try make_payment_entry first (more robust), fallback to get_payment_entry
+            try:
+                from erpnext.accounts.doctype.payment_entry.payment_entry import make_payment_entry
+                pe = make_payment_entry(si_name)
+                if pe:
+                    # make_payment_entry returns the PE doc, configure it
+                    if payment_amount and payment_amount != si.outstanding_amount:
+                        # Adjust amount if partial payment
+                        for ref in pe.references:
+                            ref.allocated_amount = payment_amount
+                            ref.outstanding_amount = si.outstanding_amount - payment_amount
+                        pe.paid_amount = payment_amount
+                        pe.total_allocated = payment_amount
+            except Exception as make_err:
+                # Fallback to get_payment_entry
+                from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+                pe = get_payment_entry("Sales Invoice", si_name, party_amount=payment_amount)
 
             # Set mode_of_payment - default to Wire Transfer if not provided
             if mode_of_payment:
