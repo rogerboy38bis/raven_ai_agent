@@ -48,12 +48,14 @@ def _detect_ai_intent(query: str) -> str:
         r'full\s+scan\s+SO-',    # @ai full scan SO-00752
         # === Quotation Diagnostics (NEW) ===
         r'diagnose\s+pipeline\s+of\s+quotation',  # @ai diagnose pipeline of quotation
-        r'diagnose\s+quotation',   # @ai diagnose quotation QUOT-XXX
-        r'scan\s+quotation',       # @ai scan quotation QUOT-XXX
+        r'diagnose\s+quotation',   # @ai diagnose quotation QUOT-XXX or SAL-QTN-XXX
+        r'scan\s+quotation',       # @ai scan quotation QUOT-XXX or SAL-QTN-XXX
         r'pipeline\s+quotation',   # @ai pipeline quotation QUOT-XXX
         r'validate\s+quotation',   # @ai validate quotation QUOT-XXX
         r'^fix\s+QUOT-',          # @ai fix QUOT-XXX
+        r'^fix\s+SAL-QTN-',       # @ai fix SAL-QTN-XXX
         r'QUOT-\d+-\d+',          # Matches QUOT-2026-00001
+        r'SAL-QTN-\d+-\d+',       # Matches SAL-QTN-2024-00752
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in diagnosis_commands):
         return "data_quality_scanner"
