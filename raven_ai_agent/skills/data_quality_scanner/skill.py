@@ -334,7 +334,7 @@ class DataQualityScannerSkill(SkillBase):
         issues.extend(shipping_issues)
         
         # Check 3: Billing Address
-        billing_issues = self._validate_billing_address(so)
+        billing_issues = self._validate_billing_address(so, doc_type="Sales Order")
         issues.extend(billing_issues)
         
         # Check 4: Customer Account
@@ -546,18 +546,24 @@ class DataQualityScannerSkill(SkillBase):
         
         return issues
     
-    def _validate_billing_address(self, doc) -> List[Dict]:
+    def _validate_billing_address(self, doc, doc_type: str = "Sales Order") -> List[Dict]:
         """Check if billing address is valid"""
         issues = []
         
-        billing_address = doc.get("billing_address_name")
+        # Sales Orders use customer_address for billing, Sales Invoices use billing_address_name
+        if doc_type == "Sales Order":
+            billing_address = doc.get("customer_address")
+            field_name = "customer_address"
+        else:
+            billing_address = doc.get("billing_address_name")
+            field_name = "billing_address_name"
         
         if not billing_address:
             issues.append({
                 "type": "missing_billing_address",
                 "severity": "MEDIUM",
                 "message": "Billing Address is missing",
-                "field": "billing_address_name",
+                "field": field_name,
                 "auto_fix": "copy_from_customer_address",
                 "fix_confidence": 0.85
             })
