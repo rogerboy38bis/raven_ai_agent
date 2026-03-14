@@ -38,6 +38,10 @@ def _detect_ai_intent(query: str) -> str:
         # Exclude actual payment commands
         if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+-\d+)', query, re.IGNORECASE):
             return "sales_order_follow_up"
+    # --- DEBUG EXPLÍCITO PARA PIPELINE ---
+    if 'pipeline' in query.lower() and ('sal-qtn' in query.lower() or 'quot' in query.lower()):
+        frappe.logger().info(f"DEBUG: Pipeline SAL-QTN detectado explícitamente")
+        return "task_validator"
 
     # Pipeline commands for quotations - explicit check
     if re.search(r'pipeline\s+SAL-QTN-', query, re.IGNORECASE):
@@ -56,6 +60,7 @@ def _detect_ai_intent(query: str) -> str:
         r"verify\s+(?:SO|sales\s+order)",
         r"pipeline\s+SAL-QTN-",  # Pipeline diagnosis for quotations
         r"pipeline\s+QUOT-",      # Pipeline diagnosis for quotations (alternative prefix)
+        r"scan\s+SAL-QTN-",       # NUEVA LINEA - Scan for quotations
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in validator_patterns):
         return "task_validator"

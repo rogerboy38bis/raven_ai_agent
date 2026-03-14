@@ -295,7 +295,7 @@ def handle_raven_message(doc, method):
             
             # NEW: Task Validator / Diagnosis Agent
             elif bot_name == "task_validator":
-                from raven_ai_agent.api.handlers.task_validator import TaskValidatorMixin
+                from raven_ai_agent.agents.task_validator import TaskValidatorMixin
                 # Create a lightweight wrapper to use the mixin
                 class _ValidatorAgent(TaskValidatorMixin):
                     pass
