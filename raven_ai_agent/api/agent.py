@@ -451,7 +451,7 @@ def handle_raven_message(doc, method):
                 # Check data commands for quotations
                 "check data ", "check data SAL-", "check data QUOT-",
                 # Pipeline commands - route to task_validator
-                "pipeline SAL-QTN-", "pipeline SAL-ORD-", "pipeline QUOT-",
+                "pipeline", "pipeline SAL-QTN-", "pipeline SAL-ORD-", "pipeline QUOT-",
                 "pipeline "  # Must be last - catches "pipeline" alone
             ]
 
