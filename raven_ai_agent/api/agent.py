@@ -451,7 +451,7 @@ def handle_raven_message(doc, method):
                 # Check data commands for quotations
                 "check data ", "check data SAL-", "check data QUOT-",
                 # Fix commands - route to task_validator for actual fixes
-                "fix ", "fix SAL-", "fix QUOT-", "fix SO-",
+                "fix", "fix ", "fix SAL-", "fix QUOT-", "fix SO-",
                 # Pipeline commands - route to task_validator
                 "pipeline", "pipeline SAL-QTN-", "pipeline SAL-ORD-", "pipeline QUOT-",
                 "pipeline "  # Must be last - catches "pipeline" alone
