@@ -220,6 +220,18 @@ CAPABILITIES_LIST = """
 
 ---
 
+### 📋 Quotation Pipeline Commands (v11.0)
+
+| Command | Description | Bot |
+|---------|-------------|-----|
+| `@ai pipeline SAL-QTN-XXXXX` | Full pipeline diagnosis for quotations | task_validator |
+| `@ai diagnose SAL-QTN-XXXXX` | Diagnose quotation issues | data_quality_scanner |
+| `@ai scan SAL-QTN-XXXXX` | Scan quotation for issues | data_quality_scanner |
+| `@ai check data SAL-QTN-XXXXX` | Validate quotation data | task_validator |
+| `@ai validate ACC-SINV-XXXXX` | Validate sales invoice | payment_bot |
+
+---
+
 ### 🌐 Web Research & External Data
 
 - `@ai search [topic]` - Web search for any topic
