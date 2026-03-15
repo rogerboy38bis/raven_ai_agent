@@ -627,7 +627,9 @@ def handle_raven_message(doc, method):
                 validator = TaskValidator()
                 validator_result = validator.handle(query, {"channel_id": doc.channel_id} if doc else None)
                 if validator_result:
-                    result = {"success": True, "response": validator_result.get("response", "Validation complete")}
+                    # Handle both "response" and "message" keys from task_validator
+                    response_text = validator_result.get("response") or validator_result.get("message") or "Validation complete"
+                    result = {"success": True, "response": response_text}
                 else:
                     result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
             else:
