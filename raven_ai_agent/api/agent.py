@@ -623,13 +623,11 @@ def handle_raven_message(doc, method):
                 response = batcher.process_command(query)
                 result = {"success": True, "response": response}
             elif bot_name == "task_validator":
-                from raven_ai_agent.agents.task_validator import TaskValidatorMixin
-                class _ValidatorAgent(TaskValidatorMixin):
-                    pass
-                validator = _ValidatorAgent()
-                validator_result = validator._handle_validator_commands(query, query.lower())
+                from raven_ai_agent.agents.task_validator import TaskValidator
+                validator = TaskValidator()
+                validator_result = validator.handle(query, {"channel_id": doc.channel_id} if doc else None)
                 if validator_result:
-                    result = {"success": True, "response": validator_result.get("message") or validator_result.get("error", "No result")}
+                    result = {"success": True, "response": validator_result.get("response", "Validation complete")}
                 else:
                     result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
             else:
