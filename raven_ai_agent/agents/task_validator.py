@@ -143,6 +143,30 @@ class TaskValidator:
                 }
 
         # ═══════════════════════════════════════════════════════════════════════
+        # FIX: Actually fix issues in documents
+        # @ai fix SAL-QTN-XXXX
+        # @ai fix QUOT-XXXXX
+        # @ai fix SO-XXXXX
+        # ═══════════════════════════════════════════════════════════════════════
+        if query_lower.startswith("fix ") or "fix SAL-" in query_lower or "fix QUOT-" in query_lower or "fix SO-" in query_lower:
+            qtn_match = re.search(r'(SAL-QTN-\d+-\d+)', query, re.IGNORECASE)
+            quot_match = re.search(r'(QUOT-\d+)', query, re.IGNORECASE)
+            so_match = _resolve_so_name(query)
+            
+            if qtn_match:
+                return self._handle_fix(qtn_match.group(1).upper(), "Quotation")
+            elif quot_match:
+                return self._handle_fix(quot_match.group(1).upper(), "Quotation")
+            elif so_match:
+                return self._handle_fix(so_match.group(1).upper(), "Sales Order")
+            else:
+                return {
+                    "success": False,
+                    "error": "**Usage:** `@ai fix SAL-QTN-2024-XXXXX`\n"
+                             "or `@ai fix SO-XXXXX`"
+                }
+
+        # ═══════════════════════════════════════════════════════════════════════
         # VALIDATE BOM: Check and fix BOM issues
         # @ai validate BOM-XXXX
         # @ai audit bom BOM-XXXX
@@ -496,6 +520,188 @@ class TaskValidator:
         except Exception as e:
             frappe.logger().error(f"Party Account command error: {e}")
             return {"success": False, "error": f"Error: {str(e)}"}
+
+    def _handle_fix(self, doc_name: str, doc_type: str) -> Dict:
+        """
+        Actually modify the document to fix issues.
+        Returns list of fixes applied.
+        """
+        site_name = frappe.local.site
+        fixes_applied = []
+        warnings = []
+        
+        try:
+            if doc_type == "Quotation":
+                doc = frappe.get_doc("Quotation", doc_name)
+                
+                # Fix missing customer address
+                if not doc.customer_address and doc.customer:
+                    customer_address = self._get_customer_default_address(doc.customer)
+                    if customer_address:
+                        doc.customer_address = customer_address
+                        fixes_applied.append(f"Added customer_address: {customer_address}")
+                    else:
+                        warnings.append("No default address found for customer")
+                
+                # Fix missing shipping address
+                if not doc.shipping_address_name and doc.customer:
+                    shipping_address = self._get_customer_shipping_address(doc.customer)
+                    if shipping_address:
+                        doc.shipping_address_name = shipping_address
+                        fixes_applied.append(f"Added shipping_address_name: {shipping_address}")
+                    else:
+                        warnings.append("No shipping address found for customer")
+                
+                # Fix missing shipping address (from address)
+                if not doc.shipping_address and doc.customer:
+                    # Try to get address from customer_address
+                    if doc.customer_address:
+                        doc.shipping_address = doc.customer_address
+                        fixes_applied.append(f"Added shipping_address from customer_address")
+                
+                # Fix missing cost centers on items
+                for item in doc.items:
+                    if not item.cost_center and item.item_code:
+                        cost_center = self._derive_cost_center(item.item_code, doc.company)
+                        if cost_center:
+                            item.cost_center = cost_center
+                            fixes_applied.append(f"Added cost_center to item {item.idx}: {cost_center}")
+                        else:
+                            warnings.append(f"No cost center found for item {item.item_code}")
+                
+                # Save if we made changes
+                if fixes_applied:
+                    doc.save()
+                    frappe.db.commit()
+                
+                # Build response
+                doc_link = f"https://{site_name}/app/quotation/{doc_name}"
+                msg = f"## 🔧 Fix Applied: [{doc_name}]({doc_link})\n\n"
+                
+                if fixes_applied:
+                    msg += "### ✅ Fixes Applied\n"
+                    for fix in fixes_applied:
+                        msg += f"- {fix}\n"
+                else:
+                    msg += "### ℹ️ No fixes needed\n"
+                    msg += "Document appears to be complete.\n"
+                
+                if warnings:
+                    msg += "\n### ⚠️ Warnings\n"
+                    for w in warnings:
+                        msg += f"- {w}\n"
+                
+                msg += f"\n**Note:** Review the document before submitting."
+                
+                return {"success": True, "message": msg}
+            
+            elif doc_type == "Sales Order":
+                doc = frappe.get_doc("Sales Order", doc_name)
+                
+                # Fix missing customer address
+                if not doc.customer_address and doc.customer:
+                    customer_address = self._get_customer_default_address(doc.customer)
+                    if customer_address:
+                        doc.customer_address = customer_address
+                        fixes_applied.append(f"Added customer_address: {customer_address}")
+                
+                # Fix missing shipping address
+                if not doc.shipping_address_name and doc.customer:
+                    shipping_address = self._get_customer_shipping_address(doc.customer)
+                    if shipping_address:
+                        doc.shipping_address_name = shipping_address
+                        fixes_applied.append(f"Added shipping_address_name: {shipping_address}")
+                
+                # Fix missing cost centers on items
+                for item in doc.items:
+                    if not item.cost_center and item.item_code:
+                        cost_center = self._derive_cost_center(item.item_code, doc.company)
+                        if cost_center:
+                            item.cost_center = cost_center
+                            fixes_applied.append(f"Added cost_center to item {item.idx}: {cost_center}")
+                
+                # Save if we made changes
+                if fixes_applied:
+                    doc.save()
+                    frappe.db.commit()
+                
+                # Build response
+                doc_link = f"https://{site_name}/app/sales-order/{doc_name}"
+                msg = f"## 🔧 Fix Applied: [{doc_name}]({doc_link})\n\n"
+                
+                if fixes_applied:
+                    msg += "### ✅ Fixes Applied\n"
+                    for fix in fixes_applied:
+                        msg += f"- {fix}\n"
+                else:
+                    msg += "### ℹ️ No fixes needed\n"
+                    msg += "Document appears to be complete.\n"
+                
+                return {"success": True, "message": msg}
+            
+            else:
+                return {"success": False, "error": f"Unsupported document type: {doc_type}"}
+                
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Document **{doc_name}** not found."}
+        except Exception as e:
+            frappe.logger().error(f"Fix command error: {e}")
+            return {"success": False, "error": f"Error fixing document: {str(e)}"}
+
+    def _get_customer_default_address(self, customer: str) -> str:
+        """Get customer's default address"""
+        address = frappe.db.get_value(
+            "Dynamic Link",
+            {"link_doctype": "Customer", "link_name": customer, "parenttype": "Address"},
+            "parent"
+        )
+        return address
+
+    def _get_customer_shipping_address(self, customer: str) -> str:
+        """Get customer's shipping address (or fallback to default)"""
+        address = frappe.db.get_value(
+            "Dynamic Link",
+            {
+                "link_doctype": "Customer", 
+                "link_name": customer, 
+                "parenttype": "Address",
+                "is_shipping_address": 1
+            },
+            "parent"
+        )
+        if not address:
+            address = self._get_customer_default_address(customer)
+        return address
+
+    def _derive_cost_center(self, item_code: str, company: str = None) -> str:
+        """
+        Derive cost center from item (based on golden number/item group)
+        """
+        if not item_code:
+            return None
+            
+        # Try to get item group
+        item_group = frappe.db.get_value("Item", item_code, "item_group")
+        
+        if item_group:
+            # Try to find cost center matching item group
+            # This is a simple implementation - can be enhanced
+            cost_center = frappe.db.get_value(
+                "Cost Center",
+                {"company": company, "is_group": 0, "name": ["like", f"%{item_group}%"]},
+                "name"
+            )
+            if cost_center:
+                return cost_center
+        
+        # Fallback: get default cost center from company
+        if company:
+            cost_center = frappe.db.get_value(
+                "Company", company, "cost_center"
+            )
+            return cost_center
+        
+        return None
 
     def _diagnose_from_sales_order(self, so_name: str) -> Dict:
         """Diagnose starting from a Sales Order — find source QTN and trace forward"""

@@ -375,7 +375,7 @@ def handle_raven_message(doc, method):
             query = plain_text[3:].strip()
             q_lower = query.lower()
             
-            scanner_keywords = ["scan", "validate", "pre-flight", "preflight", "diagnose", "fix", "repair", "solve"]
+            scanner_keywords = ["scan", "validate", "pre-flight", "preflight", "diagnose", "repair", "solve"]
             if any(kw in q_lower for kw in scanner_keywords):
                 try:
                     from raven_ai_agent.skills.data_quality_scanner.skill import DataQualityScannerSkill
@@ -450,6 +450,8 @@ def handle_raven_message(doc, method):
                 "audit bom", "check bom", "validate bom",
                 # Check data commands for quotations
                 "check data ", "check data SAL-", "check data QUOT-",
+                # Fix commands - route to task_validator for actual fixes
+                "fix ", "fix SAL-", "fix QUOT-", "fix SO-",
                 # Pipeline commands - route to task_validator
                 "pipeline", "pipeline SAL-QTN-", "pipeline SAL-ORD-", "pipeline QUOT-",
                 "pipeline "  # Must be last - catches "pipeline" alone
