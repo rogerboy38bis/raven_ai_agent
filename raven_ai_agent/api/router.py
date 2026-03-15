@@ -36,6 +36,10 @@ def _detect_ai_intent(query: str) -> str:
     """
     query_lower = query.lower()
 
+    # === PRIORITY: Help commands - route to sales_order_bot ===
+    if query_lower.startswith("help") or query_lower.startswith("ayuda"):
+        return "sales_order_bot"
+
     # === PRIORITY: Task Validator commands (check data, pipeline) ===
     # These must come BEFORE diagnosis_commands to route to task_validator instead of scanner
     if re.search(r'^check\s+data\s+SAL-QTN-', query, re.IGNORECASE):
