@@ -36,6 +36,13 @@ def _detect_ai_intent(query: str) -> str:
     """
     query_lower = query.lower()
 
+    # === PRIORITY: Task Validator commands (check data, pipeline) ===
+    # These must come BEFORE diagnosis_commands to route to task_validator instead of scanner
+    if re.search(r'^check\s+data\s+SAL-QTN-', query, re.IGNORECASE):
+        return "task_validator"
+    if re.search(r'^pipeline\s+SAL-QTN-', query, re.IGNORECASE):
+        return "task_validator"
+
     # === PRIORITY: Data Quality Scanner / Diagnosis commands ===
     # These commands should ALWAYS go to the skills system, NOT sales_order_follow_up
     diagnosis_commands = [
@@ -62,7 +69,6 @@ def _detect_ai_intent(query: str) -> str:
         r'^fix\s+QUOT-',          # @ai fix QUOT-XXX
         r'^fix\s+SAL-QTN-',       # @ai fix SAL-QTN-XXX
         r'QUOT-\d+-\d+',          # Matches QUOT-2026-00001
-        r'SAL-QTN-\d+-\d+',       # Matches SAL-QTN-2024-00752
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in diagnosis_commands):
         return "data_quality_scanner"
