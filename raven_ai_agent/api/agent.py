@@ -375,7 +375,7 @@ def handle_raven_message(doc, method):
             query = plain_text[3:].strip()
             q_lower = query.lower()
             
-            scanner_keywords = ["scan", "validate", "check data", "pre-flight", "preflight", "diagnose", "fix", "repair", "solve"]
+            scanner_keywords = ["scan", "validate", "pre-flight", "preflight", "diagnose", "fix", "repair", "solve"]
             if any(kw in q_lower for kw in scanner_keywords):
                 try:
                     from raven_ai_agent.skills.data_quality_scanner.skill import DataQualityScannerSkill
@@ -457,9 +457,9 @@ def handle_raven_message(doc, method):
 
             # === SCANNER/DATA QUALITY commands - route to SkillRouter (before SO check) ===
             scanner_keywords = [
-                "scan", "validate", "check data", "pre-flight", "preflight",
+                "scan", "pre-flight", "preflight",
                 "quality check", "check address", "check account", "check invoice",
-                "verificar", "diagnose"
+                "verificar"
             ]
             
             # DEBUG: Log the query and matching
