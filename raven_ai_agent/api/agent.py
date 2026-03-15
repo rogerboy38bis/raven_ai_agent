@@ -448,6 +448,8 @@ def handle_raven_message(doc, method):
                 "verify so", "verify sales order", "sync so", "fix so",
                 "sync sales order", "fix sales order", "!sync", "!fix",
                 "audit bom", "check bom", "validate bom",
+                # Check data commands for quotations
+                "check data ", "check data SAL-", "check data QUOT-",
                 # Pipeline commands - route to task_validator
                 "pipeline SAL-QTN-", "pipeline SAL-ORD-", "pipeline QUOT-",
                 "pipeline "  # Must be last - catches "pipeline" alone
@@ -466,6 +468,11 @@ def handle_raven_message(doc, method):
             if any(kw in q_lower for kw in scanner_keywords):
                 frappe.logger().info(f"[AI Agent] MATCHED scanner keywords, bot_name=None")
                 bot_name = None  # Will route to SkillRouter in else case below
+            
+            # === PRIORITY: Payment-linked commands (ACC-SINV, ACC-PAY) - BEFORE validator ===
+            # This must come BEFORE validator_keywords to route payment commands to payment_bot
+            if re.search(r'ACC-SINV-|ACC-PAY-|sinv-|acc-sinv|acc-pay', q_lower, re.IGNORECASE):
+                bot_name = "payment_bot"
             
             # === PRIORITY: SO-linked commands always go to sales agent ===
             # This must come FIRST to prevent payment_bot from intercepting SI/DN creation
