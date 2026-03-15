@@ -447,7 +447,10 @@ def handle_raven_message(doc, method):
                 "check payment", "check pago", "pipeline health",
                 "verify so", "verify sales order", "sync so", "fix so",
                 "sync sales order", "fix sales order", "!sync", "!fix",
-                "audit bom", "check bom", "validate bom"
+                "audit bom", "check bom", "validate bom",
+                # Pipeline commands - route to task_validator
+                "pipeline SAL-QTN-", "pipeline SAL-ORD-", "pipeline QUOT-",
+                "pipeline "  # Must be last - catches "pipeline" alone
             ]
 
             # === SCANNER/DATA QUALITY commands - route to SkillRouter (before SO check) ===
