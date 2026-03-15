@@ -6,11 +6,15 @@ Contains the @frappe.whitelist() entry points:
 - handle_raven_message: Webhook handler for Raven messages with bot routing
 
 Updated 2026-03-03: Added manufacturing, payment, and orchestrator agent routing
+Updated 2026-03-13: Added response post-processing for consistent formatting
 """
 import frappe
 import json
 import re
 from typing import Optional, Dict, List
+
+# Import response formatter for post-processing
+from raven_ai_agent.api.response_formatter import apply_post_processing
 
 @frappe.whitelist()
 def process_message(message: str, conversation_history: str = None) -> Dict:
@@ -31,22 +35,63 @@ def _detect_ai_intent(query: str) -> str:
                       sales_order_follow_up, or sales_order_bot (default)
     """
     query_lower = query.lower()
+
+    # === PRIORITY: Data Quality Scanner / Diagnosis commands ===
+    # These commands should ALWAYS go to the skills system, NOT sales_order_follow_up
+    diagnosis_commands = [
+        r'^fix\s+SO-',           # @ai fix SO-00752
+        r'^scan\s+SO-',          # @ai scan SO-00752
+        r'^scan\s+SAL-QTN-',     # @ai scan SAL-QTN-2024-00752
+        r'^diagnose\s+SO-',      # @ai diagnose SO-00752
+        r'^diagnose\s+SAL-QTN-', # @ai diagnose SAL-QTN-2024-00752
+        r'^validate\s+SO-',       # @ai validate SO-00752
+        r'^check\s+data\s+SO-',  # @ai check data SO-00752
+        r'pipeline\s+SO-',       # @ai pipeline SO-00752
+        r'pipeline\s+SAL-QTN-',  # @ai pipeline SAL-QTN-2024-00752
+        r'full\s+scan\s+SO-',    # @ai full scan SO-00752
+        # === Quotation Diagnostics (NEW) ===
+        r'diagnose\s+pipeline\s+of\s+quotation',  # @ai diagnose pipeline of quotation
+        r'diagnose\s+quotation',   # @ai diagnose quotation QUOT-XXX or SAL-QTN-XXX
+        r'diagnose\s+SAL-QTN-',    # @ai diagnose SAL-QTN-2024-00752 (direct)
+        r'diagnose\s+QUOT-',       # @ai diagnose QUOT-2026-00001 (direct)
+        r'scan\s+quotation',       # @ai scan quotation QUOT-XXX or SAL-QTN-XXX
+        r'scan\s+SAL-QTN-',        # @ai scan SAL-QTN-2024-00752 (direct)
+        r'pipeline\s+quotation',   # @ai pipeline quotation QUOT-XXX
+        r'pipeline\s+SAL-QTN-',     # @ai pipeline SAL-QTN-2024-00752 (direct)
+        r'validate\s+quotation',   # @ai validate quotation QUOT-XXX
+        r'^fix\s+QUOT-',          # @ai fix QUOT-XXX
+        r'^fix\s+SAL-QTN-',       # @ai fix SAL-QTN-XXX
+        r'QUOT-\d+-\d+',          # Matches QUOT-2026-00001
+        r'SAL-QTN-\d+-\d+',       # Matches SAL-QTN-2024-00752
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in diagnosis_commands):
+        return "data_quality_scanner"
     
     # === PRIORITY: SO-linked commands always go to sales agent ===
-    # This must come FIRST to prevent payment_bot from intercepting SI creation
+    # BUT: pipeline/diagnose commands for SAL-QTN should go to data_quality_scanner
     if re.search(r'SO-\d+', query, re.IGNORECASE) or re.search(r'from\s+SO', query, re.IGNORECASE):
-        # Exclude actual payment commands
-        if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+-\d+)', query, re.IGNORECASE):
+        # Exception: if it's a pipeline/diagnose command, send to scanner instead
+        if re.search(r'(?:pipeline|diagnose|scan)\s+SO-', query, re.IGNORECASE):
+            return "data_quality_scanner"
+        elif not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+)', query, re.IGNORECASE):
             return "sales_order_follow_up"
-
+    
+    # === PRIORITY: SAL-QTN pipeline/diagnose goes to data_quality_scanner ===
+    if re.search(r'(?:pipeline|diagnose|scan|validate)\s+SAL-QTN-', query, re.IGNORECASE):
+        return "data_quality_scanner"
+    
+    # === PRIORITY: SAL-QTN standalone (without prefix) also goes to scanner ===
+    if re.search(r'SAL-QTN-\d+-\d+', query, re.IGNORECASE):
+        # Check if it's a pipeline/diagnose/scan command
+        if any(kw in query.lower() for kw in ['pipeline', 'diagnose', 'scan', 'validate', 'fix']):
+            return "data_quality_scanner"
+    
     # Orchestrator: pipeline, full cycle, validate, dry run
     orch_patterns = [
         r'pipeline\s+status',
         r'(?:run|start)\s+full\s+cycle',
         r'dry\s+run',
         r'validate\s+SO-',
-        r'validate\s+(?:pipeline\s+)?SAL-QTN',
-        r'validate\s+pipeline',
         r'run\s+pipeline',
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in orch_patterns):
@@ -71,12 +116,12 @@ def _detect_ai_intent(query: str) -> str:
     
     # Payment Agent: payment, pay, ACC-SINV, ACC-PAY, unpaid, outstanding
     pay_patterns = [
-        r'ACC-SINV-\d+-\d+',
-        r'ACC-PAY-\d+-\d+',
+        r'ACC-SINV-\d+',
+        r'ACC-PAY-\d+',
         r'SINV-\d+',
         r'(?:create|make)\s+payment',
-        r'submit\s+ACC-PAY-\d+-\d+',
-        r'reconcile\s+ACC-PAY-\d+-\d+',
+        r'submit\s+ACC-PAY',
+        r'reconcile\s+ACC-PAY',
         r'unpaid\s+invoices?',
         r'outstanding',
     ]
@@ -84,6 +129,7 @@ def _detect_ai_intent(query: str) -> str:
         return "payment_bot"
     
     # Task Validator / Diagnosis: diagnose, validate, audit pipeline, check payments
+    # Also handles fix commands for data quality issues
     validator_patterns = [
         r'diagnos[ei]',
         r'validate\b',
@@ -92,22 +138,35 @@ def _detect_ai_intent(query: str) -> str:
         r'check\s+pago',
         r'pipeline\s+health',
         r'verify\s+(?:SO|sales\s+order)',
-        r'pipeline\s+SAL-QTN-',  # Pipeline diagnosis for quotations
-        r'pipeline\s+QUOT-',      # Pipeline diagnosis for quotations (alternative prefix)
+        r'^fix\s+SO-',           # @ai fix SO-00752
+        r'^scan\s+SO-',          # @ai scan SO-00752
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in validator_patterns):
+        return "task_validator"
+    
+    # Party Account Management (NEW)
+    party_account_patterns = [
+        r'create\s+party\s+accounts',
+        r'party\s+account',
+        r'fix\s+customer\s+account',
+        r'assign\s+customer\s+account',
+        r'batch\s+account',
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in party_account_patterns):
         return "task_validator"
     
     # Sales-specific patterns (DN, invoice, pending orders, next steps)
     sales_patterns = [
         r'(?:create|make)\s+(?:DN|delivery\s*note)',
-        r'(?:create|make)\s+(?:sales\s+)?invoice',  # Matches "create invoice" and "create sales invoice"
+        r'(?:create|make)\s+(?:sales\s+)?invoice',
         r'(?:create|make)\s+SO\s+from',
         r'pending\s+orders?',
         r'next\s+steps?',
         r'(?:status|check)\s+SO-',
         r'inventory\s+SO-',
         r'track\s+purchase',
+        r'!create\s+',
+        r'(?:create|make)\s+(?:sales\s+)?(?:invoice|SI)\s+(?:from|for)',
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in sales_patterns):
         return "sales_order_follow_up"
@@ -141,9 +200,6 @@ def handle_raven_message(doc, method):
         # Check for @ai trigger — uses intent detection to route to correct agent
         if plain_text.lower().startswith("@ai"):
             query = plain_text[3:].strip()
-            # Strip ! prefix (force mode) before intent detection
-            if query.startswith("!"):
-                query = query[1:].strip()
             bot_name = _detect_ai_intent(query)
             frappe.logger().info(f"[AI Agent] @ai intent detected: {bot_name}")
         
@@ -238,13 +294,15 @@ def handle_raven_message(doc, method):
                 result = {"success": True, "response": response}
             
             # NEW: Task Validator / Diagnosis Agent
-            # Task Validator / Diagnosis Agent - Usando nuestra implementación
             elif bot_name == "task_validator":
-                from raven_ai_agent.agents.task_validator import TaskValidator
-                validator = TaskValidator()
-                result = validator.handle(query, {})
-                if not isinstance(result, dict):
-                    result = {"success": True, "response": str(result)}
+                from raven_ai_agent.agents.task_validator import TaskValidatorMixin
+                # Create a lightweight wrapper to use the mixin
+                class _ValidatorAgent(TaskValidatorMixin):
+                    pass
+                validator = _ValidatorAgent()
+                validator_result = validator._handle_validator_commands(query, query.lower())
+                if validator_result:
+                    result = {"success": True, "response": validator_result.get("message") or validator_result.get("error", "No result")}
                 else:
                     result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
             
@@ -308,6 +366,10 @@ def handle_raven_message(doc, method):
                     frappe.logger().warning("[AI Agent] No bot found, using direct message")
         
         response_text = result.get("response") or result.get("message") or result.get("error") or "No response generated"
+        
+        # Apply post-processing for consistent formatting
+        response_text = apply_post_processing(response_text)
+        
         link_doctype = result.get("link_doctype")
         link_document = result.get("link_document")
         

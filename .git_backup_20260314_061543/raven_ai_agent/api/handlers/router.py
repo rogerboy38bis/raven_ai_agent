@@ -38,14 +38,41 @@ def _detect_ai_intent(query: str) -> str:
         # Exclude actual payment commands
         if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+-\d+)', query, re.IGNORECASE):
             return "sales_order_follow_up"
+    # --- DEBUG EXPLÍCITO PARA PIPELINE ---
+    if 'pipeline' in query.lower() and ('sal-qtn' in query.lower() or 'quot' in query.lower()):
+        frappe.logger().info(f"DEBUG: Pipeline SAL-QTN detectado explícitamente")
+        return "task_validator"
 
+    # Pipeline commands for quotations - explicit check
+    if re.search(r'pipeline\s+SAL-QTN-', query, re.IGNORECASE):
+        return "task_validator"
+    if re.search(r'pipeline\s+QUOT-', query, re.IGNORECASE):
+        return "task_validator"
+
+    # Task Validator / Diagnosis: diagnose, validate, audit pipeline, check payments
+    validator_patterns = [
+        r"diagnos[ei]",
+        r"validate\s+",
+        r"audit\s+pipeline",
+        r"check\s+payment",
+        r"check\s+pago",
+        r"pipeline\s+health",
+        r"verify\s+(?:SO|sales\s+order)",
+        r"pipeline\s+SAL-QTN-",  # Pipeline diagnosis for quotations
+        r"pipeline\s+QUOT-",      # Pipeline diagnosis for quotations (alternative prefix)
+        r"scan\s+SAL-QTN-",       # NUEVA LINEA - Scan for quotations
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in validator_patterns):
+        return "task_validator"
+
+  
     # Orchestrator: pipeline, full cycle, validate, dry run
     orch_patterns = [
         r'pipeline\s+status',
         r'(?:run|start)\s+full\s+cycle',
         r'dry\s+run',
         r'validate\s+SO-',
-        r'validate\s+(?:pipeline\s+)?SAL-QTN',
+        r'validate\s+SAL-QTN',
         r'validate\s+pipeline',
         r'run\s+pipeline',
     ]
@@ -82,21 +109,7 @@ def _detect_ai_intent(query: str) -> str:
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in pay_patterns):
         return "payment_bot"
-    
-    # Task Validator / Diagnosis: diagnose, validate, audit pipeline, check payments
-    validator_patterns = [
-        r'diagnos[ei]',
-        r'validate\b',
-        r'audit\s+pipeline',
-        r'check\s+payment',
-        r'check\s+pago',
-        r'pipeline\s+health',
-        r'verify\s+(?:SO|sales\s+order)',
-        r'pipeline\s+SAL-QTN-',  # Pipeline diagnosis for quotations
-        r'pipeline\s+QUOT-',      # Pipeline diagnosis for quotations (alternative prefix)
-    ]
-    if any(re.search(p, query, re.IGNORECASE) for p in validator_patterns):
-        return "task_validator"
+ # aqui  
     
     # Sales-specific patterns (DN, invoice, pending orders, next steps)
     sales_patterns = [
@@ -238,15 +251,17 @@ def handle_raven_message(doc, method):
                 result = {"success": True, "response": response}
             
             # NEW: Task Validator / Diagnosis Agent
-            # Task Validator / Diagnosis Agent - Usando nuestra implementación
+            # NEW: Task Validator / Diagnosis Agent
             elif bot_name == "task_validator":
                 from raven_ai_agent.agents.task_validator import TaskValidator
                 validator = TaskValidator()
                 result = validator.handle(query, {})
-                if not isinstance(result, dict):
-                    result = {"success": True, "response": str(result)}
+                if isinstance(result, dict):
+                    # Si ya es un diccionario, usarlo directamente
+                    pass
                 else:
-                    result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
+                    # Si no es diccionario, convertirlo
+                    result = {"success": True, "response": str(result)}
             
             # EXISTING: Sales Order Follow-up
             elif bot_name == "sales_order_follow_up":
@@ -254,7 +269,7 @@ def handle_raven_message(doc, method):
                 so_agent = SalesOrderFollowupAgent(user)
                 response = so_agent.process_command(query)
                 result = {"success": True, "response": response}
-            
+
             # EXISTING: R&D Agent
             elif bot_name == "rnd_bot":
                 from raven_ai_agent.agents import RnDAgent
