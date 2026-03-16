@@ -534,28 +534,52 @@ class TaskValidator:
             if doc_type == "Quotation":
                 doc = frappe.get_doc("Quotation", doc_name)
                 
-                # Fix missing customer address
-                if not doc.customer_address and doc.customer:
-                    customer_address = self._get_customer_default_address(doc.customer)
-                    if customer_address:
-                        doc.customer_address = customer_address
-                        fixes_applied.append(f"Added customer_address: {customer_address}")
-                    else:
-                        warnings.append("No default address found for customer")
+                # Determine party - Quotation can be for Customer, Lead, or Prospect
+                party_name = doc.party_name
+                party_type = doc.quotation_to  # 'Customer', 'Lead', 'Prospect'
                 
-                # Fix missing shipping address
-                if not doc.shipping_address_name and doc.customer:
-                    shipping_address = self._get_customer_shipping_address(doc.customer)
-                    if shipping_address:
-                        doc.shipping_address_name = shipping_address
-                        fixes_applied.append(f"Added shipping_address_name: {shipping_address}")
-                    else:
-                        warnings.append("No shipping address found for customer")
+                # If party_name is not set, try to get it from customer/lead fields
+                if not party_name:
+                    party_name = doc.customer or doc.lead or doc.prospect
+                    party_type = 'Customer' if doc.customer else ('Lead' if doc.lead else 'Prospect')
                 
-                # Fix missing shipping address (from address)
-                if not doc.shipping_address and doc.customer:
-                    # Try to get address from customer_address
-                    if doc.customer_address:
+                if party_name:
+                    # Fix missing customer address
+                    if not doc.customer_address:
+                        # For Lead/Prospect, we need different approach
+                        if party_type == "Customer":
+                            customer_address = self._get_customer_default_address(party_name)
+                            if customer_address:
+                                doc.customer_address = customer_address
+                                fixes_applied.append(f"Added customer_address: {customer_address}")
+                            else:
+                                warnings.append("No default address found for customer")
+                        else:
+                            # For Lead/Prospect, get address from the lead/prospect itself
+                            address = self._get_lead_address(party_name, party_type)
+                            if address:
+                                doc.customer_address = address
+                                fixes_applied.append(f"Added customer_address from {party_type}: {address}")
+                            else:
+                                warnings.append(f"No address found for {party_type}")
+                    
+                    # Fix missing shipping address
+                    if not doc.shipping_address_name:
+                        if party_type == "Customer":
+                            shipping_address = self._get_customer_shipping_address(party_name)
+                            if shipping_address:
+                                doc.shipping_address_name = shipping_address
+                                fixes_applied.append(f"Added shipping_address_name: {shipping_address}")
+                            else:
+                                warnings.append("No shipping address found for customer")
+                        else:
+                            # For Lead/Prospect, use the same address
+                            if doc.customer_address:
+                                doc.shipping_address_name = doc.customer_address
+                                fixes_applied.append(f"Added shipping_address_name from customer_address")
+                    
+                    # Fix missing shipping address (from address)
+                    if not doc.shipping_address and doc.customer_address:
                         doc.shipping_address = doc.customer_address
                         fixes_applied.append(f"Added shipping_address from customer_address")
                 
@@ -671,6 +695,21 @@ class TaskValidator:
         )
         if not address:
             address = self._get_customer_default_address(customer)
+        return address
+
+    def _get_lead_address(self, lead_name: str, party_type: str = "Lead") -> str:
+        """Get address for Lead or Prospect"""
+        # For Lead, addresses are linked directly
+        doctype = "Lead" if party_type == "Lead" else "Prospect"
+        address = frappe.db.get_value(
+            "Dynamic Link",
+            {
+                "link_doctype": doctype, 
+                "link_name": lead_name, 
+                "parenttype": "Address"
+            },
+            "parent"
+        )
         return address
 
     def _derive_cost_center(self, item_code: str, company: str = None) -> str:
