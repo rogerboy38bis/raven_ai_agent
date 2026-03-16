@@ -583,15 +583,8 @@ class TaskValidator:
                         doc.shipping_address = doc.customer_address
                         fixes_applied.append(f"Added shipping_address from customer_address")
                 
-                # Fix missing cost centers on items (if field exists)
-                for item in doc.items:
-                    if hasattr(item, 'cost_center') and not item.cost_center and item.item_code:
-                        cost_center = self._derive_cost_center(item.item_code, doc.company)
-                        if cost_center:
-                            item.cost_center = cost_center
-                            fixes_applied.append(f"Added cost_center to item {item.idx}: {cost_center}")
-                        else:
-                            warnings.append(f"No cost center found for item {item.item_code}")
+                # Skip cost center fix - field doesn't exist on QuotationItem in this system
+                # Cost centers are handled at company level, not item level
                 
                 # Save if we made changes
                 if fixes_applied:
@@ -636,13 +629,7 @@ class TaskValidator:
                         doc.shipping_address_name = shipping_address
                         fixes_applied.append(f"Added shipping_address_name: {shipping_address}")
                 
-                # Fix missing cost centers on items (if field exists)
-                for item in doc.items:
-                    if hasattr(item, 'cost_center') and not item.cost_center and item.item_code:
-                        cost_center = self._derive_cost_center(item.item_code, doc.company)
-                        if cost_center:
-                            item.cost_center = cost_center
-                            fixes_applied.append(f"Added cost_center to item {item.idx}: {cost_center}")
+                # Skip cost center fix - field may not exist on Sales Order Item
                 
                 # Save if we made changes
                 if fixes_applied:
