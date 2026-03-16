@@ -631,9 +631,13 @@ def handle_raven_message(doc, method):
                     validator_result = validator.handle(query, {"channel_id": doc.channel_id} if doc else None)
                     frappe.logger().info(f"[AI Agent] TaskValidator result: {validator_result}")
                     if validator_result:
-                        # Handle both "response" and "message" keys from task_validator
-                        response_text = validator_result.get("response") or validator_result.get("message") or "Validation complete"
-                        result = {"success": True, "response": response_text}
+                        # Handle response, message, and error keys from task_validator
+                        if validator_result.get("error"):
+                            # Return error message properly
+                            result = {"success": False, "response": f"Error: {validator_result.get('error')}"}
+                        else:
+                            response_text = validator_result.get("response") or validator_result.get("message") or "Validation complete"
+                            result = {"success": True, "response": response_text}
                     else:
                         result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
                 except Exception as e:

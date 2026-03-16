@@ -48,17 +48,18 @@ def _detect_ai_intent(query: str) -> str:
         return "task_validator"
     if re.search(r'^fix\s+SAL-QTN-', query, re.IGNORECASE):
         return "task_validator"
+    if re.search(r'^fix\s+SO-', query, re.IGNORECASE):
+        return "task_validator"
     if re.search(r'^diagnose\s+SAL-QTN-', query, re.IGNORECASE):
+        return "task_validator"
+    if re.search(r'^diagnose\s+SO-', query, re.IGNORECASE):
         return "task_validator"
 
     # === PRIORITY: Data Quality Scanner / Diagnosis commands ===
     # These commands should ALWAYS go to the skills system, NOT sales_order_follow_up
     diagnosis_commands = [
-        r'^fix\s+SO-',           # @ai fix SO-00752
         r'^scan\s+SO-',          # @ai scan SO-00752
         r'^scan\s+SAL-QTN-',     # @ai scan SAL-QTN-2024-00752
-        r'^diagnose\s+SO-',      # @ai diagnose SO-00752
-        r'^diagnose\s+SAL-QTN-', # @ai diagnose SAL-QTN-2024-00752
         r'^validate\s+SO-',       # @ai validate SO-00752
         r'^check\s+data\s+SO-',  # @ai check data SO-00752
         r'pipeline\s+SO-',       # @ai pipeline SO-00752
@@ -74,8 +75,6 @@ def _detect_ai_intent(query: str) -> str:
         r'pipeline\s+quotation',   # @ai pipeline quotation QUOT-XXX
         r'pipeline\s+SAL-QTN-',     # @ai pipeline SAL-QTN-2024-00752 (direct)
         r'validate\s+quotation',   # @ai validate quotation QUOT-XXX
-        r'^fix\s+QUOT-',          # @ai fix QUOT-XXX
-        r'^fix\s+SAL-QTN-',       # @ai fix SAL-QTN-XXX
         r'QUOT-\d+-\d+',          # Matches QUOT-2026-00001
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in diagnosis_commands):

@@ -683,19 +683,23 @@ class TaskValidator:
 
     def _get_customer_shipping_address(self, customer: str) -> str:
         """Get customer's shipping address (or fallback to default)"""
-        address = frappe.db.get_value(
-            "Dynamic Link",
-            {
-                "link_doctype": "Customer", 
-                "link_name": customer, 
-                "parenttype": "Address",
-                "is_shipping_address": 1
-            },
-            "parent"
-        )
-        if not address:
-            address = self._get_customer_default_address(customer)
-        return address
+        # is_shipping_address is in the Address table, not Dynamic Link
+        # We need to join to check it
+        address = frappe.db.sql("""
+            SELECT a.name FROM `tabAddress` a
+            INNER JOIN `tabDynamic Link` dl ON dl.parent = a.name
+            WHERE dl.link_doctype = 'Customer' 
+            AND dl.link_name = %(customer)s
+            AND a.is_shipping_address = 1
+            AND a.disabled = 0
+            LIMIT 1
+        """, {"customer": customer})
+        
+        if address and address[0]:
+            return address[0][0]
+        
+        # Fallback to default address
+        return self._get_customer_default_address(customer)
 
     def _get_lead_address(self, lead_name: str, party_type: str = "Lead") -> str:
         """Get address for Lead or Prospect"""
