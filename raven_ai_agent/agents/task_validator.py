@@ -583,9 +583,9 @@ class TaskValidator:
                         doc.shipping_address = doc.customer_address
                         fixes_applied.append(f"Added shipping_address from customer_address")
                 
-                # Fix missing cost centers on items
+                # Fix missing cost centers on items (if field exists)
                 for item in doc.items:
-                    if not item.cost_center and item.item_code:
+                    if hasattr(item, 'cost_center') and not item.cost_center and item.item_code:
                         cost_center = self._derive_cost_center(item.item_code, doc.company)
                         if cost_center:
                             item.cost_center = cost_center
@@ -636,9 +636,9 @@ class TaskValidator:
                         doc.shipping_address_name = shipping_address
                         fixes_applied.append(f"Added shipping_address_name: {shipping_address}")
                 
-                # Fix missing cost centers on items
+                # Fix missing cost centers on items (if field exists)
                 for item in doc.items:
-                    if not item.cost_center and item.item_code:
+                    if hasattr(item, 'cost_center') and not item.cost_center and item.item_code:
                         cost_center = self._derive_cost_center(item.item_code, doc.company)
                         if cost_center:
                             item.cost_center = cost_center
