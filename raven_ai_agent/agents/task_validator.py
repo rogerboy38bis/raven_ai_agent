@@ -534,6 +534,13 @@ class TaskValidator:
             if doc_type == "Quotation":
                 doc = frappe.get_doc("Quotation", doc_name)
                 
+                # Check if document is already submitted - can't modify if so
+                if doc.docstatus == 1:
+                    return {
+                        "success": False,
+                        "error": f"Cannot fix {doc_name} - document is already submitted. Only Draft documents can be modified."
+                    }
+                
                 # Determine party - Quotation can be for Customer, Lead, or Prospect
                 party_name = doc.party_name
                 party_type = doc.quotation_to  # 'Customer', 'Lead', 'Prospect'
@@ -588,8 +595,15 @@ class TaskValidator:
                 
                 # Save if we made changes
                 if fixes_applied:
-                    doc.save()
-                    frappe.db.commit()
+                    try:
+                        doc.save()
+                        frappe.db.commit()
+                    except Exception as save_err:
+                        frappe.db.rollback()
+                        return {
+                            "success": False,
+                            "error": f"Error saving document: {str(save_err)}. The document may be locked by another process."
+                        }
                 
                 # Build response
                 doc_link = f"https://{site_name}/app/quotation/{doc_name}"
@@ -615,6 +629,13 @@ class TaskValidator:
             elif doc_type == "Sales Order":
                 doc = frappe.get_doc("Sales Order", doc_name)
                 
+                # Check if document is already submitted - can't modify if so
+                if doc.docstatus == 1:
+                    return {
+                        "success": False,
+                        "error": f"Cannot fix {doc_name} - document is already submitted. Only Draft documents can be modified."
+                    }
+                
                 # Fix missing customer address
                 if not doc.customer_address and doc.customer:
                     customer_address = self._get_customer_default_address(doc.customer)
@@ -633,8 +654,15 @@ class TaskValidator:
                 
                 # Save if we made changes
                 if fixes_applied:
-                    doc.save()
-                    frappe.db.commit()
+                    try:
+                        doc.save()
+                        frappe.db.commit()
+                    except Exception as save_err:
+                        frappe.db.rollback()
+                        return {
+                            "success": False,
+                            "error": f"Error saving document: {str(save_err)}. The document may be locked by another process."
+                        }
                 
                 # Build response
                 doc_link = f"https://{site_name}/app/sales-order/{doc_name}"
