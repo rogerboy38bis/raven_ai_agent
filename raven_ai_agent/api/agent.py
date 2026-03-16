@@ -626,14 +626,19 @@ def handle_raven_message(doc, method):
                 result = {"success": True, "response": response}
             elif bot_name == "task_validator":
                 from raven_ai_agent.agents.task_validator import TaskValidator
-                validator = TaskValidator()
-                validator_result = validator.handle(query, {"channel_id": doc.channel_id} if doc else None)
-                if validator_result:
-                    # Handle both "response" and "message" keys from task_validator
-                    response_text = validator_result.get("response") or validator_result.get("message") or "Validation complete"
-                    result = {"success": True, "response": response_text}
-                else:
-                    result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
+                try:
+                    validator = TaskValidator()
+                    validator_result = validator.handle(query, {"channel_id": doc.channel_id} if doc else None)
+                    frappe.logger().info(f"[AI Agent] TaskValidator result: {validator_result}")
+                    if validator_result:
+                        # Handle both "response" and "message" keys from task_validator
+                        response_text = validator_result.get("response") or validator_result.get("message") or "Validation complete"
+                        result = {"success": True, "response": response_text}
+                    else:
+                        result = {"success": False, "response": "Could not process validator command. Try: `@ai diagnose SAL-QTN-XXXX`"}
+                except Exception as e:
+                    frappe.logger().error(f"[AI Agent] TaskValidator error: {e}")
+                    result = {"success": False, "response": f"Error: {str(e)}"}
             else:
                 # Try SkillRouter for other specialized skills
                 try:
