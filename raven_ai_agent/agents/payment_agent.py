@@ -91,6 +91,17 @@ class PaymentAgent:
                     "message": f"✅ Sales Invoice {self.make_link('Sales Invoice', si_name)} is already fully paid."
                 }
 
+            # Check if Payment Entry already exists for this invoice
+            existing_pe = frappe.db.get_value("Payment Entry", 
+                {"references": ["like", f"%{si_name}%"], "docstatus": ["!=", 2]},
+                "name")
+            if existing_pe:
+                return {
+                    "success": False,
+                    "error": f"A Payment Entry already exists for {si_name}: {self.make_link('Payment Entry', existing_pe)}\n\n"
+                              f"Use: `@ai payment submit {existing_pe}` to submit it, or check outstanding with `@ai payment status {existing_pe}`"
+                }
+
             payment_amount = flt(amount) if amount else flt(si.outstanding_amount)
 
             if payment_amount > flt(si.outstanding_amount):
@@ -236,6 +247,9 @@ class PaymentAgent:
             pe.insert(ignore_permissions=True)
             frappe.db.commit()
 
+            # Get company currency for the payment (outstanding_amount is in company currency)
+            company_currency = frappe.db.get_value("Company", si.company, "default_currency") or "MXN"
+            
             # Build response message
             fx_msg = ""
             if fx_info:
@@ -261,8 +275,8 @@ class PaymentAgent:
                     f"✅ Payment Entry created: {self.make_link('Payment Entry', pe.name)}\n\n"
                     f"  Sales Invoice: {self.make_link('Sales Invoice', si_name)}\n"
                     f"  Customer: {si.customer}\n"
-                    f"  Amount: {payment_amount} {si.currency}\n"
-                    f"  Outstanding After: {flt(si.outstanding_amount) - payment_amount}\n"
+                    f"  Amount: {payment_amount} {company_currency}\n"
+                    f"  Outstanding After: {flt(si.outstanding_amount) - payment_amount} {company_currency}\n"
                     f"  Status: Draft"
                     f"{fx_msg}\n\n"
                     f"💡 Review and submit: `@ai payment submit {pe.name}`"

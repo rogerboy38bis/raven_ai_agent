@@ -1268,11 +1268,13 @@ class TaskValidator:
         sinv_link = f"https://{site_name}/app/sales-invoice/{sinv_name}"
         
         # Check if already fully paid
+        # Get company currency - outstanding_amount is in company currency, not invoice currency
+        company_currency = frappe.db.get_value("Company", sinv.company, "default_currency") or "MXN"
         if sinv.outstanding_amount <= 0:
             return {
                 "success": False,
                 "error": f"Invoice **{sinv_name}** is already fully paid.\n\n"
-                        f"Outstanding: {sinv.outstanding_amount:,.2f} {sinv.currency}"
+                        f"Outstanding: {sinv.outstanding_amount:,.2f} {company_currency}"
             }
         
         # Check if invoice is submitted
@@ -1281,6 +1283,18 @@ class TaskValidator:
                 "success": False,
                 "error": f"Invoice **{sinv_name}** must be Submitted to record payment.\n"
                         f"Current status: {['Draft', 'Submitted', 'Cancelled'][sinv.docstatus]}"
+            }
+        
+        # Check if Payment Entry already exists for this invoice
+        existing_pe = frappe.db.get_value("Payment Entry", 
+            {"references": ["like", f"%{sinv_name}%"], "docstatus": ["!=", 2]},
+            "name")
+        if existing_pe:
+            site_name = frappe.local.site
+            return {
+                "success": False,
+                "error": f"A Payment Entry already exists for {sinv_name}: [{existing_pe}](https://{site_name}/app/payment-entry/{existing_pe})\n\n"
+                          f"Use: `@ai payment submit {existing_pe}` to submit it, or check outstanding with `@ai payment status {existing_pe}`"
             }
         
         try:
