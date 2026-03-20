@@ -377,9 +377,10 @@ class TaskValidator:
         if qtn.docstatus == 2:
             issues.append("Quotation is CANCELLED — cannot proceed in pipeline")
         
-        # Check valid_till
+        # Check valid_till - use frappe.utils for consistent datetime handling
         if qtn.valid_till:
-            if qtn.valid_till < datetime.now().date():
+            today = frappe.utils.today()
+            if qtn.valid_till < today:
                 warnings.append(f"Quotation expired on {qtn.valid_till}")
 
         # Check items for template vs variant
@@ -1184,8 +1185,8 @@ class TaskValidator:
                     f"but grand total is {doc.currency} {doc.grand_total:,.2f}"
                 )
             
-            # Check for past-due dates
-            today = datetime.now().date()
+            # Check for past-due dates - use frappe.utils for consistent datetime handling
+            today = frappe.utils.today()
             for row in schedule:
                 if row.due_date and row.due_date < today:
                     issues.append(f"Payment due date {row.due_date} is in the past")
