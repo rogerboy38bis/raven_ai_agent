@@ -495,7 +495,12 @@ class TaskValidator:
             if is_status_check:
                 # Just show status - don't create anything
                 customers = get_customers_without_party_account(company)
-                total_customers = frappe.db.count("Customer", {"disabled": 0})
+                # Use frappe.get_list to safely count customers
+                try:
+                    active_customers = frappe.get_list("Customer", filters={"disabled": 0}, pluck="name")
+                    total_customers = len(active_customers)
+                except:
+                    total_customers = frappe.db.count("Customer")
                 configured = total_customers - len(customers)
                 percentage = (configured / total_customers * 100) if total_customers > 0 else 0
                 
@@ -731,13 +736,13 @@ class TaskValidator:
         """Get customer's shipping address (or fallback to default)"""
         # is_shipping_address is in the Address table, not Dynamic Link
         # We need to join to check it
+        # Note: Address table may not have 'disabled' column in all versions
         address = frappe.db.sql("""
             SELECT a.name FROM `tabAddress` a
             INNER JOIN `tabDynamic Link` dl ON dl.parent = a.name
             WHERE dl.link_doctype = 'Customer' 
             AND dl.link_name = %(customer)s
             AND a.is_shipping_address = 1
-            AND a.disabled = 0
             LIMIT 1
         """, {"customer": customer})
         
