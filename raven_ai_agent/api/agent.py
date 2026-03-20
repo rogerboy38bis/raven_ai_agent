@@ -347,11 +347,21 @@ def process_message(message: str, conversation_history: str = None) -> Dict:
 
 
 @frappe.whitelist()
-def handle_raven_message(doc, method):
-    """Hook for Raven message integration - handles @ai and @bot_name mentions in any channel"""
+def handle_raven_message(doc=None, method=None):
+    """Hook for Raven message integration - handles @ai and @bot_name mentions in any channel
+    
+    Args:
+        doc: Raven Message document or document name (for after_insert hook or direct call)
+        method: The method that triggered the hook (e.g., "after_insert")
+    """
     from bs4 import BeautifulSoup
 
     try:
+        # Handle direct call with message name string instead of doc object
+        if isinstance(doc, str):
+            doc_name = doc
+            doc = frappe.get_doc("Raven Message", doc_name)
+        
         # Skip bot messages to avoid infinite loops
         if doc.is_bot_message:
             return
