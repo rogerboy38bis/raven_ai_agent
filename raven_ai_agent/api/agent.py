@@ -375,7 +375,7 @@ def handle_raven_message(doc, method):
             query = plain_text[3:].strip()
             q_lower = query.lower()
             
-            scanner_keywords = ["scan", "validate", "pre-flight", "preflight", "diagnose", "repair", "solve"]
+            scanner_keywords = ["scan", "validate", "pre-flight", "preflight", "repair", "solve"]
             if any(kw in q_lower for kw in scanner_keywords):
                 try:
                     from raven_ai_agent.skills.data_quality_scanner.skill import DataQualityScannerSkill
@@ -443,7 +443,7 @@ def handle_raven_message(doc, method):
                 "lote crear", "lote ejecutar", "lote status"
             ]
             validator_keywords = [
-                "diagnose", "diagnosis", "validate ", "audit pipeline",
+                "diagnosis", "diagnose", "validate ", "audit pipeline",
                 "check payment", "check pago", "pipeline health",
                 "verify so", "verify sales order", "sync so", "fix so",
                 "sync sales order", "fix sales order", "!sync", "!fix",
@@ -476,8 +476,11 @@ def handle_raven_message(doc, method):
             if re.search(r'ACC-SINV-|ACC-PAY-|sinv-|acc-sinv|acc-pay', q_lower, re.IGNORECASE):
                 bot_name = "payment_bot"
             
+            # === PRIORITY: Validator keywords BEFORE SO pattern ===
+            # "diagnose SAL-QTN-00752" contains "00752" matching SO-\d+, so check validator first
+            if any(kw in q_lower for kw in validator_keywords):
+                bot_name = "task_validator"
             # === PRIORITY: SO-linked commands always go to sales agent ===
-            # This must come FIRST to prevent payment_bot from intercepting SI/DN creation
             elif re.search(r'SO-\d+', q_lower, re.IGNORECASE) or re.search(r'from\s+SO', q_lower, re.IGNORECASE):
                 # Exclude actual payment commands
                 if not re.search(r'(?:reconcile|submit\s+ACC-PAY|ACC-PAY-\d+)', q_lower, re.IGNORECASE):
