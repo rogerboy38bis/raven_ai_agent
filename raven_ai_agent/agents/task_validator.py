@@ -459,10 +459,13 @@ class TaskValidator:
                 for si_row in si_items:
                     si = frappe.get_doc("Sales Invoice", si_row.parent)
                     si_link = f"https://{site_name}/app/sales-invoice/{si.name}"
+                    # Get the currency - outstanding_amount is in company currency (MXN), 
+                    # but we also want to show the invoice currency for clarity
                     pipeline.setdefault("sales_invoices", []).append({
                         "name": si.name,
                         "status": status_map.get(si.docstatus, "Unknown"),
                         "total": si.grand_total,
+                        "currency": si.currency,  # Invoice currency (e.g., USD)
                         "outstanding": si.outstanding_amount if hasattr(si, 'outstanding_amount') else None,
                     })
 
@@ -1431,7 +1434,9 @@ The invoice **{sinv_name}** is now marked as **Paid**.
         if sis:
             for si in sis:
                 si_icon = "✅" if si.get("status") == "Submitted" else "📝"
-                outstanding = f" — Outstanding: {si.get('outstanding', 'N/A')}" if si.get("outstanding") else ""
+                # Outstanding amount is in company currency (MXN), show with currency label
+                currency = si.get("currency", "MXN")
+                outstanding = f" — Outstanding: {si.get('outstanding', 'N/A')} {currency}" if si.get("outstanding") else ""
                 msg += f"            └─ {si_icon} SINV: {si.get('name', 'N/A')} ({si.get('status', 'N/A')}){outstanding}\n"
         elif dns:
             msg += "            └─ ⏳ No Sales Invoice yet\n"
@@ -1519,7 +1524,8 @@ The invoice **{sinv_name}** is now marked as **Paid**.
                 outstanding = si.get("outstanding")
                 if outstanding and float(outstanding) > 0:
                     si_name = si.get("name", "")
-                    msg += f"\n💰 Invoice has outstanding amount — record payment:\n"
+                    currency = si.get("currency", "MXN")
+                    msg += f"\n💰 Invoice has outstanding amount ({float(outstanding):,.2f} {currency}) — record payment:\n"
                     msg += f"👉 Run: `@ai create payment for {si_name}`\n"
 
         return {"success": True, "message": msg}

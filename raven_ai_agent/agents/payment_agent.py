@@ -265,7 +265,7 @@ class PaymentAgent:
                     f"  Outstanding After: {flt(si.outstanding_amount) - payment_amount}\n"
                     f"  Status: Draft"
                     f"{fx_msg}\n\n"
-                    f"💡 Review and submit: `@payment submit {pe.name}`"
+                    f"💡 Review and submit: `@ai payment submit {pe.name}`"
                 )
             }
 
@@ -477,13 +477,13 @@ class PaymentAgent:
         """Process incoming Raven command and return formatted response.
         
         Commands:
-            @payment create [SI-NAME]
-            @payment create [SI-NAME] amount [AMOUNT]
-            @payment submit [PE-NAME]
-            @payment reconcile [PE-NAME]
-            @payment outstanding [CUSTOMER]
-            @payment status [PE-NAME]
-            @payment help
+            @ai payment create [SI-NAME]
+            @ai payment create [SI-NAME] amount [AMOUNT]
+            @ai payment submit [PE-NAME]
+            @ai payment reconcile [PE-NAME]
+            @ai payment outstanding [CUSTOMER]
+            @ai payment status [PE-NAME]
+            @ai payment help
         """
         message_lower = message.lower().strip()
 
@@ -551,19 +551,19 @@ class PaymentAgent:
         return (
             "💳 **Payment Agent — Commands**\n\n"
             "**Payment Creation**\n"
-            "`@payment create [SI-NAME]` — Create Payment Entry from Sales Invoice\n"
-            "`@payment create [SI-NAME] amount [AMOUNT]` — Partial payment\n\n"
+            "`@ai payment create [SI-NAME]` — Create Payment Entry from Sales Invoice\n"
+            "`@ai payment create [SI-NAME] amount [AMOUNT]` — Partial payment\n\n"
             "**Payment Actions**\n"
-            "`@payment submit [PE-NAME]` — Submit Payment Entry\n"
-            "`@payment reconcile [PE-NAME]` — Check reconciliation status\n\n"
+            "`@ai payment submit [PE-NAME]` — Submit Payment Entry\n"
+            "`@ai payment reconcile [PE-NAME]` — Check reconciliation status\n\n"
             "**Status & Tracking**\n"
-            "`@payment outstanding` — List all unpaid invoices\n"
-            "`@payment outstanding customer [NAME]` — Unpaid invoices for customer\n"
-            "`@payment status [PE-NAME]` — Payment Entry details\n\n"
+            "`@ai payment outstanding` — List all unpaid invoices\n"
+            "`@ai payment outstanding customer [NAME]` — Unpaid invoices for customer\n"
+            "`@ai payment status [PE-NAME]` — Payment Entry details\n\n"
             "**Example (Full Cycle)**\n"
             "```\n"
-            "@payment create ACC-SINV-2026-00001\n"
-            "@payment submit ACC-PAY-2026-00001\n"
-            "@payment reconcile ACC-PAY-2026-00001\n"
+            "@ai payment create ACC-SINV-2026-00001\n"
+            "@ai payment submit ACC-PAY-2026-00001\n"
+            "@ai payment reconcile ACC-PAY-2026-00001\n"
             "```"
         )
