@@ -1287,15 +1287,21 @@ class TaskValidator:
             }
         
         # Check if Payment Entry already exists for this invoice
-        existing_pe = frappe.db.get_value("Payment Entry", 
-            {"references": ["like", f"%{sinv_name}%"], "docstatus": ["!=", 2]},
-            "name")
-        if existing_pe:
+        # Query the references child table for this invoice
+        existing_pe = frappe.db.sql("""
+            SELECT parent FROM `tabPayment Entry Reference`
+            WHERE reference_name = %s AND parenttype = 'Payment Entry'
+            AND parent IN (SELECT name FROM `tabPayment Entry` WHERE docstatus IN (0, 1))
+            LIMIT 1
+        """, (sinv_name,))
+        
+        if existing_pe and existing_pe[0]:
+            existing_pe_name = existing_pe[0][0]
             site_name = frappe.local.site
             return {
                 "success": False,
-                "error": f"A Payment Entry already exists for {sinv_name}: [{existing_pe}](https://{site_name}/app/payment-entry/{existing_pe})\n\n"
-                          f"Use: `@ai payment submit {existing_pe}` to submit it, or check outstanding with `@ai payment status {existing_pe}`"
+                "error": f"A Payment Entry already exists for {sinv_name}: [{existing_pe_name}](https://{site_name}/app/payment-entry/{existing_pe_name})\n\n"
+                          f"Use: `@ai payment submit {existing_pe_name}` to submit it, or check outstanding with `@ai payment status {existing_pe_name}`"
             }
         
         try:
