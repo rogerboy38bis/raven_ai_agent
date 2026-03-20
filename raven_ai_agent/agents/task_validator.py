@@ -1512,6 +1512,15 @@ The invoice **{sinv_name}** is now marked as **Paid**.
                         msg += f"\n🚚 WO completed — create Delivery Note: `@ai !delivery {sos[0].get('so_name', '') if sos else ''}`\n"
                     elif wo.get("status") == "Not Started":
                         msg += f"\n⚙️ WO not started — transfer materials: `@ai transfer materials {wo.get('name', '')}`\n"
+            
+            # Payment suggestions - if there's an outstanding Sales Invoice
+            sis = pipeline.get("sales_invoices", [])
+            for si in sis:
+                outstanding = si.get("outstanding")
+                if outstanding and float(outstanding) > 0:
+                    si_name = si.get("name", "")
+                    msg += f"\n💰 Invoice has outstanding amount — record payment:\n"
+                    msg += f"👉 Run: `@ai create payment for {si_name}`\n"
 
         return {"success": True, "message": msg}
 

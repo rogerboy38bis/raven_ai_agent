@@ -556,7 +556,17 @@ def handle_raven_message(doc, method):
                 query = "help"
             bot_name = "manufacturing_bot"
 
-        # Check for @payment bot
+        # Check for @payment bot (also handles @ai payment)
+        # Add support for @ai payment prefix - strip both prefixes
+        if plain_text.lower().startswith("@ai payment"):
+            # Handle @ai payment commands
+            query = plain_text
+            for tag in ["@ai payment", "@AI PAYMENT", "@Ai payment"]:
+                query = query.replace(tag, "")
+            query = query.strip()
+            if not query:
+                query = "help"
+            bot_name = "payment_bot"
         elif plain_text.lower().startswith("@payment"):
             query = plain_text
             for tag in ["@payment", "@Payment"]:

@@ -237,7 +237,13 @@ def handle_raven_message(doc, method):
                 query = "help"
             bot_name = "manufacturing_bot"
         
-        # Check for @payment bot
+        # Check for @payment bot (also handles @ai payment)
+        if re.match(r'^@ai\s+payment', plain_text, re.IGNORECASE):
+            # Handle @ai payment commands - strip both @ai and payment
+            query = re.sub(r'^@ai\s+payment\s*', '', plain_text, flags=re.IGNORECASE).strip()
+            if not query:
+                query = "help"
+            bot_name = "payment_bot"
         elif "payment" in plain_text.lower() and plain_text.lower().startswith("@"):
             query = re.sub(r'@payment\s*', '', plain_text, flags=re.IGNORECASE).strip()
             if not query:
