@@ -295,6 +295,23 @@ class TaskValidator:
                     "error": "**Usage:** `@ai check payments SAL-QTN-XXXX` or `@ai check payments SO-XXXXX`"
                 }
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # CREATE PAYMENT: Create Payment Entry from Sales Invoice
+        # @ai create payment for ACC-SINV-XXXXXX
+        # @ai register payment ACC-SINV-XXXXXX
+        # ═══════════════════════════════════════════════════════════════════════
+        if ("create payment" in query_lower or "register payment" in query_lower or 
+            "record payment" in query_lower or "payment for" in query_lower):
+            sinv_match = re.search(r'(ACC-SINV-\d+)', query, re.IGNORECASE)
+            
+            if sinv_match:
+                return self._create_payment_entry(sinv_match.group(1).upper())
+            else:
+                return {
+                    "success": False,
+                    "error": "**Usage:** `@ai create payment for ACC-SINV-2026-00009`"
+                }
+
         # Fallback to scanner for other commands
         result = self.scanner.handle(query)
         if isinstance(result, dict):
@@ -1222,6 +1239,124 @@ class TaskValidator:
             msg += "✅ **All payment checks passed.**\n"
 
         return {"success": True, "message": msg}
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # CREATE PAYMENT: Create Payment Entry from Sales Invoice
+    # ═══════════════════════════════════════════════════════════════════════
+    def _create_payment_entry(self, sinv_name: str) -> Dict:
+        """
+        Create a Payment Entry to record payment for a Sales Invoice.
+        Command: @ai create payment for ACC-SINV-XXXXXX
+        """
+        site_name = frappe.local.site
+        
+        try:
+            # Get the Sales Invoice
+            sinv = frappe.get_doc("Sales Invoice", sinv_name)
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Sales Invoice **{sinv_name}** not found."}
+        
+        sinv_link = f"https://{site_name}/app/sales-invoice/{sinv_name}"
+        
+        # Check if already fully paid
+        if sinv.outstanding_amount <= 0:
+            return {
+                "success": False,
+                "error": f"Invoice **{sinv_name}** is already fully paid.\n\n"
+                        f"Outstanding: {sinv.outstanding_amount:,.2f} {sinv.currency}"
+            }
+        
+        # Check if invoice is submitted
+        if sinv.docstatus != 1:
+            return {
+                "success": False,
+                "error": f"Invoice **{sinv_name}** must be Submitted to record payment.\n"
+                        f"Current status: {['Draft', 'Submitted', 'Cancelled'][sinv.docstatus]}"
+            }
+        
+        try:
+            # Get customer info
+            customer = sinv.customer
+            company = sinv.company
+            currency = sinv.currency
+            amount = sinv.outstanding_amount  # Pay full outstanding amount
+            # Get default receivable account and payment account
+            # Get receivable account from the invoice's customer
+            receivables = frappe.db.get_value("Account", 
+                {"company": company, "account_type": "Receivable", "is_group": 0}, "name")
+            
+            if not receivables:
+                return {
+                    "success": False,
+                    "error": f"No Receivable account found for company **{company}**"
+                }
+            
+            payment_account = frappe.db.get_value("Account", 
+                {"company": company, "account_type": "Cash", "is_group": 0}, "name")
+            
+            if not payment_account:
+                # Try bank account
+                payment_account = frappe.db.get_value("Account", 
+                    {"company": company, "account_type": "Bank", "is_group": 0}, "name")
+            
+            if not payment_account:
+                return {
+                    "success": False,
+                    "error": f"No Cash or Bank account found for company **{company}**"
+                }
+            
+            # Create Payment Entry
+            payment = frappe.get_doc({
+                "doctype": "Payment Entry",
+                "payment_type": "Receive",
+                "party_type": "Customer",
+                "party": customer,
+                "company": company,
+                "paid_amount": amount,
+                "received_amount": amount,
+                "source_exchange_rate": 1,
+                "target_exchange_rate": 1,
+                "currency": currency,
+                "paid_from": receivables,  # Receivable account
+                "paid_to": payment_account,  # Cash/Bank account
+                "paid_from_account_currency": currency,
+                "paid_to_account_currency": currency,
+                "references": [{
+                    "reference_doctype": "Sales Invoice",
+                    "reference_name": sinv_name,
+                    "total_amount": sinv.grand_total,
+                    "outstanding_amount": sinv.outstanding_amount,
+                    "allocated_amount": amount
+                }],
+                "posting_date": frappe.utils.today()
+            })
+            
+            payment.insert()
+            payment.submit()
+            frappe.db.commit()
+            
+            payment_link = f"https://{site_name}/app/payment-entry/{payment.name}"
+            
+            msg = f"""## ✅ Payment Recorded Successfully
+
+### Payment Entry: [{payment.name}]({payment_link})
+
+| Field | Value |
+|-------|-------|
+| Customer | {customer} |
+| Invoice | [{sinv_name}]({sinv_link}) |
+| Amount | {currency} {amount:,.2f} |
+| Status | Submitted |
+
+The invoice **{sinv_name}** is now marked as **Paid**.
+"""
+            return {"success": True, "message": msg}
+            
+        except frappe.DoesNotExistError as e:
+            return {"success": False, "error": f"Account not found: {str(e)}"}
+        except Exception as e:
+            frappe.db.rollback()
+            return {"success": False, "error": f"Error creating payment: {str(e)}"}
 
     # ═══════════════════════════════════════════════════════════════════════
     # HELPER: Build diagnosis report
