@@ -459,13 +459,14 @@ class TaskValidator:
                 for si_row in si_items:
                     si = frappe.get_doc("Sales Invoice", si_row.parent)
                     si_link = f"https://{site_name}/app/sales-invoice/{si.name}"
-                    # Get the currency - outstanding_amount is in company currency (MXN), 
-                    # but we also want to show the invoice currency for clarity
+                    # Get company currency - outstanding_amount is in company currency (MXN), NOT invoice currency
+                    company_currency = frappe.db.get_value("Company", si.company, "default_currency") or "MXN"
                     pipeline.setdefault("sales_invoices", []).append({
                         "name": si.name,
                         "status": status_map.get(si.docstatus, "Unknown"),
                         "total": si.grand_total,
                         "currency": si.currency,  # Invoice currency (e.g., USD)
+                        "company_currency": company_currency,  # Company currency (MXN) - for outstanding
                         "outstanding": si.outstanding_amount if hasattr(si, 'outstanding_amount') else None,
                     })
 
@@ -1448,8 +1449,8 @@ The invoice **{sinv_name}** is now marked as **Paid**.
         if sis:
             for si in sis:
                 si_icon = "✅" if si.get("status") == "Submitted" else "📝"
-                # Outstanding amount is in company currency (MXN), show with currency label
-                currency = si.get("currency", "MXN")
+                # Outstanding amount is in company currency (MXN), use company_currency field
+                currency = si.get("company_currency", "MXN")
                 outstanding = f" — Outstanding: {si.get('outstanding', 'N/A')} {currency}" if si.get("outstanding") else ""
                 msg += f"            └─ {si_icon} SINV: {si.get('name', 'N/A')} ({si.get('status', 'N/A')}){outstanding}\n"
         elif dns:
@@ -1538,7 +1539,7 @@ The invoice **{sinv_name}** is now marked as **Paid**.
                 outstanding = si.get("outstanding")
                 if outstanding and float(outstanding) > 0:
                     si_name = si.get("name", "")
-                    currency = si.get("currency", "MXN")
+                    currency = si.get("company_currency", "MXN")
                     msg += f"\n💰 Invoice has outstanding amount ({float(outstanding):,.2f} {currency}) — record payment:\n"
                     msg += f"👉 Run: `@ai create payment for {si_name}`\n"
 
