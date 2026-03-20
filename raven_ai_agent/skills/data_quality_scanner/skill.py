@@ -734,6 +734,84 @@ Pre-flight validation for ERPNext documents before operations.
         """Store validation pattern"""
         return True
 
+    def _apply_fixes(self, doc_name: str, doc_type: str, scan_result: Dict) -> Dict:
+        """
+        Apply fixes to document based on scan results.
+        Returns dict with 'applied' list and any errors.
+        """
+        applied = []
+        errors = []
+        
+        try:
+            # Get the document
+            doc = frappe.get_doc(doc_type, doc_name)
+            
+            # Check if document can be modified
+            if doc.docstatus == 1:
+                return {
+                    "applied": [],
+                    "error": f"Cannot fix {doc_name} - document is submitted. Only Draft documents can be modified."
+                }
+            
+            issues = scan_result.get("issues", [])
+            fixes_needed = [i for i in issues if i.get("auto_fix")]
+            
+            if not fixes_needed:
+                return {"applied": [], "message": "No auto-fixable issues found"}
+            
+            for issue in fixes_needed:
+                field = issue.get("field")
+                auto_fix = issue.get("auto_fix")
+                fix_value = issue.get("auto_fix_value", "")
+                
+                if not field:
+                    continue
+                
+                try:
+                    # Set the field value
+                    if hasattr(doc, field):
+                        setattr(doc, field, fix_value)
+                        applied.append(f"Set {field} = {fix_value}")
+                    else:
+                        # Try child table field
+                        if field in ["customer_address", "shipping_address_name", "shipping_address"]:
+                            # Handle address fixes at document level
+                            if field == "customer_address" and not doc.customer_address:
+                                doc.customer_address = fix_value
+                                applied.append(f"Added customer_address: {fix_value}")
+                            elif field == "shipping_address_name" and not doc.shipping_address_name:
+                                doc.shipping_address_name = fix_value
+                                applied.append(f"Added shipping_address_name: {fix_value}")
+                            elif field == "shipping_address" and not doc.shipping_address:
+                                doc.shipping_address = fix_value
+                                applied.append(f"Added shipping_address: {fix_value}")
+                        else:
+                            errors.append(f"Field {field} not found on {doc_type}")
+                except Exception as e:
+                    errors.append(f"Error fixing {field}: {str(e)}")
+            
+            # Save if we made changes
+            if applied:
+                try:
+                    doc.save()
+                    frappe.db.commit()
+                except Exception as save_err:
+                    frappe.db.rollback()
+                    errors.append(f"Save error: {str(save_err)}")
+            
+            return {
+                "applied": applied,
+                "errors": errors,
+                "message": f"Applied {len(applied)} fixes" if applied else "No fixes applied"
+            }
+            
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] _apply_fixes error: {str(e)}")
+            return {
+                "applied": [],
+                "error": str(e)
+            }
+
     def _format_scan_result(self, *args, **kwargs):
         """Format scan result"""
         try:

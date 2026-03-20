@@ -323,6 +323,19 @@ class TaskValidator:
         status_map = {0: "Draft", 1: "Submitted", 2: "Cancelled"}
         qtn_status = status_map.get(qtn.docstatus, "Unknown")
         
+        # Store quotation items data for detailed display
+        items_data = []
+        for idx, item in enumerate(qtn.items, 1):
+            items_data.append({
+                "idx": idx,
+                "item_code": item.item_code,
+                "item_name": item.item_name,
+                "qty": item.qty,
+                "rate": item.rate,
+                "amount": item.amount,
+                "uom": item.uom
+            })
+        
         pipeline["quotation"] = {
             "name": qtn_name,
             "status": qtn_status,
@@ -330,6 +343,7 @@ class TaskValidator:
             "total": qtn.grand_total,
             "currency": qtn.currency,
             "items": len(qtn.items),
+            "items_data": items_data,
         }
 
         # Check quotation completeness
@@ -1223,6 +1237,17 @@ class TaskValidator:
         msg += f"**Customer:** {qtn_data.get('customer', 'N/A')}\n"
         msg += f"**Total:** {qtn_data.get('currency', '')} {qtn_data.get('total', 0):,.2f}\n"
         msg += f"**Items:** {qtn_data.get('items', 0)}\n\n"
+        
+        # Add items table if available
+        items_data = qtn_data.get("items_data", [])
+        if items_data:
+            msg += "### 📦 Item Details\n"
+            msg += "| # | Item Code | Item Name | Qty | UOM | Rate | Amount |\n"
+            msg += "|---|-----------|-----------|-----|-----|------|--------|\n"
+            for item in items_data:
+                item_name_short = (item.get("item_name", "")[:25] + "...") if item.get("item_name") and len(item.get("item_name", "")) > 25 else item.get("item_name", "N/A")
+                msg += f"| {item.get('idx', '')} | {item.get('item_code', 'N/A')} | {item_name_short} | {item.get('qty', 0)} | {item.get('uom', '')} | {item.get('rate', 0):,.2f} | {item.get('amount', 0):,.2f} |\n"
+            msg += "\n"
 
         # Pipeline flow visualization
         msg += "### Pipeline Status\n"
