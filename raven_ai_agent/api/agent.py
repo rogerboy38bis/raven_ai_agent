@@ -687,13 +687,16 @@ def handle_raven_message(doc, method):
                 link_document=link_document
             )
         else:
-            # Fallback: create message directly
+            # Fallback: create message directly - use default bot to avoid "Raven User None not found" error
+            # Try to get a valid bot, fallback to sales_order_bot if not specified
+            default_bot = bot_name if bot_name else "sales_order_bot"
             reply_doc = frappe.get_doc({
                 "doctype": "Raven Message",
                 "channel_id": doc.channel_id,
                 "text": response_text,
                 "message_type": "Text",
-                "is_bot_message": 1
+                "is_bot_message": 1,
+                "bot": default_bot
             })
             reply_doc.insert(ignore_permissions=True)
             frappe.db.commit()
