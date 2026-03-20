@@ -691,6 +691,45 @@ Pre-flight validation for ERPNext documents before operations.
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+
+    def _apply_fixes(self, doc_name, doc_type, scan_result):
+        import frappe
+        applied = []
+        errors = []
+        try:
+            doc = frappe.get_doc(doc_type, doc_name)
+            if doc.docstatus == 1:
+                return {"applied": [], "error": "Cannot fix " + doc_name + " - submitted doc."}
+            issues = scan_result.get("issues", []) if isinstance(scan_result, dict) else []
+            fixes_needed = [i for i in issues if i.get("auto_fix")]
+            if not fixes_needed:
+                return {"applied": [], "message": "No auto-fixable issues found"}
+            for issue in fixes_needed:
+                field = issue.get("field")
+                fix_value = issue.get("auto_fix_value", "")
+                if not field:
+                    continue
+                try:
+                    if hasattr(doc, field):
+                        setattr(doc, field, fix_value)
+                        applied.append(f"Set {field} = {fix_value}")
+                    else:
+                        errors.append(f"Field {field} not found on {doc_type}")
+                except Exception as e:
+                    errors.append(f"Error fixing {field}: {str(e)}")
+            if applied:
+                try:
+                    doc.flags.ignore_validate = True
+                    doc.save()
+                    frappe.db.commit()
+                except Exception as save_err:
+                    frappe.db.rollback()
+                    errors.append(f"Save error: {str(save_err)}")
+            return {"applied": applied, "errors": errors, "message": f"Applied {len(applied)} fixes" if applied else "No fixes applied"}
+        except Exception as e:
+            frappe.logger().error(f"[DataQualityScanner] _apply_fixes error: {str(e)}")
+            return {"applied": [], "error": str(e)}
+
     def _store_validation_pattern(self, *args, **kwargs):
         """Store validation pattern"""
         return True
