@@ -41,19 +41,19 @@ def _detect_ai_intent(query: str) -> str:
         return "sales_order_bot"
 
     # === PRIORITY: Task Validator commands (check data, pipeline, fix, diagnose) ===
-    # These must come BEFORE diagnosis_commands to route to task_validator instead of scanner
+    # These must come BEFORE diagnosis_commands to route to sales_order_bot instead of scanner
     if re.search(r'^check\s+data\s+SAL-QTN-', query, re.IGNORECASE):
-        return "task_validator"
+        return "sales_order_bot"
     if re.search(r'^pipeline\s+SAL-QTN-', query, re.IGNORECASE):
-        return "task_validator"
+        return "sales_order_bot"
     if re.search(r'^fix\s+SAL-QTN-', query, re.IGNORECASE):
-        return "task_validator"
+        return "sales_order_bot"
     if re.search(r'^fix\s+SO-', query, re.IGNORECASE):
-        return "task_validator"
+        return "sales_order_bot"
     if re.search(r'^diagnose\s+SAL-QTN-', query, re.IGNORECASE):
-        return "task_validator"
+        return "sales_order_bot"
     if re.search(r'^diagnose\s+SO-', query, re.IGNORECASE):
-        return "task_validator"
+        return "sales_order_bot"
 
     # === PRIORITY: Data Quality Scanner / Diagnosis commands ===
     # These commands should ALWAYS go to the skills system, NOT sales_order_follow_up
@@ -155,7 +155,7 @@ def _detect_ai_intent(query: str) -> str:
         r'^scan\s+SO-',          # @ai scan SO-00752
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in validator_patterns):
-        return "task_validator"
+        return "sales_order_bot"
     
     # Party Account Management (NEW)
     party_account_patterns = [
@@ -166,7 +166,7 @@ def _detect_ai_intent(query: str) -> str:
         r'batch\s+account',
     ]
     if any(re.search(p, query, re.IGNORECASE) for p in party_account_patterns):
-        return "task_validator"
+        return "sales_order_bot"
     
     # Sales-specific patterns (DN, invoice, pending orders, next steps)
     sales_patterns = [
@@ -307,8 +307,8 @@ def handle_raven_message(doc, method):
                 result = {"success": True, "response": response}
             
             # NEW: Task Validator / Diagnosis Agent
-            elif bot_name == "task_validator":
-                from raven_ai_agent.agents.task_validator import TaskValidatorMixin
+            elif bot_name == "sales_order_bot":
+                from raven_ai_agent.agents.sales_order_bot import TaskValidatorMixin
                 # Create a lightweight wrapper to use the mixin
                 class _ValidatorAgent(TaskValidatorMixin):
                     pass

@@ -672,7 +672,17 @@ def handle_raven_message(doc, method):
             try:
                 bot = frappe.get_doc("Raven Bot", bot_name)
             except frappe.DoesNotExistError:
-                frappe.logger().warning(f"[AI Agent] Bot {bot_name} not found")
+                frappe.logger().warning(f"[AI Agent] Bot {bot_name} not found, trying sales_order_bot")
+                try:
+                    bot = frappe.get_doc("Raven Bot", "sales_order_bot")
+                except:
+                    frappe.logger().warning(f"[AI Agent] sales_order_bot not found")
+        else:
+            # Default to sales_order_bot if no bot_name specified
+            try:
+                bot = frappe.get_doc("Raven Bot", "sales_order_bot")
+            except:
+                frappe.logger().warning(f"[AI Agent] Could not get default sales_order_bot")
 
         response_text = result.get("response") or result.get("message") or result.get("error") or "No response generated"
         link_doctype = result.get("link_doctype")
