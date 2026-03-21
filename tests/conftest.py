@@ -245,6 +245,8 @@ def pytest_configure(config):
     sys.modules["erpnext.selling"] = MagicMock()
     sys.modules["erpnext.selling.doctype"] = MagicMock()
     sys.modules["erpnext.selling.doctype.sales_order"] = MagicMock()
+    sys.modules["erpnext.selling.doctype.quotation"] = MagicMock()
+    sys.modules["erpnext.selling.doctype.quotation.quotation"] = MagicMock()
     sys.modules["erpnext.controllers"] = MagicMock()
     sys.modules["erpnext.controllers.stock_controller"] = MagicMock()
     sys.modules["erpnext.manufacturing"] = MagicMock()
