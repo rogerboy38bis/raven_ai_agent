@@ -104,7 +104,7 @@ When showing documents:
 CAPABILITIES_LIST = """
 ## 🤖 AMB AI Agent Capabilities
 
-**Latest Update:** March 2026 | **Version:** 2.0
+**Latest Update:** March 2026 | **Version:** 2.1
 
 ---
 
@@ -119,6 +119,57 @@ CAPABILITIES_LIST = """
 
 ---
 
+### 💳 Payment Management Agent
+
+Complete payment workflow automation with Banxico exchange rate integration:
+
+| Command | Description |
+|---------|-------------|
+| `@ai payment create [SI-NAME]` | Create Payment Entry from Sales Invoice |
+| `@ai payment create [SI-NAME] amount [AMOUNT]` | Partial payment |
+| `@ai payment submit [PE-NAME]` | Submit Payment Entry |
+| `@ai payment reconcile [PE-NAME]` | Check reconciliation status |
+| `@ai payment outstanding` | List all unpaid invoices |
+| `@ai payment outstanding customer [NAME]` | Unpaid for specific customer |
+| `@ai payment status [PE-NAME]` | Payment Entry details |
+| `@ai create payment for ACC-SINV-XXXX` | Create Payment Entry from Sales Invoice |
+| `@ai validate ACC-SINV-XXXX` | Validate sales invoice |
+
+**Full Payment Cycle:**
+```
+@ai payment create ACC-SINV-2026-00001
+@ai payment submit ACC-PAY-2026-00001
+@ai payment reconcile ACC-PAY-2026-00001
+```
+
+**Features:**
+- Auto-submits draft Sales Invoices
+- Banxico FIX T-1 exchange rate for multi-currency payments
+- Exchange gain/loss calculation (ganancia/pérdida cambiaria)
+- SAT payment form codes (01=Efectivo, 02=Cheque, 03=Transferencia, 04=Tarjeta)
+
+---
+
+### 📦 Sample Request Management
+
+Create Sample Requests from any source document in the sales pipeline:
+
+| Command | Description |
+|---------|-------------|
+| `Create → Sample Request` button | Available on Lead, Prospect, Opportunity, Quotation, Sales Order |
+| `@ai sample request Lead LEAD-NAME` | Create sample request from Lead |
+| `@ai sample request Prospect PROSPECT-NAME` | Create sample request from Prospect |
+| `@ai sample request Opportunity OPP-NAME` | Create sample request from Opportunity |
+| `@ai sample request Quotation SAL-QTN-XXXX` | Create sample request from Quotation |
+| `@ai sample request Sales Order SO-XXXX` | Create sample request from Sales Order |
+
+**Features:**
+- Auto-populates party, contact, address
+- Default item selection based on source type
+- Request type mapping: Marketing, Prospect, Pre-sample Approved, Representative Sample, Exhibition
+
+---
+
 ### 🏭 Manufacturing & Production
 
 #### Work Order Management
@@ -127,12 +178,18 @@ CAPABILITIES_LIST = """
 - `@ai submit work order [WO]` - Submit/start work order
 - `@ai material status for [WO]` - Check component availability (Red/Green zone)
 - `@ai reserve stock for [WO]` - Reserve materials for work order
+- `@ai work order from SO-XXXXX` - Create Work Order from Sales Order
+- `@ai submit wo MFG-WO-XXXXX` - Submit Work Order
+- `@ai !submit Work Order MFG-WO-XXXX` - Submit Work Order (direct)
+- `@ai unlink sales order from MFG-WO-XXXX` - Remove SO link from Work Order
 
 #### Production Execution
 - `@ai issue materials for [WO]` - Transfer materials to WIP warehouse
+- `@ai transfer materials` - Transfer raw materials to WIP
 - `@ai show job cards for [WO]` - List operations (linked to Project Tasks)
 - `@ai update progress for [WO] qty [n]` - Report production progress
 - `@ai finish work order [WO]` - Complete production & receive FG
+- `@ai manufacture MFG-WO-XXXXX` - Complete manufacturing
 
 #### Stock Entry Management
 - `@ai material receipt [ITEM] qty [n] price $[x]` - Create Material Receipt
@@ -160,6 +217,57 @@ CAPABILITIES_LIST = """
 
 ---
 
+### 📋 Pipeline & Data Quality Commands
+
+Full sales pipeline management from Quotation to Delivery:
+
+| Command | Description |
+|---------|-------------|
+| `@ai pipeline SAL-QTN-XXXX` | Full pipeline diagnosis with status |
+| `@ai diagnose SAL-QTN-XXXX` | Detailed diagnosis with issues and next steps |
+| `@ai check data SAL-QTN-XXXX` | Validate quotation data quality |
+| `@ai fix SAL-QTN-XXXX` | Auto-fix data quality issues |
+| `@ai scan SAL-QTN-XXXX` | Full data quality scan |
+| `@ai validate SAL-QTN-XXXX` | Validate data integrity |
+| `@ai repair SAL-QTN-XXXX` | Auto-repair issues |
+| `@ai validate ACC-SINV-XXXXX` | Validate sales invoice |
+| `@ai !fix SAL-QTN-XXXXX` | Fix cancelled quotation |
+| `@ai !update quotation SAL-QTN-XXXX item ITEM-CODE` | Update quotation item |
+
+**Pipeline Stages:**
+- Quotation → Sales Order → Work Order → Stock Entry → Delivery Note → Sales Invoice → Payment
+
+---
+
+### 🔄 Sales-to-Purchase Full Cycle
+
+Complete sales pipeline from opportunity to payment and purchase requisition:
+
+#### Sales Cycle
+| Command | Description |
+|---------|-------------|
+| `@ai show opportunities` | List sales opportunities |
+| `@ai create opportunity for [customer]` | Create new sales opportunity |
+| `@ai check inventory for [SO]` | Check item availability for Sales Order |
+| `@ai show quotations` | View your quotations |
+| `@ai show sales orders` | View your sales orders |
+| `@ai show pending deliveries` | Delivery notes, stock levels |
+| `@ai create delivery note for [SO]` | Ship items to customer |
+| `@ai create sales invoice for [SO/DN]` | Invoice the customer |
+
+#### Purchase Cycle
+| Command | Description |
+|---------|-------------|
+| `@ai create material request for [SO]` | Create Material Request from SO |
+| `@ai show material requests` | List pending material requests |
+| `@ai create rfq from [MR]` | Create Request for Quotation |
+| `@ai show rfqs` | List RFQs and their status |
+| `@ai show supplier quotations` | List supplier quotations |
+| `@ai create po from [SQ]` | Create Purchase Order from Supplier Quotation |
+| `@ai receive goods for [PO]` | Create Purchase Receipt |
+
+---
+
 ### 📦 BOM & Batch Management (amb_w_tds)
 
 #### BOM Tracking Commands
@@ -180,6 +288,8 @@ CAPABILITIES_LIST = """
 - `@ai validate bom BOM-XXXX` - Validate BOM Creator before submission
 - `@ai create bom from tds [TDS-NAME]` - Create BOM Creator from TDS
 - `@ai create bom for batch LOTE-XXXX` - Create BOM for a Batch AMB
+- `@ai !cancel bom BOM-XXXX` - Cancel submitted BOM
+- `@ai !revert bom BOM-XXXX to draft` - Reset cancelled BOM to draft
 
 ---
 
@@ -217,18 +327,6 @@ CAPABILITIES_LIST = """
 - `@ai show supplier quotations` - List supplier quotations
 - `@ai create po from [SQ]` - Create Purchase Order from Supplier Quotation
 - `@ai receive goods for [PO]` - Create Purchase Receipt
-
----
-
-### 📋 Quotation Pipeline Commands (v11.0)
-
-| Command | Description | Bot |
-|---------|-------------|-----|
-| `@ai pipeline SAL-QTN-XXXXX` | Full pipeline diagnosis for quotations | task_validator |
-| `@ai diagnose SAL-QTN-XXXXX` | Diagnose quotation issues | data_quality_scanner |
-| `@ai scan SAL-QTN-XXXXX` | Scan quotation for issues | data_quality_scanner |
-| `@ai check data SAL-QTN-XXXXX` | Validate quotation data | task_validator |
-| `@ai validate ACC-SINV-XXXXX` | Validate sales invoice | payment_bot |
 
 ---
 

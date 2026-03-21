@@ -4,13 +4,16 @@ Raymond-Lucy AI Agent for ERPNext with Raven Integration - Enhanced with OpenCla
 
 ## Current Status
 
-**Latest Update:** March 2026
+**Latest Update:** March 2026 | **Version:** 2.1
 **Production Deployment:** Active on https://erp.sysmayal2.cloud
 
 ### Recent Deployments
 
 | Date | Changes |
 |------|---------|
+| 2026-03-21 | Pipeline diagnosis commands (@ai pipeline, @ai diagnose), Payment Agent, Manufacturing workflow |
+| 2026-03-20 | Data Quality Scanner, Sample Request from Lead/Prospect/Opportunity/Quotation/SO |
+| 2026-03-19 | Payment Entry creation and submission fixes, @ai payment routing |
 | 2026-03-09 | Sales Invoice workflow fixes (mode_of_payment field), command routing corrections |
 | 2026-03-09 | Quality Management System (QMS) field bug fixes |
 | 2026-03-08 | Raven User synchronization for mobile/web parity |
@@ -69,6 +72,120 @@ The QMS module provides comprehensive quality control capabilities through Raven
 - ✅ Non-Conformance Creation: QA-NC-00020
 - ✅ Internal Audit Creation: QA-MEET-26-03-08
 - ✅ Training Program Creation: GMP Basics
+
+### Pipeline & Diagnosis Commands
+
+Full sales pipeline management from Quotation to Delivery:
+
+| Command | Description |
+|---------|-------------|
+| `@ai pipeline SAL-QTN-XXXX` | Full pipeline diagnosis with status |
+| `@ai diagnose SAL-QTN-XXXX` | Detailed diagnosis with issues and next steps |
+| `@ai check data SAL-QTN-XXXX` | Validate quotation data quality |
+| `@ai fix SAL-QTN-XXXX` | Auto-fix data quality issues |
+| `@ai scan SAL-QTN-XXXX` | Full data quality scan |
+| `@ai validate SAL-QTN-XXXX` | Validate data integrity |
+| `@ai repair SAL-QTN-XXXX` | Auto-repair issues |
+| `@ai validate ACC-SINV-XXXXX` | Validate sales invoice |
+| `@ai !fix SAL-QTN-XXXXX` | Fix cancelled quotation |
+| `@ai !update quotation SAL-QTN-XXXX item ITEM-CODE` | Update quotation item |
+
+**Pipeline Stages:**
+- Quotation → Sales Order → Work Order → Stock Entry → Delivery Note → Sales Invoice → Payment
+
+### Sales-to-Purchase Full Cycle
+
+Complete sales pipeline from opportunity to payment and purchase requisition:
+
+#### Sales Cycle
+| Command | Description |
+|---------|-------------|
+| `@ai show opportunities` | List sales opportunities |
+| `@ai create opportunity for [customer]` | Create new sales opportunity |
+| `@ai check inventory for [SO]` | Check item availability for Sales Order |
+| `@ai show quotations` | View your quotations |
+| `@ai show sales orders` | View your sales orders |
+| `@ai show pending deliveries` | Delivery notes, stock levels |
+| `@ai create delivery note for [SO]` | Ship items to customer |
+| `@ai create sales invoice for [SO/DN]` | Invoice the customer |
+
+#### Purchase Cycle
+| Command | Description |
+|---------|-------------|
+| `@ai create material request for [SO]` | Create Material Request from SO |
+| `@ai show material requests` | List pending material requests |
+| `@ai create rfq from [MR]` | Create Request for Quotation |
+| `@ai show rfqs` | List RFQs and their status |
+| `@ai show supplier quotations` | List supplier quotations |
+| `@ai create po from [SQ]` | Create Purchase Order from Supplier Quotation |
+| `@ai receive goods for [PO]` | Create Purchase Receipt |
+
+### Payment Management Agent
+
+Complete payment workflow automation:
+
+| Command | Description |
+|---------|-------------|
+| `@ai payment create [SI-NAME]` | Create Payment Entry from Sales Invoice |
+| `@ai payment create [SI-NAME] amount [AMOUNT]` | Partial payment |
+| `@ai payment submit [PE-NAME]` | Submit Payment Entry |
+| `@ai payment reconcile [PE-NAME]` | Check reconciliation status |
+| `@ai payment outstanding` | List all unpaid invoices |
+| `@ai payment outstanding customer [NAME]` | Unpaid for specific customer |
+| `@ai payment status [PE-NAME]` | Payment Entry details |
+| `@ai create payment for ACC-SINV-XXXX` | Create Payment Entry from Sales Invoice |
+| `@ai validate ACC-SINV-XXXX` | Validate sales invoice |
+
+**Full Payment Cycle:**
+```
+@ai payment create ACC-SINV-2026-00001
+@ai payment submit ACC-PAY-2026-00001
+@ai payment reconcile ACC-PAY-2026-00001
+```
+
+### Manufacturing Workflow Agent
+
+Automated manufacturing from Sales Order:
+
+| Command | Description |
+|---------|-------------|
+| `@ai work order from SO-XXXXX` | Create Work Order from Sales Order |
+| `@ai transfer materials` | Transfer raw materials to WIP |
+| `@ai manufacture MFG-WO-XXXXX` | Complete manufacturing |
+| `@ai submit wo MFG-WO-XXXXX` | Submit Work Order |
+| `@ai !submit Work Order MFG-WO-XXXX` | Submit Work Order (direct) |
+| `@ai !submit bom BOM-XXXX` | Submit Bill of Materials |
+| `@ai unlink sales order from MFG-WO-XXXX` | Remove SO link from Work Order |
+| `@ai !cancel bom BOM-XXXX` | Cancel submitted BOM |
+| `@ai !revert bom BOM-XXXX to draft` | Reset cancelled BOM to draft |
+
+### Sample Request Management
+
+Create Sample Requests from any source document via button or command:
+
+| Command | Description |
+|---------|-------------|
+| `Create → Sample Request` button | Lead, Prospect, Opportunity, Quotation, Sales Order |
+| `@ai sample request Lead LEAD-NAME` | Create sample request from Lead |
+| `@ai sample request Prospect PROSPECT-NAME` | Create sample request from Prospect |
+| `@ai sample request Opportunity OPP-NAME` | Create sample request from Opportunity |
+| `@ai sample request Quotation SAL-QTN-XXXX` | Create sample request from Quotation |
+| `@ai sample request Sales Order SO-XXXX` | Create sample request from Sales Order |
+
+**Features:**
+- Auto-populates party, contact, address
+- Default item selection based on source type
+- Request type mapping: Marketing, Prospect, Pre-sample Approved, Representative Sample, Exhibition
+
+### Data Quality Scanner
+
+Pre-flight validation and repair:
+
+| Command | Description |
+|---------|-------------|
+| `@ai scan SAL-QTN-XXXX` | Full data quality scan |
+| `@ai validate SAL-QTN-XXXX` | Validate data integrity |
+| `@ai repair SAL-QTN-XXXX` | Auto-repair issues |
 
 ### Cost Monitoring
 
