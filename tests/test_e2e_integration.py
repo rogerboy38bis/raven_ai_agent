@@ -126,14 +126,10 @@ class TestCommandRouting(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures"""
-        if not is_frappe_available():
-            self.skipTest("Frappe not available")
-        
-        self.mock_frappe = MagicMock()
-        self.mock_frappe.local.site = "test.site"
+        # determine_autonomy is a pure function, no frappe needed
+        pass
 
-    @patch('raven_ai_agent.api.command_router.frappe')
-    def test_determine_autonomy_level_3_for_dangerous_ops(self, mock_frappe):
+    def test_determine_autonomy_level_3_for_dangerous_ops(self):
         """E2E-03: Dangerous operations get autonomy level 3"""
         from raven_ai_agent.api.command_router import CommandRouterMixin
         
@@ -155,8 +151,7 @@ class TestCommandRouting(unittest.TestCase):
             autonomy = router.determine_autonomy(query)
             self.assertEqual(autonomy, 3, f"Query '{query}' should be level 3")
 
-    @patch('raven_ai_agent.api.command_router.frappe')
-    def test_determine_autonomy_level_2_for_modifications(self, mock_frappe):
+    def test_determine_autonomy_level_2_for_modifications(self):
         """E2E-04: Modification operations get autonomy level 2"""
         from raven_ai_agent.api.command_router import CommandRouterMixin
         
@@ -180,8 +175,7 @@ class TestCommandRouting(unittest.TestCase):
             autonomy = router.determine_autonomy(query)
             self.assertEqual(autonomy, 2, f"Query '{query}' should be level 2")
 
-    @patch('raven_ai_agent.api.command_router.frappe')
-    def test_determine_autonomy_level_1_for_readonly(self, mock_frappe):
+    def test_determine_autonomy_level_1_for_readonly(self):
         """E2E-05: Read-only queries get autonomy level 1"""
         from raven_ai_agent.api.command_router import CommandRouterMixin
         
