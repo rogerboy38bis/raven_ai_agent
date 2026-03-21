@@ -121,25 +121,7 @@ class _FrappeMock(MagicMock):
         return FRAPPE_EXCEPTIONS['DuplicateEntryError']
 
 
-# Monkey-patch unittest.mock.patch to use _FrappeMock for frappe patches
-import unittest.mock
-_original_patch = unittest.mock.patch
 
-def _patch_with_frappe_mock(*args, **kwargs):
-    """Custom patch that uses _FrappeMock for frappe-related patches"""
-    # Check if any argument targets frappe
-    target_is_frappe = any(
-        (isinstance(a, str) and 'frappe' in a) for a in args
-    )
-    if target_is_frappe and 'spec' not in kwargs:
-        # Use our custom mock class for frappe patches
-        kwargs['Mock'] = _FrappeMock
-    
-    return _original_patch(*args, **kwargs)
-
-# Replace the global patch function
-import unittest.mock
-unittest.mock.patch = _patch_with_frappe_mock
 
 
 def _create_mock_frappe_module():
@@ -165,8 +147,8 @@ def _create_mock_frappe_module():
     frappe_module.local.session.user = "Administrator"
     frappe_module.local.site = "test.site"
     
-    # Mock frappe.db - use a real module with MagicMock methods
-    frappe_module.db = types.ModuleType("frappe.db")
+    # Mock frappe.db - use a MagicMock so it has proper attributes
+    frappe_module.db = MagicMock()
     frappe_module.db.get_value = MagicMock(return_value=0)
     frappe_module.db.get_all = MagicMock(return_value=[])
     frappe_module.db.get_single_value = MagicMock(return_value=None)
@@ -175,6 +157,7 @@ def _create_mock_frappe_module():
     frappe_module.db.rollback = MagicMock()
     frappe_module.db.exists = MagicMock(return_value=False)
     frappe_module.db.sql = MagicMock(return_value=[])
+    frappe_module.db.count = MagicMock(return_value=0)
     
     # Mock frappe.utils - use real module type
     frappe_module.utils = types.ModuleType("frappe.utils")

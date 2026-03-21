@@ -29,6 +29,7 @@ class TestManufacturingAgent(unittest.TestCase):
             mock_wo = MagicMock()
             mock_wo.name = "MFG-WO-TEST-001"
             mock_wo.status = "Draft"
+            mock_wo.docstatus = 1  # Must be submitted
             mock_frappe.get_doc.return_value = mock_wo
             
             agent = ManufacturingAgent()
@@ -55,6 +56,20 @@ class TestManufacturingAgent(unittest.TestCase):
         """M-03: Create WO — idempotent (existing draft)"""
         from raven_ai_agent.agents.manufacturing_agent import ManufacturingAgent
         
+        # Create separate mocks for different doctypes
+        mock_bom = MagicMock()
+        mock_bom.docstatus = 1  # BOM must be submitted
+        
+        mock_wo = MagicMock()
+        mock_wo.name = "MFG-WO-EXISTING-001"
+        mock_wo.status = "Draft"
+        mock_wo.docstatus = 0  # Draft status
+        
+        def get_doc_side_effect(doctype, name=None):
+            if doctype == "BOM":
+                return mock_bom
+            return mock_wo
+        
         with patch('raven_ai_agent.agents.manufacturing_agent.frappe') as mock_frappe:
             mock_frappe.db.exists.return_value = True
             mock_frappe.db.get_default.return_value = "AMB-Wellness"
@@ -65,10 +80,7 @@ class TestManufacturingAgent(unittest.TestCase):
                 "FG to Sell - AMB-W",
             ]
             
-            mock_wo = MagicMock()
-            mock_wo.name = "MFG-WO-EXISTING-001"
-            mock_wo.status = "Draft"
-            mock_frappe.get_doc.return_value = mock_wo
+            mock_frappe.get_doc.side_effect = get_doc_side_effect
             
             agent = ManufacturingAgent()
             result = agent.create_work_order("0307", 150, bom="BOM-0307-005")
@@ -131,6 +143,7 @@ class TestManufacturingAgent(unittest.TestCase):
             mock_wo.name = "MFG-WO-TEST-001"
             mock_wo.status = "In Process"
             mock_wo.transferred_qty = 0
+            mock_wo.material_transferred_for_manufacturing = 0  # No material transferred
             mock_wo.items = []
             mock_wo.qty = 100
             mock_wo.produced_qty = 0
@@ -218,21 +231,28 @@ class TestManufacturingAgent(unittest.TestCase):
         """M-11: Create WO from SO — sales level"""
         from raven_ai_agent.agents.manufacturing_agent import ManufacturingAgent
         
+        # Create separate mocks for different doctypes
+        mock_bom = MagicMock()
+        mock_bom.docstatus = 1  # BOM must be submitted
+        
+        mock_so = MagicMock()
+        mock_so.docstatus = 1
+        mock_so.name = "SO-TEST-001"
+        mock_so.items = [MagicMock(item_code="0307")]
+        
+        mock_wo = MagicMock()
+        mock_wo.name = "MFG-WO-SALES-001"
+        mock_wo.status = "Draft"
+        mock_wo.docstatus = 1  # Must be submitted
+        
+        def get_doc_side_effect(doctype, name=None):
+            if doctype == "Sales Order":
+                return mock_so
+            elif doctype == "BOM":
+                return mock_bom
+            return mock_wo
+        
         with patch('raven_ai_agent.agents.manufacturing_agent.frappe') as mock_frappe:
-            mock_so = MagicMock()
-            mock_so.docstatus = 1
-            mock_so.name = "SO-TEST-001"
-            mock_so.items = [MagicMock(item_code="0307")]
-            
-            mock_wo = MagicMock()
-            mock_wo.name = "MFG-WO-SALES-001"
-            mock_wo.status = "Draft"
-            
-            def get_doc_side_effect(doctype, name):
-                if doctype == "Sales Order":
-                    return mock_so
-                return mock_wo
-            
             mock_frappe.get_doc.side_effect = get_doc_side_effect
             mock_frappe.get_all.return_value = []
             mock_frappe.db.get_value.return_value = "BOM-0307-001"
@@ -246,21 +266,28 @@ class TestManufacturingAgent(unittest.TestCase):
         """M-12: Create WO from SO — mix level"""
         from raven_ai_agent.agents.manufacturing_agent import ManufacturingAgent
         
+        # Create separate mocks for different doctypes
+        mock_bom = MagicMock()
+        mock_bom.docstatus = 1  # BOM must be submitted
+        
+        mock_so = MagicMock()
+        mock_so.docstatus = 1
+        mock_so.name = "SO-TEST-001"
+        mock_so.items = [MagicMock(item_code="0307")]
+        
+        mock_wo = MagicMock()
+        mock_wo.name = "MFG-WO-MIX-001"
+        mock_wo.status = "Draft"
+        mock_wo.docstatus = 1  # Must be submitted
+        
+        def get_doc_side_effect(doctype, name=None):
+            if doctype == "Sales Order":
+                return mock_so
+            elif doctype == "BOM":
+                return mock_bom
+            return mock_wo
+        
         with patch('raven_ai_agent.agents.manufacturing_agent.frappe') as mock_frappe:
-            mock_so = MagicMock()
-            mock_so.docstatus = 1
-            mock_so.name = "SO-TEST-001"
-            mock_so.items = [MagicMock(item_code="0307")]
-            
-            mock_wo = MagicMock()
-            mock_wo.name = "MFG-WO-MIX-001"
-            mock_wo.status = "Draft"
-            
-            def get_doc_side_effect(doctype, name):
-                if doctype == "Sales Order":
-                    return mock_so
-                return mock_wo
-            
             mock_frappe.get_doc.side_effect = get_doc_side_effect
             mock_frappe.get_all.return_value = []
             mock_frappe.db.get_value.return_value = "BOM-0307-005"

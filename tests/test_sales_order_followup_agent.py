@@ -80,6 +80,7 @@ class TestSalesOrderFollowupAgent(unittest.TestCase):
             
             mock_frappe.get_doc.return_value = mock_so
             mock_frappe.get_all.return_value = []
+            mock_frappe.db.get_value.return_value = 0  # Set inventory to 0 for all items
             
             agent = SalesOrderFollowupAgent()
             result = agent.get_so_status("SO-TEST-001")
@@ -90,11 +91,23 @@ class TestSalesOrderFollowupAgent(unittest.TestCase):
         """S-05: get_pending_orders"""
         from raven_ai_agent.agents.sales_order_followup_agent import SalesOrderFollowupAgent
         
+        # Create mock objects with attributes (not dicts) since frappe.get_all returns objects
+        mock_order1 = MagicMock()
+        mock_order1.name = "SO-001"
+        mock_order1.customer = "Cust1"
+        mock_order1.grand_total = 1000.0
+        mock_order1.status = "To Deliver"
+        mock_order1.delivery_date = "2026-03-21"
+        
+        mock_order2 = MagicMock()
+        mock_order2.name = "SO-002"
+        mock_order2.customer = "Cust2"
+        mock_order2.grand_total = 2000.0
+        mock_order2.status = "To Deliver"
+        mock_order2.delivery_date = "2026-03-22"
+        
         with patch('raven_ai_agent.agents.sales_order_followup_agent.frappe') as mock_frappe:
-            mock_frappe.get_all.return_value = [
-                {"name": "SO-001", "customer": "Cust1", "grand_total": 1000.0, "status": "To Deliver"},
-                {"name": "SO-002", "customer": "Cust2", "grand_total": 2000.0, "status": "To Deliver"},
-            ]
+            mock_frappe.get_all.return_value = [mock_order1, mock_order2]
             
             agent = SalesOrderFollowupAgent()
             result = agent.get_pending_orders()
@@ -131,6 +144,7 @@ class TestSalesOrderFollowupAgent(unittest.TestCase):
             
             mock_frappe.get_doc.return_value = mock_so
             mock_frappe.get_all.return_value = []
+            mock_frappe.db.get_value.return_value = 0  # Mock inventory check
             
             agent = SalesOrderFollowupAgent()
             result = agent.get_next_steps("SO-TEST-001")
@@ -217,6 +231,7 @@ class TestSalesOrderFollowupAgent(unittest.TestCase):
             
             mock_frappe.get_doc.return_value = mock_so
             mock_frappe.get_all.return_value = []
+            mock_frappe.db.get_value.return_value = 0  # Mock inventory check
             
             agent = SalesOrderFollowupAgent()
             result = agent.process_command("diagnose SO-TEST-001")
@@ -236,6 +251,7 @@ class TestSalesOrderFollowupAgent(unittest.TestCase):
             
             mock_frappe.get_doc.return_value = mock_so
             mock_frappe.get_all.return_value = []
+            mock_frappe.db.get_value.return_value = 0  # Mock inventory check
             
             agent = SalesOrderFollowupAgent()
             result = agent.process_command("status SO-TEST-001")
@@ -318,6 +334,7 @@ class TestSalesOrderFollowupAgent(unittest.TestCase):
             
             mock_frappe.get_doc.return_value = mock_so
             mock_frappe.get_all.return_value = []
+            mock_frappe.db.get_value.return_value = 0  # Mock inventory check
             
             agent = SalesOrderFollowupAgent()
             result = agent.process_command("next steps SO-TEST-001")
