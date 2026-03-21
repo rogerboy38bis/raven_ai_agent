@@ -93,10 +93,32 @@ class _FrappeMock(MagicMock):
     _exceptions = FRAPPE_EXCEPTIONS
     
     def __getattr__(self, name):
-        # Return real exception for known exception names
+        # Return real exception for known exception names FIRST
         if name in self._exceptions:
             return self._exceptions[name]
-        return super().__getattr__(name)
+        # For everything else, use MagicMock's behavior
+        return MagicMock.__getattr__(self, name)
+    
+    # Make sure these always return real classes
+    @property
+    def DoesNotExistError(self):
+        return FRAPPE_EXCEPTIONS['DoesNotExistError']
+    
+    @property
+    def ValidationError(self):
+        return FRAPPE_EXCEPTIONS['ValidationError']
+    
+    @property
+    def PermissionError(self):
+        return FRAPPE_EXCEPTIONS['PermissionError']
+    
+    @property
+    def NameError(self):
+        return FRAPPE_EXCEPTIONS['NameError']
+    
+    @property
+    def DuplicateEntryError(self):
+        return FRAPPE_EXCEPTIONS['DuplicateEntryError']
 
 
 # Monkey-patch unittest.mock.patch to use _FrappeMock for frappe patches
