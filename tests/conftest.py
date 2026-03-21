@@ -8,52 +8,117 @@ package (apps/raven_ai_agent/raven_ai_agent/).
 Uses autouse fixture to clear sys.modules before each test.
 """
 import sys
-import importlib
-from pathlib import Path
+import types
 from unittest.mock import MagicMock
 import pytest
 
 
-PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+PROJECT_ROOT = "/workspace/raven_ai_agent"
 
 
-# Define REAL exception classes BEFORE any patching
-# These must be proper exception subclasses, not MagicMock objects
-class FrappeDoesNotExistError(Exception):
-    """Exception raised when a Frappe document does not exist"""
+# === REAL exception classes matching frappe/exceptions.py hierarchy ===
+class ValidationError(Exception):
+    http_status_code = 417
+
+
+class DoesNotExistError(ValidationError):
+    http_status_code = 404
+    def __init__(self, *args, doctype=None):
+        super().__init__(*args)
+        self.doctype = doctype
+
+
+class PermissionError(Exception):
+    http_status_code = 403
+
+
+class NameError(Exception):
+    http_status_code = 409
+
+
+class DuplicateEntryError(NameError):
     pass
 
 
-class FrappeValidationError(Exception):
-    """Exception raised for validation errors in Frappe"""
+class MandatoryError(ValidationError):
     pass
 
 
-class FrappePermissionError(Exception):
-    """Exception raised for permission errors in Frappe"""
+class LinkValidationError(ValidationError):
     pass
 
 
-class FrappeDuplicateEntryError(Exception):
-    """Exception raised when a duplicate entry is created"""
+class DataError(ValidationError):
     pass
 
 
-def _setup_frappe_exceptions(mock_obj):
-    """Helper to set up proper exception classes on a mock frappe object"""
-    # Use the real exception classes we defined above
-    mock_obj.DoesNotExistError = FrappeDoesNotExistError
-    mock_obj.ValidationError = FrappeValidationError
-    mock_obj.PermissionError = FrappePermissionError
-    mock_obj.DuplicateEntryError = FrappeDuplicateEntryError
-    mock_obj._ = lambda x: x
-    mock_obj.throw = MagicMock(side_effect=Exception)
-    return mock_obj
+class AuthenticationError(Exception):
+    http_status_code = 401
+
+
+class DocumentLockedError(ValidationError):
+    pass
+
+
+class TimestampMismatchError(ValidationError):
+    pass
+
+
+class LinkExistsError(ValidationError):
+    pass
+
+
+# Store in dict for easy re-application
+FRAPPE_EXCEPTIONS = {
+    'ValidationError': ValidationError,
+    'DoesNotExistError': DoesNotExistError,
+    'PermissionError': PermissionError,
+    'NameError': NameError,
+    'DuplicateEntryError': DuplicateEntryError,
+    'MandatoryError': MandatoryError,
+    'LinkValidationError': LinkValidationError,
+    'DataError': DataError,
+    'AuthenticationError': AuthenticationError,
+    'DocumentLockedError': DocumentLockedError,
+    'TimestampMismatchError': TimestampMismatchError,
+    'LinkExistsError': LinkExistsError,
+}
+
+
+def _create_mock_frappe_module():
+    """Create a mock frappe module with REAL exception classes"""
+    # Create a real module type, not MagicMock
+    frappe_module = types.ModuleType("frappe")
+    
+    # Apply real exception classes
+    for name, exc_class in FRAPPE_EXCEPTIONS.items():
+        setattr(frappe_module, name, exc_class)
+    
+    # Also set on frappe.exceptions
+    frappe_module.exceptions = types.ModuleType("frappe.exceptions")
+    for name, exc_class in FRAPPE_EXCEPTIONS.items():
+        setattr(frappe_module.exceptions, name, exc_class)
+    
+    # Mock common frappe functions/attributes
+    frappe_module._dict = lambda x=None: dict(x) if x else {}
+    frappe_module.as_json = lambda x: str(x)
+    frappe_module._ = lambda x: x
+    
+    frappe_module.local = MagicMock()
+    frappe_module.db = MagicMock()
+    frappe_module.utils = MagicMock()
+    frappe_module.throw = MagicMock(side_effect=Exception)
+    frappe_module.get_doc = MagicMock()
+    frappe_module.new_doc = MagicMock()
+    
+    return frappe_module
 
 
 @pytest.fixture(autouse=True)
 def fix_imports():
     """Clear raven_ai_agent modules from sys.modules before each test"""
+    import importlib
+    
     for k in list(sys.modules):
         if k.startswith("raven_ai_agent"):
             del sys.modules[k]
@@ -65,48 +130,49 @@ def fix_imports():
 
 
 @pytest.fixture(autouse=True)
-def fix_frappe_mocks():
-    """Ensure frappe module always has proper Exception classes after patches"""
-    yield
+def restore_frappe_exceptions():
+    """Restore real exception classes after each test.
     
-    # After each test, fix ALL frappe-related modules in sys.modules
-    for module_name in list(sys.modules.keys()):
-        if module_name == "frappe" or module_name.startswith("frappe."):
-            mod = sys.modules[module_name]
-            if isinstance(mod, MagicMock):
-                _setup_frappe_exceptions(mod)
+    @patch decorators may replace frappe attributes with MagicMock.
+    This fixture runs AFTER each test to fix them back.
+    """
+    yield  # test runs here
+    
+    # Restore after test - fix ALL frappe-related modules
+    frappe_mod = sys.modules.get("frappe")
+    if frappe_mod:
+        for name, exc_class in FRAPPE_EXCEPTIONS.items():
+            setattr(frappe_mod, name, exc_class)
         
-        # Also fix any erpnext modules that might have frappe references
-        if module_name.startswith("erpnext"):
+        # Also fix frappe.exceptions
+        if hasattr(frappe_mod, 'exceptions') and isinstance(frappe_mod.exceptions, MagicMock):
+            frappe_mod.exceptions = types.ModuleType("frappe.exceptions")
+            for name, exc_class in FRAPPE_EXCEPTIONS.items():
+                setattr(frappe_mod.exceptions, name, exc_class)
+    
+    # Fix any other frappe sub-modules
+    for module_name in list(sys.modules.keys()):
+        if module_name.startswith("frappe."):
             mod = sys.modules[module_name]
-            if isinstance(mod, MagicMock):
-                # Check if mod has frappe as an attribute
-                if hasattr(mod, 'frappe'):
-                    frappe_attr = getattr(mod, 'frappe')
-                    if isinstance(frappe_attr, MagicMock):
-                        _setup_frappe_exceptions(frappe_attr)
+            if hasattr(mod, 'frappe'):
+                frappe_attr = getattr(mod, 'frappe')
+                if isinstance(frappe_attr, MagicMock):
+                    for name, exc_class in FRAPPE_EXCEPTIONS.items():
+                        setattr(frappe_attr, name, exc_class)
 
 
 def pytest_configure(config):
     """Setup mock frappe module with proper Exception classes"""
-    # Create mock frappe module
-    mock_frappe = MagicMock()
-    mock_frappe.local = MagicMock()
-    mock_frappe.db = MagicMock()
-    mock_frappe.utils = MagicMock()
-    
-    # Set up proper exception classes using our real exception classes
-    _setup_frappe_exceptions(mock_frappe)
-    
-    # Register all frappe-related modules
+    # Create and inject mock frappe module BEFORE any test imports
+    mock_frappe = _create_mock_frappe_module()
     sys.modules["frappe"] = mock_frappe
+    
+    # Mock frappe sub-modules
     sys.modules["frappe.utils"] = mock_frappe.utils
     sys.modules["frappe.model"] = MagicMock()
     sys.modules["frappe.model.document"] = MagicMock()
     sys.modules["frappe.utils.data"] = MagicMock()
-    sys.modules["frappe.exceptions"] = MagicMock()
-    sys.modules["frappe.exceptions.ValidationError"] = FrappeValidationError
-    sys.modules["frappe.exceptions.DoesNotExistError"] = FrappeDoesNotExistError
+    sys.modules["frappe.exceptions"] = mock_frappe.exceptions
     
     # Register erpnext modules
     sys.modules["erpnext"] = MagicMock()
