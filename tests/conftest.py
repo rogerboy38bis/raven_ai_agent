@@ -33,9 +33,9 @@ def fix_imports():
 def pytest_configure(config):
     """Setup mock frappe module with proper Exception classes"""
     # Create proper Exception subclasses for frappe errors
-    DoesNotExistError = type('DoesNotExistError', (Exception,), {})
-    ValidationError = type('ValidationError', (Exception,), {})
-    PermissionError = type('PermissionError', (Exception,))
+    class DoesNotExistError(Exception): pass
+    class ValidationError(Exception): pass
+    class PermissionError(Exception): pass
     
     mock_frappe = MagicMock()
     mock_frappe.local = MagicMock()
