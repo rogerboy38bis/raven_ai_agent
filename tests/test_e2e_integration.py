@@ -133,78 +133,78 @@ class TestCommandRouting(unittest.TestCase):
         """E2E-03: Dangerous operations get autonomy level 3"""
         try:
             from raven_ai_agent.api.command_router import CommandRouterMixin
+            
+            class TestRouter(CommandRouterMixin):
+                def __init__(self):
+                    self.user = "test@example.com"
+            
+            router = TestRouter()
+            
+            # Test dangerous operations
+            dangerous_queries = [
+                "delete sales order SO-001",
+                "cancel invoice SINV-001",
+                "submit payment PE-001",
+                "create payment for SINV-001"
+            ]
+            
+            for query in dangerous_queries:
+                autonomy = router.determine_autonomy(query)
+                self.assertEqual(autonomy, 3, f"Query '{query}' should be level 3")
         except ImportError:
             self.skipTest("Module not available in sandbox")
-        
-        class TestRouter(CommandRouterMixin):
-            def __init__(self):
-                self.user = "test@example.com"
-        
-        router = TestRouter()
-        
-        # Test dangerous operations
-        dangerous_queries = [
-            "delete sales order SO-001",
-            "cancel invoice SINV-001",
-            "submit payment PE-001",
-            "create payment for SINV-001"
-        ]
-        
-        for query in dangerous_queries:
-            autonomy = router.determine_autonomy(query)
-            self.assertEqual(autonomy, 3, f"Query '{query}' should be level 3")
 
     def test_determine_autonomy_level_2_for_modifications(self):
         """E2E-04: Modification operations get autonomy level 2"""
         try:
             from raven_ai_agent.api.command_router import CommandRouterMixin
+            
+            class TestRouter(CommandRouterMixin):
+                def __init__(self):
+                    self.user = "test@example.com"
+            
+            router = TestRouter()
+            
+            # Test modification operations
+            mod_queries = [
+                "create a sales order",
+                "update customer info",
+                "add item to order",
+                "convert quotation to sales order",
+                "generate dashboard",
+                "show sales report"
+            ]
+            
+            for query in mod_queries:
+                autonomy = router.determine_autonomy(query)
+                self.assertEqual(autonomy, 2, f"Query '{query}' should be level 2")
         except ImportError:
             self.skipTest("Module not available in sandbox")
-        
-        class TestRouter(CommandRouterMixin):
-            def __init__(self):
-                self.user = "test@example.com"
-        
-        router = TestRouter()
-        
-        # Test modification operations
-        mod_queries = [
-            "create a sales order",
-            "update customer info",
-            "add item to order",
-            "convert quotation to sales order",
-            "generate dashboard",
-            "show sales report"
-        ]
-        
-        for query in mod_queries:
-            autonomy = router.determine_autonomy(query)
-            self.assertEqual(autonomy, 2, f"Query '{query}' should be level 2")
 
     def test_determine_autonomy_level_1_for_readonly(self):
         """E2E-05: Read-only queries get autonomy level 1"""
         try:
             from raven_ai_agent.api.command_router import CommandRouterMixin
+            
+            class TestRouter(CommandRouterMixin):
+                def __init__(self):
+                    self.user = "test@example.com"
+            
+            router = TestRouter()
+            
+            # Test read-only queries
+            readonly_queries = [
+                "what is the status of order SO-001",
+                "show my invoices",
+                "check warehouse stock",
+                "list pending quotations"
+            ]
+            
+            for query in readonly_queries:
+                autonomy = router.determine_autonomy(query)
+                self.assertEqual(autonomy, 1, f"Query '{query}' should be level 1")
         except ImportError:
             self.skipTest("Module not available in sandbox")
-        
-        class TestRouter(CommandRouterMixin):
-            def __init__(self):
-                self.user = "test@example.com"
-        
-        router = TestRouter()
-        
-        # Test read-only queries
-        readonly_queries = [
-            "what is the status of order SO-001",
-            "show my invoices",
-            "check warehouse stock",
-            "list pending quotations"
-        ]
-        
-        for query in readonly_queries:
-            autonomy = router.determine_autonomy(query)
-            self.assertEqual(autonomy, 1, f"Query '{query}' should be level 1")
 
 
 class TestUtteranceRouting(unittest.TestCase):
