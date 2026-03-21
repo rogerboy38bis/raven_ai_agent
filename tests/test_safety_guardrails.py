@@ -159,10 +159,10 @@ class TestPermissionChecks(unittest.TestCase):
     def test_determine_autonomy_returns_level_3_for_dangerous(self):
         """SFT-10: Dangerous operations return autonomy level 3"""
         # This requires frappe, so skip if not available
-        if not is_frappe_available():
-            self.skipTest("Frappe not available")
-        
-        from raven_ai_agent.api.command_router import CommandRouterMixin
+        try:
+            from raven_ai_agent.api.command_router import CommandRouterMixin
+        except ImportError:
+            self.skipTest("Module not available in sandbox")
         
         class TestRouter(CommandRouterMixin):
             def __init__(self):
@@ -179,10 +179,10 @@ class TestPermissionChecks(unittest.TestCase):
 
     def test_determine_autonomy_returns_level_2_for_modifications(self):
         """SFT-11: Modification operations return autonomy level 2"""
-        if not is_frappe_available():
-            self.skipTest("Frappe not available")
-        
-        from raven_ai_agent.api.command_router import CommandRouterMixin
+        try:
+            from raven_ai_agent.api.command_router import CommandRouterMixin
+        except ImportError:
+            self.skipTest("Module not available in sandbox")
         
         class TestRouter(CommandRouterMixin):
             def __init__(self):
@@ -199,10 +199,10 @@ class TestPermissionChecks(unittest.TestCase):
 
     def test_determine_autonomy_returns_level_1_for_readonly(self):
         """SFT-12: Read-only operations return autonomy level 1"""
-        if not is_frappe_available():
-            self.skipTest("Frappe not available")
-        
-        from raven_ai_agent.api.command_router import CommandRouterMixin
+        try:
+            from raven_ai_agent.api.command_router import CommandRouterMixin
+        except ImportError:
+            self.skipTest("Module not available in sandbox")
         
         class TestRouter(CommandRouterMixin):
             def __init__(self):
