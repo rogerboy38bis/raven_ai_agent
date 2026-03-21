@@ -17,35 +17,40 @@ class MemoryMixin:
 
     def get_morning_briefing(self) -> str:
         """Lucy Protocol: Load context at session start"""
-        # Get user's critical memories
-        memories = frappe.get_list(
-            "AI Memory",
-            filters={"user": self.user, "importance": ["in", ["Critical", "High"]]},
-            fields=["content", "importance", "source"],
-            order_by="creation desc",
-            limit=10
-        )
+        # Bug 63 fix: Handle PermissionError gracefully if bot user doesn't have access
+        try:
+            # Get user's critical memories
+            memories = frappe.get_list(
+                "AI Memory",
+                filters={"user": self.user, "importance": ["in", ["Critical", "High"]]},
+                fields=["content", "importance", "source"],
+                order_by="creation desc",
+                limit=10
+            )
 
-        # Get latest summary
-        summaries = frappe.get_list(
-            "AI Memory",
-            filters={"user": self.user, "memory_type": "Summary"},
-            fields=["content"],
-            order_by="creation desc",
-            limit=1
-        )
+            # Get latest summary
+            summaries = frappe.get_list(
+                "AI Memory",
+                filters={"user": self.user, "memory_type": "Summary"},
+                fields=["content"],
+                order_by="creation desc",
+                limit=1
+            )
 
-        briefing = "## Morning Briefing\n\n"
+            briefing = "## Morning Briefing\n\n"
 
-        if summaries:
-            briefing += f"**Last Session Summary:**\n{summaries[0].content}\n\n"
+            if summaries:
+                briefing += f"**Last Session Summary:**\n{summaries[0].content}\n\n"
 
-        if memories:
-            briefing += "**Key Facts:**\n"
-            for m in memories:
-                briefing += f"- [{m.importance}] {m.content}\n"
+            if memories:
+                briefing += "**Key Facts:**\n"
+                for m in memories:
+                    briefing += f"- [{m.importance}] {m.content}\n"
 
-        return briefing
+            return briefing
+        except frappe.PermissionError:
+            # Bot user doesn't have permission to access AI Memory
+            return ""
 
     def search_memories(self, query: str, limit: int = 5) -> List[Dict]:
         """RAG: Search relevant memories using vector similarity with citations"""
@@ -65,16 +70,20 @@ class MemoryMixin:
 
         # Fallback: Simple keyword search
         if not memories:
-            memories = frappe.get_list(
-                "AI Memory",
-                filters={
-                    "user": self.user,
-                    "content": ["like", f"%{query}%"]
-                },
-                fields=["name", "content", "importance", "importance_score", "source", "creation"],
-                order_by="importance_score desc, creation desc",
-                limit=limit
-            )
+            try:
+                memories = frappe.get_list(
+                    "AI Memory",
+                    filters={
+                        "user": self.user,
+                        "content": ["like", f"%{query}%"]
+                    },
+                    fields=["name", "content", "importance", "importance_score", "source", "creation"],
+                    order_by="importance_score desc, creation desc",
+                    limit=limit
+                )
+            except frappe.PermissionError:
+                # Bug 63 fix: Bot user doesn't have permission to access AI Memory
+                return []
 
         # Add citations to each memory
         for mem in memories:
