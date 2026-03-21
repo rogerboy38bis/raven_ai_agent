@@ -1,9 +1,11 @@
-# Unit Test Implementation Plan - Phase 4
+# Test Implementation Plan - Phase 4 & Phase 5
 
 ## Overview
-This document outlines the completion criteria for the unit test suite implementation across 4 agent modules.
+This document outlines the test suite implementation across 4 agent modules (Phase 4) and integration/safety tests (Phase 5).
 
-## Test Files Created
+## Phase 4: Unit Tests (57 tests)
+
+### Test Files Created
 
 ### 1. test_manufacturing_agent.py
 **Path:** `tests/test_manufacturing_agent.py`
@@ -136,9 +138,110 @@ pytest tests/test_manufacturing_agent.py::TestManufacturingAgent::test_create_wo
 - [x] Each test has descriptive docstring
 - [x] Run instructions provided
 
+## Phase 5: Integration & Safety Tests (31 tests)
+
+### 5. test_e2e_integration.py
+**Path:** `tests/test_e2e_integration.py`
+**Test Count:** 17 tests (15 passed, 2 skipped - require frappe)
+**Coverage:** End-to-end command routing and API integration
+
+| Test Name | Description |
+|-----------|-------------|
+| test_alexa_to_raven_creates_message | Alexa command creates Raven message in channel |
+| test_alexa_to_raven_missing_text | API rejects request without text |
+| test_determine_autonomy_level_3_for_dangerous_ops | Dangerous operations get autonomy level 3 |
+| test_determine_autonomy_level_2_for_modifications | Modification operations get autonomy level 2 |
+| test_determine_autonomy_level_1_for_readonly | Read-only queries get autonomy level 1 |
+| test_workflow_orchestrator_routes_so_creation | 'create sales order' routes to workflow |
+| test_payment_agent_routes_payment_commands | Payment commands route to payment agent |
+| test_manufacturing_agent_routes_manufacturing_commands | Manufacturing commands route to agent |
+| test_adversarial_commands_are_blocked | Adversarial commands are identified |
+| test_delete_operations_blocked_from_alexa_origin | Delete operations blocked for Alexa |
+| test_cancel_operations_blocked_from_alexa_origin | Cancel operations blocked for Alexa |
+| test_submit_operations_blocked_from_alexa_origin | Submit operations blocked for Alexa |
+| test_prompt_injection_detected | Prompt injection attempts are blocked |
+| test_golden_path_coverage | Golden path commands have sufficient coverage |
+| test_edge_case_coverage | Edge cases have sufficient coverage |
+| test_adversarial_coverage | Adversarial cases have sufficient coverage |
+| test_all_utterances_have_required_fields | All utterances have required fields |
+
+### 6. test_safety_guardrails.py
+**Path:** `tests/test_safety_guardrails.py`
+**Test Count:** 14 tests
+**Coverage:** Safety guardrails and permission checks
+
+| Test Name | Description |
+|-----------|-------------|
+| test_alexa_delete_blocked | Alexa cannot issue delete commands |
+| test_alexa_cancel_blocked | Alexa cannot issue cancel commands |
+| test_alexa_submit_blocked | Alexa cannot issue submit commands |
+| test_alexa_bulk_delete_blocked | Alexa cannot issue bulk delete commands |
+| test_ignore_previous_instructions_blocked | 'Ignore previous instructions' blocked |
+| test_admin_mode_injection_blocked | 'Admin mode' injection blocked |
+| test_prompt_injection_patterns_identified | Common injection patterns identified |
+| test_api_key_exposure_blocked | Agent refuses to show API keys |
+| test_secret_exposure_patterns_identified | Secret exfiltration patterns blocked |
+| test_determine_autonomy_returns_level_3_for_dangerous | Dangerous ops return level 3 |
+| test_determine_autonomy_returns_level_2_for_modifications | Modifications return level 2 |
+| test_determine_autonomy_returns_level_1_for_readonly | Read-only returns level 1 |
+| test_all_adversarial_blocked | All adversarial utterances blocked |
+| test_safety_coverage_complete | Safety test coverage comprehensive |
+
+### 7. test_utterances.json
+**Path:** `tests/test_utterances.json`
+**Test Count:** 30 sample utterances
+**Coverage:** Voice command library for testing
+
+| Category | Count | Description |
+|----------|-------|-------------|
+| golden_path | 13 | Happy path commands |
+| edge_case | 8 | Ambiguous/missing data |
+| adversarial | 9 | Destructive/security violations |
+
+## Running the Tests
+
+### Run All Tests (Phase 4 + Phase 5)
+```bash
+cd raven_ai_agent
+pytest tests/ -v
+```
+
+### Run Only Unit Tests (Phase 4)
+```bash
+pytest tests/test_manufacturing_agent.py -v
+pytest tests/test_payment_agent.py -v
+pytest tests/test_sales_order_followup_agent.py -v
+pytest tests/test_workflow_orchestrator.py -v
+```
+
+### Run Only Integration Tests (Phase 5)
+```bash
+pytest tests/test_e2e_integration.py -v
+pytest tests/test_safety_guardrails.py -v
+```
+
+### Run Single Test File
+```bash
+pytest tests/test_manufacturing_agent.py -v
+```
+
+## Test Summary
+
+| Phase | Test File | Tests | Status |
+|-------|-----------|-------|--------|
+| Phase 4 | test_manufacturing_agent.py | 18 | ✅ Pass |
+| Phase 4 | test_payment_agent.py | 10 | ✅ Pass |
+| Phase 4 | test_sales_order_followup_agent.py | 18 | ✅ Pass |
+| Phase 4 | test_workflow_orchestrator.py | 13 | ✅ Pass |
+| Phase 5 | test_e2e_integration.py | 17 | ✅ Pass (2 skip) |
+| Phase 5 | test_safety_guardrails.py | 14 | ✅ Pass |
+| | **TOTAL** | **90** | **88 pass, 2 skip** |
+
 ## Notes
 
-- All tests are designed to run without a Frappe/ERPNext instance
+- All tests are designed to run without a Frappe/ERPNext instance (except 2 that skip gracefully)
 - Mock patterns follow best practices for frappe framework isolation
 - Tests verify both success and failure scenarios
 - Command parsing tests ensure proper regex handling
+- Safety tests validate that destructive operations are blocked from Alexa origin
+- Utterance library provides comprehensive test coverage for command routing
