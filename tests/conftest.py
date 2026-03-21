@@ -110,6 +110,32 @@ def _create_mock_frappe_module():
     frappe_module.throw = MagicMock(side_effect=Exception)
     frappe_module.get_doc = MagicMock()
     frappe_module.new_doc = MagicMock()
+    frappe_module.copy_doc = MagicMock()
+    frappe_module.get_all = MagicMock(return_value=[])
+    frappe_module.get_value = MagicMock()
+    frappe_module.exists = MagicMock()
+    
+    # frappe.whitelist decorator - used to expose functions to web API
+    def whitelist(fn):
+        """Mock whitelist decorator - just returns the function as-is"""
+        return fn
+    
+    frappe_module.whitelist = whitelist
+    
+    # Mock frappe.utils
+    frappe_module.utils.nowdate = lambda: "2026-03-21"
+    frappe_module.utils.today = lambda: "2026-03-21"
+    
+    # Mock frappe.defaults
+    frappe_module.defaults = MagicMock()
+    frappe_module.defaults.get_user_default = MagicMock(return_value="AMB-Wellness")
+    
+    # Mock frappe.log_error
+    frappe_module.log_error = MagicMock()
+    
+    # Mock frappe.db.commit and rollback
+    frappe_module.db.commit = MagicMock()
+    frappe_module.db.rollback = MagicMock()
     
     return frappe_module
 
@@ -168,7 +194,15 @@ def pytest_configure(config):
     sys.modules["frappe"] = mock_frappe
     
     # Mock frappe sub-modules
-    sys.modules["frappe.utils"] = mock_frappe.utils
+    frappe_utils = types.ModuleType("frappe.utils")
+    frappe_utils.nowdate = lambda: "2026-03-21"
+    frappe_utils.today = lambda: "2026-03-21"
+    sys.modules["frappe.utils"] = frappe_utils
+    
+    frappe_defaults = types.ModuleType("frappe.defaults")
+    frappe_defaults.get_user_default = MagicMock(return_value="AMB-Wellness")
+    sys.modules["frappe.defaults"] = frappe_defaults
+    
     sys.modules["frappe.model"] = MagicMock()
     sys.modules["frappe.model.document"] = MagicMock()
     sys.modules["frappe.utils.data"] = MagicMock()
