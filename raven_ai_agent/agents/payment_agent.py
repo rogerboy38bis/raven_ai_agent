@@ -46,6 +46,101 @@ class PaymentAgent:
         slug = doctype.lower().replace(" ", "-")
         return f"[{name}](https://{self.site_name}/app/{slug}/{name})"
 
+    def _trace_to_quotation(self, payment_entry) -> Optional[object]:
+        """Trace from Payment Entry -> Sales Invoice -> Sales Order -> Quotation.
+        
+        Returns the Quotation doc if found, None otherwise.
+        """
+        try:
+            # Get the first Sales Invoice reference
+            for ref in payment_entry.references:
+                if ref.reference_doctype == "Sales Invoice":
+                    si_name = ref.reference_name
+                    si = frappe.get_doc("Sales Invoice", si_name)
+                    
+                    # Trace SI -> SO -> QTN
+                    for item in si.items or []:
+                        so_name = getattr(item, 'sales_order', None)
+                        if so_name:
+                            so = frappe.get_doc("Sales Order", so_name)
+                            # Trace SO -> QTN
+                            for so_item in so.items or []:
+                                qtn_name = getattr(so_item, 'prevdoc_docname', None)
+                                if qtn_name:
+                                    return frappe.get_doc("Quotation", qtn_name)
+        except Exception:
+            pass
+        return None
+
+    def _ensure_customer_address_and_contact(self, pe: object) -> Dict:
+        """Pre-flight check: Ensure Customer has primary address and contact.
+        
+        If Customer is missing customer_primary_address or customer_primary_contact,
+        trace back through the payment chain (PE -> SI -> SO -> QTN) to find them.
+        
+        Returns:
+            Dict with 'success' (bool), 'fixed' (list of what was fixed), 'error' (if any)
+        """
+        try:
+            # Get customer from payment entry
+            customer_name = pe.party
+            if not customer_name:
+                return {"success": True, "fixed": [], "error": None}  # Nothing to fix
+            
+            customer_doc = frappe.get_doc("Customer", customer_name)
+            
+            fixed = []
+            errors = []
+            
+            # Check if customer_primary_address is set
+            if not getattr(customer_doc, 'customer_primary_address', None):
+                # Trace to find address from Quotation
+                qtn = self._trace_to_quotation(pe)
+                if qtn and getattr(qtn, 'customer_address', None):
+                    customer_doc.customer_primary_address = qtn.customer_address
+                    fixed.append(f"customer_primary_address -> {qtn.customer_address}")
+                else:
+                    errors.append("Customer Primary Address not found in linked Quotation")
+            
+            # Check if customer_primary_contact is set
+            if not getattr(customer_doc, 'customer_primary_contact', None):
+                # Trace to find contact from Quotation
+                qtn = self._trace_to_quotation(pe)
+                if qtn and getattr(qtn, 'contact_person', None):
+                    customer_doc.customer_primary_contact = qtn.contact_person
+                    fixed.append(f"customer_primary_contact -> {qtn.contact_person}")
+                else:
+                    # Try getting from Sales Invoice directly
+                    for ref in pe.references:
+                        if ref.reference_doctype == "Sales Invoice":
+                            si = frappe.get_doc("Sales Invoice", ref.reference_name)
+                            if getattr(si, 'contact_person', None):
+                                customer_doc.customer_primary_contact = si.contact_person
+                                fixed.append(f"customer_primary_contact -> {si.contact_person}")
+                                break
+            
+            # Save if we made changes
+            if fixed:
+                customer_doc.save(ignore_permissions=True)
+                frappe.db.commit()
+            
+            if errors and not fixed:
+                # Construct helpful error message
+                customer_link = self.make_link("Customer", customer_name)
+                error_msg = (
+                    f"Cannot submit payment: Customer {customer_link} has no Primary Address. "
+                    f"Address not found in the linked Quotation/Sales Order/Sales Invoice chain either. "
+                    f"Please set the address manually at: {customer_link}"
+                )
+                return {"success": False, "fixed": fixed, "error": error_msg}
+            
+            return {"success": True, "fixed": fixed, "error": None}
+            
+        except frappe.DoesNotExistError:
+            return {"success": True, "fixed": [], "error": None}  # Customer doesn't exist, let ERPNext handle it
+        except Exception as e:
+            return {"success": True, "fixed": [], "error": None}  # Don't block on errors, let ERPNext handle
+
     # ========== PAYMENT ENTRY OPERATIONS (Step 8) ==========
 
     def create_payment_entry(self, si_name: str, amount: float = None,
@@ -323,8 +418,25 @@ class PaymentAgent:
             if pe.docstatus == 2:
                 return {"success": False, "error": f"Payment Entry {pe_name} is cancelled."}
 
+            # Pre-flight check: Ensure Customer has primary address and contact
+            # This prevents "Please, update Customer Primary Address" errors
+            preflight = self._ensure_customer_address_and_contact(pe)
+            if not preflight["success"]:
+                # Return helpful error with manual action link
+                return {"success": False, "error": preflight["error"]}
+            
+            # If we fixed something, reload the PE to get updated references
+            if preflight["fixed"]:
+                frappe.db.commit()
+                pe.reload()
+
             pe.submit()
             frappe.db.commit()
+
+            # Build success message with any fixes applied
+            fix_msg = ""
+            if preflight["fixed"]:
+                fix_msg = f"\n\n🔧 **Auto-fixed:** {', '.join(preflight['fixed'])}"
 
             return {
                 "success": True,
@@ -336,6 +448,7 @@ class PaymentAgent:
                     f"  Amount: {pe.paid_amount} {pe.paid_from_account_currency}\n"
                     f"  Mode: {pe.mode_of_payment or 'Not set'}\n"
                     f"  Reference: {pe.reference_no or 'N/A'}"
+                    f"{fix_msg}"
                 )
             }
 
