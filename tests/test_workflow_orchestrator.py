@@ -77,7 +77,10 @@ class TestWorkflowOrchestrator(unittest.TestCase):
     def test_run_full_cycle_so_not_found(self):
         """W-03: Test handling when Sales Order does not exist"""
         from raven_ai_agent.agents.workflow_orchestrator import WorkflowOrchestrator
-        from tests.conftest import DoesNotExistError
+        
+        # Define local exception that inherits from Exception (not MagicMock)
+        class DoesNotExistError(Exception):
+            pass
 
         with patch('raven_ai_agent.agents.workflow_orchestrator.frappe') as mock_frappe:
             mock_frappe.DoesNotExistError = DoesNotExistError
