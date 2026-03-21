@@ -116,11 +116,17 @@ def _create_mock_frappe_module():
     frappe_module.exists = MagicMock()
     
     # frappe.whitelist decorator - used to expose functions to web API
-    def whitelist(fn):
-        """Mock whitelist decorator - just returns the function as-is"""
-        return fn
+    # Must work both as @frappe.whitelist() and @frappe.whitelist
+    class _WhitelistDecorator:
+        """Mock whitelist decorator that works with or without parentheses"""
+        def __call__(self, fn=None, **kwargs):
+            if fn is None:
+                # Called with parentheses @frappe.whitelist()
+                return lambda f: f
+            # Called without parentheses @frappe.whitelist
+            return fn
     
-    frappe_module.whitelist = whitelist
+    frappe_module.whitelist = _WhitelistDecorator()
     
     # Mock frappe.utils
     frappe_module.utils.nowdate = lambda: "2026-03-21"
