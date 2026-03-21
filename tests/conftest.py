@@ -5,56 +5,61 @@ This conftest.py fixes the import path collision issue where pytest picks up
 the outer __init__.py (apps/raven_ai_agent/__init__.py) instead of the inner
 package (apps/raven_ai_agent/raven_ai_agent/).
 
-CRITICAL: This MUST be loaded before any test decorators are evaluated.
+Uses autouse fixture to clear sys.modules before each test.
 """
 import sys
-import os
+import importlib
 from pathlib import Path
+from unittest.mock import MagicMock
+import pytest
+
+
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+
+
+@pytest.fixture(autouse=True)
+def fix_imports():
+    """Clear raven_ai_agent modules from sys.modules before each test"""
+    for k in list(sys.modules):
+        if k.startswith("raven_ai_agent"):
+            del sys.modules[k]
+    if PROJECT_ROOT in sys.path:
+        sys.path.remove(PROJECT_ROOT)
+    sys.path.insert(0, PROJECT_ROOT)
+    importlib.import_module("raven_ai_agent")
+    yield
 
 
 def pytest_configure(config):
-    """
-    Fix sys.path BEFORE any test imports happen.
+    """Setup mock frappe module with proper Exception classes"""
+    # Create proper Exception subclasses for frappe errors
+    DoesNotExistError = type('DoesNotExistError', (Exception,), {})
+    ValidationError = type('ValidationError', (Exception,), {})
+    PermissionError = type('PermissionError', (Exception,))
     
-    This runs before @patch decorators are evaluated, ensuring the correct
-    raven_ai_agent package is used.
-    """
-    # Find the actual project root (where raven_ai_agent package is)
-    current_file = Path(__file__).resolve()
-    tests_dir = current_file.parent
+    mock_frappe = MagicMock()
+    mock_frappe.local = MagicMock()
+    mock_frappe.db = MagicMock()
+    mock_frappe.utils = MagicMock()
+    mock_frappe._ = lambda x: x
+    mock_frappe.throw = MagicMock(side_effect=Exception)
     
-    # The project structure is:
-    # raven_ai_agent/
-    #   tests/
-    #     conftest.py
-    #   raven_ai_agent/
-    #     agents/
-    #       *.py
+    # Set proper Exception classes
+    mock_frappe.DoesNotExistError = DoesNotExistError
+    mock_frappe.ValidationError = ValidationError
+    mock_frappe.PermissionError = PermissionError
     
-    project_root = tests_dir.parent
-    
-    # Remove any incorrect paths that might cause import collisions
-    paths_to_remove = []
-    for p in sys.path:
-        if 'apps/raven_ai_agent' in p and p != str(project_root):
-            paths_to_remove.append(p)
-    
-    for p in paths_to_remove:
-        sys.path.remove(p)
-    
-    # Ensure the inner package path is first
-    inner_package = str(project_root / 'raven_ai_agent')
-    if inner_package not in sys.path:
-        sys.path.insert(0, inner_package)
-    
-    # Ensure project root is also in path for imports like 'from raven_ai_agent.agents...'
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-
-
-def pytest_collection_modifyitems(config, items):
-    """
-    Ensure conftest is loaded before any test runs.
-    This is a safety measure.
-    """
-    pass
+    sys.modules["frappe"] = mock_frappe
+    sys.modules["frappe.utils"] = mock_frappe.utils
+    sys.modules["frappe.model"] = MagicMock()
+    sys.modules["frappe.model.document"] = MagicMock()
+    sys.modules["frappe.utils.data"] = MagicMock()
+    sys.modules["erpnext"] = MagicMock()
+    sys.modules["erpnext.stock"] = MagicMock()
+    sys.modules["erpnext.stock.doctype"] = MagicMock()
+    sys.modules["erpnext.stock.doctype.stock_entry"] = MagicMock()
+    sys.modules["erpnext.selling"] = MagicMock()
+    sys.modules["erpnext.selling.doctype"] = MagicMock()
+    sys.modules["erpnext.selling.doctype.sales_order"] = MagicMock()
+    sys.modules["erpnext.controllers"] = MagicMock()
+    sys.modules["erpnext.controllers.stock_controller"] = MagicMock()

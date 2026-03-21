@@ -5,37 +5,7 @@ Unit Tests for PaymentAgent
 Run with: python -m pytest tests/test_payment_agent.py -v
 """
 import unittest
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-
-# Fix import path before any imports
-def setup_import_path():
-    """Ensure correct import path"""
-    current = Path(__file__).resolve()
-    project_root = current.parent.parent
-    package_path = project_root / 'raven_ai_agent'
-    if str(package_path) not in sys.path:
-        sys.path.insert(0, str(project_root))
-    if str(package_path) not in sys.path:
-        sys.path.insert(0, str(package_path))
-
-
-setup_import_path()
-
-
-def create_mock_frappe():
-    """Create a complete mock frappe module"""
-    mock = MagicMock()
-    mock.local = MagicMock()
-    mock.local.site = "test.erpnext.com"
-    mock.session = MagicMock()
-    mock.session.user = "Administrator"
-    mock.db = MagicMock()
-    mock.DoesNotExistError = Exception
-    mock.logger = MagicMock()
-    return mock
 
 
 class TestPaymentAgent(unittest.TestCase):
@@ -43,22 +13,18 @@ class TestPaymentAgent(unittest.TestCase):
     
     def setUp(self):
         """Set up mock frappe environment"""
-        self.mock_frappe = create_mock_frappe()
-    
-    def _apply_frappe_patch(self, mock_frappe_module):
-        """Helper to apply frappe mock to a module"""
-        mock_frappe_module.local = self.mock_frappe.local
-        mock_frappe_module.session = self.mock_frappe.session
-        mock_frappe_module.db = self.mock_frappe.db
+        self.mock_frappe = MagicMock()
+        self.mock_frappe.local = MagicMock()
+        self.mock_frappe.local.site = "test.erpnext.com"
+        self.mock_frappe.session = MagicMock()
+        self.mock_frappe.session.user = "Administrator"
+        self.mock_frappe.db = MagicMock()
     
     def test_create_payment_entry_happy_path(self):
         """P-01: Create Payment Entry — happy path"""
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            
-            # Mock SI
             mock_si = MagicMock()
             mock_si.name = "ACC-SINV-2026-00001"
             mock_si.docstatus = 1
@@ -68,7 +34,6 @@ class TestPaymentAgent(unittest.TestCase):
             mock_si.currency = "USD"
             mock_si.conversion_rate = 17.5
             
-            # Mock PE
             mock_pe = MagicMock()
             mock_pe.name = "ACC-PAY-2026-00001"
             mock_pe.docstatus = 0
@@ -79,9 +44,9 @@ class TestPaymentAgent(unittest.TestCase):
             
             with patch('raven_ai_agent.agents.payment_agent.get_payment_entry', return_value=mock_pe):
                 mock_frappe.db.get_value.side_effect = [
-                    "AMB-Wellness",  # company
-                    "Wire Transfer",  # mode_of_payment
-                    "Cash - AMB-W",  # cash_account
+                    "AMB-Wellness",
+                    "Wire Transfer",
+                    "Cash - AMB-W",
                 ]
                 mock_frappe.db.get_default.return_value = "AMB-Wellness"
                 
@@ -96,9 +61,6 @@ class TestPaymentAgent(unittest.TestCase):
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            
-            # Mock existing PE found via SQL
             mock_frappe.db.sql.return_value = [("ACC-PAY-EXISTING-001",)]
             
             agent = PaymentAgent()
@@ -112,18 +74,15 @@ class TestPaymentAgent(unittest.TestCase):
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            
             mock_si = MagicMock()
             mock_si.name = "ACC-SINV-2026-00001"
-            mock_si.docstatus = 0  # Draft
+            mock_si.docstatus = 0
             mock_si.outstanding_amount = 1000.0
             mock_frappe.get_doc.return_value = mock_si
             
             agent = PaymentAgent()
             result = agent.create_payment_entry("ACC-SINV-2026-00001")
             
-            # Should auto-submit first
             self.assertTrue(result.get("success"))
     
     def test_create_payment_entry_fully_paid(self):
@@ -131,12 +90,10 @@ class TestPaymentAgent(unittest.TestCase):
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            
             mock_si = MagicMock()
             mock_si.name = "ACC-SINV-2026-00001"
             mock_si.docstatus = 1
-            mock_si.outstanding_amount = 0.0  # Fully paid
+            mock_si.outstanding_amount = 0.0
             mock_frappe.get_doc.return_value = mock_si
             
             agent = PaymentAgent()
@@ -150,9 +107,6 @@ class TestPaymentAgent(unittest.TestCase):
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            
-            # Mock SI with USD currency
             mock_si = MagicMock()
             mock_si.name = "ACC-SINV-2026-00001"
             mock_si.docstatus = 1
@@ -163,7 +117,6 @@ class TestPaymentAgent(unittest.TestCase):
             mock_si.conversion_rate = 17.5
             mock_si.party_account_currency = "USD"
             
-            # Mock PE
             mock_pe = MagicMock()
             mock_pe.name = "ACC-PAY-2026-00001"
             mock_pe.docstatus = 0
@@ -190,12 +143,9 @@ class TestPaymentAgent(unittest.TestCase):
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            
-            # Mock PE
             mock_pe = MagicMock()
             mock_pe.name = "ACC-PAY-2026-00001"
-            mock_pe.docstatus = 0  # Draft
+            mock_pe.docstatus = 0
             mock_pe.party = "Test Customer"
             mock_pe.party_name = "Test Customer"
             mock_pe.paid_amount = 1000.0
@@ -206,7 +156,6 @@ class TestPaymentAgent(unittest.TestCase):
             mock_frappe.get_doc.return_value = mock_pe
             
             agent = PaymentAgent()
-            # Directly test submit by patching the preflight check
             with patch.object(agent, '_ensure_customer_address_and_contact', return_value={"success": True, "fixed": [], "error": None}):
                 result = agent.submit_payment_entry("ACC-PAY-2026-00001")
                 
@@ -218,9 +167,6 @@ class TestPaymentAgent(unittest.TestCase):
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            
-            # Mock PE
             mock_pe = MagicMock()
             mock_pe.name = "ACC-PAY-2026-00001"
             mock_pe.docstatus = 1
@@ -228,7 +174,6 @@ class TestPaymentAgent(unittest.TestCase):
             mock_pe.paid_from_account_currency = "MXN"
             mock_pe.party_name = "Test Customer"
             
-            # Mock SI reference with 0 outstanding
             mock_si = MagicMock()
             mock_si.outstanding_amount = 0.0
             
@@ -251,9 +196,6 @@ class TestPaymentAgent(unittest.TestCase):
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            
-            # Mock PE
             mock_pe = MagicMock()
             mock_pe.name = "ACC-PAY-2026-00001"
             mock_pe.docstatus = 1
@@ -261,7 +203,6 @@ class TestPaymentAgent(unittest.TestCase):
             mock_pe.paid_from_account_currency = "MXN"
             mock_pe.party_name = "Test Customer"
             
-            # Mock SI reference with outstanding
             mock_si = MagicMock()
             mock_si.outstanding_amount = 500.0
             
@@ -284,8 +225,6 @@ class TestPaymentAgent(unittest.TestCase):
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            
             mock_frappe.get_all.return_value = [
                 {"name": "ACC-SINV-2026-00001", "customer": "Cust1", "grand_total": 1000.0, 
                  "outstanding_amount": 500.0, "currency": "USD", "posting_date": "2026-01-01", "due_date": "2026-02-01"},
@@ -304,12 +243,9 @@ class TestPaymentAgent(unittest.TestCase):
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            
             mock_frappe.db.get_value.return_value = "Cash - AMB-W"
             
             agent = PaymentAgent()
-            # Test that the agent can be instantiated
             self.assertIsNotNone(agent)
 
 

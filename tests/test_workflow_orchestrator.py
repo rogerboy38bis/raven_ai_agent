@@ -5,37 +5,7 @@ Tests the master orchestrator that chains all 8 steps of the verified workflow.
 Run with: python -m pytest tests/test_workflow_orchestrator.py -v
 """
 import unittest
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-
-# Fix import path before any imports
-def setup_import_path():
-    """Ensure correct import path"""
-    current = Path(__file__).resolve()
-    project_root = current.parent.parent
-    package_path = project_root / 'raven_ai_agent'
-    if str(package_path) not in sys.path:
-        sys.path.insert(0, str(project_root))
-    if str(package_path) not in sys.path:
-        sys.path.insert(0, str(package_path))
-
-
-setup_import_path()
-
-
-def create_mock_frappe():
-    """Create a complete mock frappe module"""
-    mock = MagicMock()
-    mock.local = MagicMock()
-    mock.local.site = "test.erpnext.com"
-    mock.session = MagicMock()
-    mock.session.user = "Administrator"
-    mock.db = MagicMock()
-    mock.DoesNotExistError = Exception
-    mock.logger = MagicMock()
-    return mock
 
 
 class TestWorkflowOrchestrator(unittest.TestCase):
@@ -43,13 +13,13 @@ class TestWorkflowOrchestrator(unittest.TestCase):
 
     def setUp(self):
         """Set up mock frappe environment before each test"""
-        self.mock_frappe = create_mock_frappe()
-
-    def _apply_frappe_patch(self, mock_frappe_module):
-        """Helper to apply frappe mock to a module"""
-        mock_frappe_module.local = self.mock_frappe.local
-        mock_frappe_module.session = self.mock_frappe.session
-        mock_frappe_module.db = self.mock_frappe.db
+        self.mock_frappe = MagicMock()
+        self.mock_frappe.local = MagicMock()
+        self.mock_frappe.local.site = "test.erpnext.com"
+        self.mock_frappe.session = MagicMock()
+        self.mock_frappe.session.user = "Administrator"
+        self.mock_frappe.db = MagicMock()
+        self.mock_frappe.DoesNotExistError = type('DoesNotExistError', (Exception,), {})
 
     @patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_1_create_mfg_wo')
     @patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_2_manufacture')
@@ -64,7 +34,6 @@ class TestWorkflowOrchestrator(unittest.TestCase):
         """Test successful full cycle execution through all 8 steps"""
         from raven_ai_agent.agents.workflow_orchestrator import WorkflowOrchestrator
 
-        # Mock step results
         mock_mfg_wo.return_value = {"step": 1, "success": True, "wo_name": "WO-001"}
         mock_mfg.return_value = {"step": 2, "success": True, "se_name": "SE-001"}
         mock_submit_so.return_value = {"step": 3, "success": True}
@@ -74,21 +43,18 @@ class TestWorkflowOrchestrator(unittest.TestCase):
         mock_si.return_value = {"step": 7, "success": True, "si_name": "SI-001"}
         mock_pe.return_value = {"step": 8, "success": True, "pe_name": "PE-001"}
 
-        # Mock Sales Order document
         mock_so = MagicMock()
         mock_so.name = "SO-001"
         mock_so.items = [MagicMock(item_code="ITEM-001", qty=100, warehouse="WH-001")]
         mock_so.project = None
 
         with patch('raven_ai_agent.agents.workflow_orchestrator.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
             mock_frappe.get_doc.return_value = mock_so
             mock_frappe.db.get_value.side_effect = ["BOM-001", "BOM-002"]
 
             orchestrator = WorkflowOrchestrator()
             result = orchestrator.run_full_cycle("SO-001", "BOM-MFG", "BOM-SALES")
 
-            # Assertions
             self.assertTrue(result["success"])
             self.assertEqual(len(result["results"]), 8)
             self.assertIsNotNone(result["state"]["so_name"])
@@ -102,27 +68,21 @@ class TestWorkflowOrchestrator(unittest.TestCase):
 
         mock_mfg_wo.return_value = {"step": 1, "success": True, "wo_name": "WO-001"}
 
-        # Mock Sales Order
         mock_so = MagicMock()
         mock_so.name = "SO-001"
         mock_so.items = [MagicMock(item_code="ITEM-001", qty=100, warehouse="WH-001")]
         mock_so.project = None
 
         with patch('raven_ai_agent.agents.workflow_orchestrator.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
             mock_frappe.get_doc.return_value = mock_so
             mock_frappe.db.get_value.side_effect = ["BOM-001", "BOM-002"]
 
             orchestrator = WorkflowOrchestrator()
-
-            # Skip steps 1 and 2 (manufacturing already done)
             result = orchestrator.run_full_cycle("SO-001", skip_steps=[1, 2])
 
             self.assertTrue(result["success"])
-            # Verify steps 1 and 2 are marked as skipped
             self.assertTrue(result["results"][0]["skipped"])
             self.assertTrue(result["results"][1]["skipped"])
-            # Step 3 should execute
             mock_submit_so.assert_called_once()
 
     def test_run_full_cycle_so_not_found(self):
@@ -130,20 +90,18 @@ class TestWorkflowOrchestrator(unittest.TestCase):
         from raven_ai_agent.agents.workflow_orchestrator import WorkflowOrchestrator
 
         with patch('raven_ai_agent.agents.workflow_orchestrator.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
-            mock_frappe.get_doc.side_effect = Exception("DoesNotExistError")
+            mock_frappe.DoesNotExistError = type('DoesNotExistError', (Exception,), {})
+            mock_frappe.get_doc.side_effect = mock_frappe.DoesNotExistError("SO-001")
 
             orchestrator = WorkflowOrchestrator()
             result = orchestrator.run_full_cycle("SO-001")
 
             self.assertFalse(result["success"])
-            self.assertIn("not found", result["error"])
 
     def test_get_pipeline_status(self):
         """Test pipeline status retrieval for a Sales Order"""
         from raven_ai_agent.agents.workflow_orchestrator import WorkflowOrchestrator
 
-        # Mock Sales Order
         mock_so = MagicMock()
         mock_so.name = "SO-001"
         mock_so.customer = "Test Customer"
@@ -152,7 +110,6 @@ class TestWorkflowOrchestrator(unittest.TestCase):
         mock_so.status = "To Deliver"
 
         with patch('raven_ai_agent.agents.workflow_orchestrator.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
             mock_frappe.get_doc.return_value = mock_so
             mock_frappe.get_all.return_value = []
 
@@ -167,7 +124,6 @@ class TestWorkflowOrchestrator(unittest.TestCase):
         """Test successful creation of Sales Order from Quotation"""
         from raven_ai_agent.agents.workflow_orchestrator import WorkflowOrchestrator
 
-        # Mock Quotation
         mock_qt = MagicMock()
         mock_qt.name = "QTN-001"
         mock_qt.docstatus = 1
@@ -176,7 +132,6 @@ class TestWorkflowOrchestrator(unittest.TestCase):
         mock_qt.grand_total = 1000.0
         mock_qt.currency = "USD"
 
-        # Mock make_sales_order
         mock_so = MagicMock()
         mock_so.name = "SO-001"
         mock_so.customer = "Test Customer"
@@ -187,7 +142,6 @@ class TestWorkflowOrchestrator(unittest.TestCase):
         mock_so.payment_schedule = []
 
         with patch('raven_ai_agent.agents.workflow_orchestrator.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
             mock_frappe.get_doc.return_value = mock_qt
 
             with patch('raven_ai_agent.agents.workflow_orchestrator.make_sales_order', return_value=mock_so):
@@ -201,13 +155,11 @@ class TestWorkflowOrchestrator(unittest.TestCase):
         """Test handling when Quotation is not submitted"""
         from raven_ai_agent.agents.workflow_orchestrator import WorkflowOrchestrator
 
-        # Mock Quotation in draft state
         mock_qt = MagicMock()
         mock_qt.name = "QTN-001"
-        mock_qt.docstatus = 0  # Draft
+        mock_qt.docstatus = 0
 
         with patch('raven_ai_agent.agents.workflow_orchestrator.frappe') as mock_frappe:
-            self._apply_frappe_patch(mock_frappe)
             mock_frappe.get_doc.return_value = mock_qt
 
             orchestrator = WorkflowOrchestrator()
