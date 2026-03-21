@@ -223,6 +223,18 @@ def handle_raven_message(doc=None, method=None):
         # Check for @ai trigger — uses intent detection to route to correct agent
         if plain_text.lower().startswith("@ai"):
             query = plain_text[3:].strip()
+            
+            # Phase 7: Try intent resolution for natural language
+            resolved_command = None
+            try:
+                from raven_ai_agent.api.intent_resolver import resolve_intent_message
+                resolved_command = resolve_intent_message(query)
+                if resolved_command:
+                    frappe.logger().info(f"[IntentResolver] Using resolved command: {resolved_command}")
+                    query = resolved_command
+            except Exception as e:
+                frappe.logger().warning(f"[IntentResolver] Resolution failed, using raw query: {e}")
+            
             bot_name = _detect_ai_intent(query)
             frappe.logger().info(f"[AI Agent] @ai intent detected: {bot_name}")
         
