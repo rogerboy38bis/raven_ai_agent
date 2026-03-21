@@ -1334,10 +1334,20 @@ class SalesOrderFollowupAgent:
         """Process incoming command and return response - UPDATED with new commands"""
         message_lower = message.lower().strip()
         
-        # Extract SO name if present
-        so_pattern = r'(SO-[\w-]+|SAL-ORD-[\d-]+)'
+        # Extract SO name if present - Updated regex to capture names with spaces/dots
+        # Bug 62: Original pattern r'(SO-[\w-]+|SAL-ORD-[\d-]+)' stops at spaces
+        # New pattern captures more: SO-XXXXX followed by any chars until next keyword or end
+        so_pattern = r'(SO-[\w\-\.\s]+|SAL-ORD-[\d\-]+)'
         so_match = re.search(so_pattern, message, re.IGNORECASE)
-        so_name = so_match.group(1) if so_match else None
+        raw_so_name = so_match.group(1).strip() if so_match else None
+        
+        # Bug 62: Use intelligent lookup to find exact SO name in DB
+        so_name = None
+        if raw_so_name:
+            so_name = self._find_sales_order_intelligent(raw_so_name)
+            if not so_name:
+                # Fallback: try the raw extracted name (original behavior)
+                so_name = raw_so_name
 
         # Extract Quotation name
         qtn_pattern = r'(SAL-QTN-[\d-]+|QTN-[\d-]+)'
