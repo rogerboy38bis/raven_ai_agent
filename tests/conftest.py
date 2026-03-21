@@ -106,6 +106,8 @@ def _create_mock_frappe_module():
     
     frappe_module.local = MagicMock()
     frappe_module.db = MagicMock()
+    frappe_module.db.get_value = MagicMock(return_value=0)
+    frappe_module.db.get_all = MagicMock(return_value=[])
     frappe_module.utils = MagicMock()
     frappe_module.throw = MagicMock(side_effect=Exception)
     frappe_module.get_doc = MagicMock()
@@ -209,6 +211,10 @@ def pytest_configure(config):
     sys.modules["frappe"] = mock_frappe
     
     # Mock frappe sub-modules
+    # Ensure frappe.db has proper return values
+    mock_frappe.db.get_value.return_value = 0
+    mock_frappe.db.get_all.return_value = []
+    
     frappe_utils = types.ModuleType("frappe.utils")
     frappe_utils.nowdate = lambda: "2026-03-21"
     frappe_utils.today = lambda: "2026-03-21"
