@@ -129,8 +129,14 @@ def _create_mock_frappe_module():
     frappe_module.whitelist = _WhitelistDecorator()
     
     # Mock frappe.utils
+    frappe_module.utils = types.ModuleType("frappe.utils")
     frappe_module.utils.nowdate = lambda: "2026-03-21"
     frappe_module.utils.today = lambda: "2026-03-21"
+    frappe_module.utils.getdate = lambda x=None: x
+    frappe_module.utils.now_datetime = lambda: "2026-03-21 12:00:00"
+    frappe_module.utils.add_days = lambda date, days: date
+    frappe_module.utils.date_diff = lambda end, start: 0
+    frappe_module.utils.fmt_money = lambda x: str(x)
     
     # Mock frappe.defaults
     frappe_module.defaults = MagicMock()
@@ -203,6 +209,11 @@ def pytest_configure(config):
     frappe_utils = types.ModuleType("frappe.utils")
     frappe_utils.nowdate = lambda: "2026-03-21"
     frappe_utils.today = lambda: "2026-03-21"
+    frappe_utils.getdate = lambda x=None: x
+    frappe_utils.now_datetime = lambda: "2026-03-21 12:00:00"
+    frappe_utils.add_days = lambda date, days: date
+    frappe_utils.date_diff = lambda end, start: 0
+    frappe_utils.fmt_money = lambda x: str(x)
     sys.modules["frappe.utils"] = frappe_utils
     
     frappe_defaults = types.ModuleType("frappe.defaults")
