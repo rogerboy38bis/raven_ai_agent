@@ -52,8 +52,10 @@ def _detect_ai_intent(query: str) -> str:
         return "sales_order_bot"
     if re.search(r'^diagnose\s+SAL-QTN-', query, re.IGNORECASE):
         return "sales_order_bot"
+    # Bug 62 fix: Route diagnose SO- to sales_order_follow_up (not old sales_order_bot)
+    # The old sales_order_bot returns placeholder text; sales_order_follow_up has full functionality
     if re.search(r'^diagnose\s+SO-', query, re.IGNORECASE):
-        return "sales_order_bot"
+        return "sales_order_follow_up"
 
     # === PRIORITY: Data Quality Scanner / Diagnosis commands ===
     # These commands should ALWAYS go to the skills system, NOT sales_order_follow_up

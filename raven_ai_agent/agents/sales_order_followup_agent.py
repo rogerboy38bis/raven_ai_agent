@@ -1407,6 +1407,34 @@ class SalesOrderFollowupAgent:
                 return "\n".join(lines) if result["count"] > 0 else "✅ No pending sales orders."
             return f"❌ Error: {result['error']}"
         
+        # ---- DIAGNOSIS ----
+        # Bug 62 fix: Explicit diagnose command support (falls through to status)
+        if "diagnose" in message_lower and so_name:
+            result = self.get_so_status(so_name)
+            if result["success"]:
+                msg = (
+                    f"🔍 **Diagnosis for {result['link']}**\n\n"
+                    f"  Customer: {result['customer']}\n"
+                    f"  Status: **{result['status']}**\n"
+                    f"  Delivery: {result['delivery_status']} | Billing: {result['billing_status']}\n"
+                    f"  Total: {result['grand_total']}\n"
+                    f"  Delivery Date: {result['delivery_date']}\n"
+                    f"  Inventory: {'✅ Sufficient' if result['inventory_sufficient'] else '❌ Insufficient'}\n\n"
+                    f"  ➡️ **Next:** {result['next_action']}\n"
+                )
+                # Show linked documents
+                linked = result["linked_documents"]
+                if linked.get("work_orders"):
+                    msg += "\n🏭 **Work Orders:** " + ", ".join(
+                        f"{wo['name']} ({wo['status']})" for wo in linked["work_orders"]
+                    )
+                if linked.get("delivery_notes"):
+                    msg += "\n📦 **Delivery Notes:** " + ", ".join(linked["delivery_notes"])
+                if linked.get("sales_invoices"):
+                    msg += "\n🧾 **Sales Invoices:** " + ", ".join(linked["sales_invoices"])
+                return msg
+            return f"❌ {result['error']}"
+        
         # ---- STATUS ----
         if ("status" in message_lower or "estado" in message_lower) and so_name:
             result = self.get_so_status(so_name)
