@@ -329,6 +329,51 @@ class RaymondLucyAgent(
 
             answer = response.choices[0].message.content
 
+            # Phase 8A: Anti-Hallucination Validation
+            # Extract context data from erpnext_context for validation
+            context_data = {}
+            if erpnext_context:
+                # Try to extract key data from erpnext_context for validation
+                import re
+                # Extract document name if present
+                doc_match = re.search(r'(?:SO|QTN|DN|SI|WO|MR|Purchase Order)[\s\-]?[\w\-\.]+', erpnext_context, re.IGNORECASE)
+                if doc_match:
+                    context_data["document_name"] = doc_match.group()
+                
+                # Extract amounts
+                amounts = re.findall(r'(?:total|grand_total|amount|balance)[:\s]+\$?([\d,]+\.?\d*)', erpnext_context, re.IGNORECASE)
+                if amounts:
+                    try:
+                        context_data["amount"] = float(amounts[0].replace(',', ''))
+                    except ValueError:
+                        pass
+                
+                # Extract status
+                status_match = re.search(r'status[:\s]+(\w+)', erpnext_context, re.IGNORECASE)
+                if status_match:
+                    context_data["status"] = status_match.group(1)
+            
+            # Validate response against real data
+            validation_result = None
+            try:
+                from raven_ai_agent.api.truth_hierarchy import validate_and_sanitize
+                validation_result = validate_and_sanitize(answer, context_data)
+                
+                # Log validation results
+                if not validation_result.get("validated", True):
+                    frappe.logger().warning(
+                        f"[Anti-Hallucination] Validation failed for response. "
+                        f"Confidence: {validation_result.get('confidence', 0):.2f}, "
+                        f"Corrections: {len(validation_result.get('corrections', []))}"
+                    )
+                
+                # Use the validated/sanitized response
+                answer = validation_result.get("final_response", answer)
+                
+            except Exception as e:
+                # Validation should never break the response
+                frappe.logger().warning(f"[Anti-Hallucination] Validation error (non-fatal): {e}")
+
             return {
                 "success": True,
                 "response": answer,
