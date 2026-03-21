@@ -183,7 +183,7 @@ class TestWorkflowOrchestrator(unittest.TestCase):
             orchestrator = WorkflowOrchestrator()
             result = orchestrator.process_command("@workflow run SO-001")
 
-            mock_run.assert_called_once_with("SO-001", None, None, None)
+            mock_run.assert_called_once_with("SO-001", mfg_bom=None, sales_bom=None, skip_steps=None)
             self.assertIn("completed", result)
 
     def test_process_command_status_with_so(self):

@@ -269,6 +269,16 @@ def restore_frappe_exceptions():
             frappe_mod.exceptions = MOCK_FRAPPE.exceptions
             for name, exc_class in FRAPPE_EXCEPTIONS.items():
                 setattr(frappe_mod.exceptions, name, exc_class)
+    
+    # Also fix any raven_ai_agent agent modules that might have patched frappe
+    for mod_name in list(sys.modules.keys()):
+        if "raven_ai_agent" in mod_name and sys.modules[mod_name]:
+            mod = sys.modules[mod_name]
+            if hasattr(mod, 'frappe'):
+                frappe_attr = getattr(mod, 'frappe', None)
+                if frappe_attr is not None:
+                    for name, exc_class in FRAPPE_EXCEPTIONS.items():
+                        setattr(frappe_attr, name, exc_class)
 
 
 def pytest_configure(config):
