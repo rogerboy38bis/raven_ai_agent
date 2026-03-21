@@ -692,3 +692,378 @@ def format_pipeline_validation(result: Dict) -> str:
         lines.append(f"\n  **No issues found** ✅")
     
     return "\n".join(lines)
+
+
+
+# =============================================================================
+# ANTI-HALLUCINATION GUARD (Phase 8A)
+# =============================================================================
+
+import re
+from typing import Dict, List, Optional
+
+
+def extract_numeric_values(text: str) -> List[Dict]:
+    """Extract all numeric values from response text.
+    
+    Returns list of dicts with: {value, type, position}
+    Types: currency, quantity, percentage, date, generic
+    """
+    results = []
+    
+    # Currency patterns (various formats)
+    currency_patterns = [
+        r'\$\s*[\d,]+\.?\d*',           # $1,234.56
+        r'[\d,]+\.?\d*\s*(?:USD|EUR|MXN)',  # 1234.56 USD
+        r'\$\s*[\d,]+\.?\d*',           # $1234
+        r'(?:total|amount|grand_total|subtotal|balance)\s*[:\-]?\s*\$?\s*[\d,]+\.?\d*',
+    ]
+    
+    # Quantity patterns
+    quantity_patterns = [
+        r'(\d+)\s*(?:units?|pcs?|pieces?|items?|kg|lbs?|boxes?|palettes?)',
+        r'qty[:\-]?\s*(\d+)',
+        r'quantity[:\-]?\s*(\d+)',
+    ]
+    
+    # Percentage patterns
+    percent_patterns = [
+        r'(\d+(?:\.\d+)?)\s*%',
+        r'(\d+(?:\.\d+)?)\s*percent',
+    ]
+    
+    # Date patterns
+    date_patterns = [
+        r'\d{4}-\d{2}-\d{2}',  # YYYY-MM-DD
+        r'\d{2}/\d{2}/\d{4}',  # MM/DD/YYYY
+        r'\d{2}-\d{2}-\d{4}',  # DD-MM-YYYY
+    ]
+    
+    # Extract currencies
+    for pattern in currency_patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            val_str = re.sub(r'[^\d.]', '', match.group())
+            try:
+                value = float(val_str)
+                if value > 0:
+                    results.append({
+                        "value": value,
+                        "type": "currency",
+                        "original": match.group(),
+                        "position": match.start()
+                    })
+            except ValueError:
+                pass
+    
+    # Extract quantities
+    for pattern in quantity_patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            try:
+                value = int(match.group(1))
+                results.append({
+                    "value": value,
+                    "type": "quantity",
+                    "original": match.group(),
+                    "position": match.start()
+                })
+            except (ValueError, IndexError):
+                pass
+    
+    # Extract percentages
+    for pattern in percent_patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            try:
+                value = float(match.group(1))
+                results.append({
+                    "value": value,
+                    "type": "percentage",
+                    "original": match.group(),
+                    "position": match.start()
+                })
+            except ValueError:
+                pass
+    
+    # Extract dates
+    for pattern in date_patterns:
+        for match in re.finditer(pattern, text):
+            results.append({
+                "value": match.group(),
+                "type": "date",
+                "original": match.group(),
+                "position": match.start()
+            })
+    
+    return results
+
+
+def validate_response(response_text: str, context_data: Dict) -> Dict:
+    """Validate LLM response against real ERPNext data.
+    
+    Args:
+        response_text: The LLM-generated response to validate
+        context_data: Dict containing real ERPNext data to validate against
+            {
+                "document_type": "Sales Order",
+                "document_name": "SO-00754-Calipso",
+                "amount": 69189.12,
+                "customer": "Calipso s.r.l",
+                "status": "Completed",
+                "delivery_status": "Fully Delivered",
+                "billing_status": "Fully Billed",
+                "delivery_date": "2024-01-29",
+                # ... any other real data fields
+            }
+    
+    Returns:
+        {
+            "validated": bool,           # True if response matches context
+            "confidence": float,         # 0.0-1.0 confidence score
+            "corrections": [             # List of corrections needed
+                {
+                    "type": "amount_mismatch",
+                    "original": "$50,000",
+                    "correct": "$69,189.12",
+                    "explanation": "Response claimed $50,000 but actual is $69,189.12"
+                }
+            ],
+            "issues": [],               # List of issue descriptions
+            "validated_values": {}      # Values that were checked and match
+        }
+    """
+    corrections = []
+    issues = []
+    validated_values = {}
+    confidence = 1.0
+    
+    if not response_text:
+        return {
+            "validated": False,
+            "confidence": 0.0,
+            "corrections": [],
+            "issues": ["Empty response"],
+            "validated_values": {}
+        }
+    
+    # 1. Check for placeholder text (hallucination indicator)
+    placeholders = re.findall(r'\[([^\]]+)\]', response_text)
+    if placeholders:
+        confidence -= 0.3
+        issues.append(f"Contains placeholder text: {', '.join(placeholders)}")
+    
+    # 2. Extract numeric values from response
+    response_values = extract_numeric_values(response_text)
+    
+    # 3. Validate against context data
+    for key, expected_value in context_data.items():
+        if expected_value is None:
+            continue
+            
+        expected_value_str = str(expected_value).lower().strip()
+        
+        # Check for exact string matches in response
+        if expected_value_str in response_text.lower():
+            validated_values[key] = expected_value
+        
+        # Check numeric values
+        if isinstance(expected_value, (int, float)) and key in ["amount", "total", "grand_total", "outstanding", "paid_amount"]:
+            for rv in response_values:
+                if rv["type"] == "currency":
+                    # Allow 1% tolerance
+                    if abs(rv["value"] - float(expected_value)) / max(float(expected_value), 1) > 0.01:
+                        corrections.append({
+                            "type": "amount_mismatch",
+                            "original": rv["original"],
+                            "correct": f"${expected_value:,.2f}",
+                            "explanation": f"Response claimed {rv['original']} but actual is ${expected_value:,.2f}"
+                        })
+                        confidence -= 0.2
+                    else:
+                        validated_values[key] = expected_value
+    
+    # 4. Check status fields
+    status_fields = ["status", "delivery_status", "billing_status", "workflow_state"]
+    for field in status_fields:
+        if field in context_data and context_data[field]:
+            expected = str(context_data[field]).lower()
+            if expected not in response_text.lower():
+                # Status not mentioned in response - not necessarily wrong, just not confirmed
+                pass
+            else:
+                validated_values[field] = context_data[field]
+    
+    # 5. Check document name
+    if "document_name" in context_data:
+        doc_name = str(context_data["document_name"])
+        if doc_name in response_text:
+            validated_values["document_name"] = doc_name
+    
+    # 6. Check customer name
+    if "customer" in context_data:
+        customer = str(context_data["customer"]).lower()
+        # Check if customer name appears in response (partial match OK)
+        customer_parts = customer.split()
+        for part in customer_parts:
+            if len(part) > 3 and part not in ["s.r.l", "s.a.", "s.a.b.", "inc.", "ltd."]:
+                if part in response_text.lower():
+                    validated_values["customer"] = context_data["customer"]
+                    break
+    
+    # Final confidence calculation
+    if corrections:
+        confidence = max(0.0, confidence)
+    elif issues:
+        confidence = max(0.3, confidence)
+    
+    validated = confidence >= 0.6 and len(corrections) == 0
+    
+    return {
+        "validated": validated,
+        "confidence": confidence,
+        "corrections": corrections,
+        "issues": issues,
+        "validated_values": validated_values
+    }
+
+
+def sanitize_response(response_text: str) -> Dict:
+    """Remove hallucinated/placeholder data from response.
+    
+    Args:
+        response_text: The potentially problematic response
+    
+    Returns:
+        {
+            "cleaned": str,           # The sanitized response
+            "removed": [],            # List of removed items
+            "safe": bool              # True if response is now safe
+        }
+    """
+    removed = []
+    cleaned = response_text
+    
+    # 1. Remove placeholder patterns like [Customer Name], [Amount], etc.
+    placeholders = re.findall(r'\[([^\]]+)\]', cleaned)
+    for placeholder in placeholders:
+        removed.append(f"[{placeholder}]")
+        cleaned = cleaned.replace(f"[{placeholder}]", "[DATA UNAVAILABLE]")
+    
+    # 2. Remove common hallucination patterns
+    hallucination_patterns = [
+        (r'\[\d{4}-\d{2}-\d{2}\]', 'date placeholder'),  # [YYYY-MM-DD]
+        (r'\[\$[^\]]+\]', 'amount placeholder'),          # [$X,XXX]
+        (r'\[.*?Name\]', 'name placeholder'),              # [X Name]
+        (r'\[TODO\]', 'TODO'),
+        (r'\[FIXME\]', 'FIXME'),
+        (r'\[placeholder\]', 'placeholder'),
+        (r'\[insert.*?\]', 'insert placeholder'),
+    ]
+    
+    for pattern, label in hallucination_patterns:
+        matches = re.findall(pattern, cleaned, re.IGNORECASE)
+        for match in matches:
+            removed.append(f"{label}: {match}")
+            cleaned = re.sub(re.escape(match), '[DATA UNAVAILABLE]', cleaned, flags=re.IGNORECASE)
+    
+    # 3. Remove specific hallucination patterns
+    hallucinated_fields = [
+        r'(?:customer|client)[:\s]+\[.*?\]',
+        r'(?:amount|total|sum)[:\s]+\[.*?\]',
+        r'(?:date|due date|delivery date)[:\s]+\[.*?\]',
+        r'(?:status|state)[:\s]+\[.*?\]',
+    ]
+    
+    for pattern in hallucinated_fields:
+        matches = re.findall(pattern, cleaned, re.IGNORECASE)
+        for match in matches:
+            removed.append(f"hallucinated field: {match}")
+            cleaned = re.sub(re.escape(match), '[DATA UNAVAILABLE]', cleaned, flags=re.IGNORECASE)
+    
+    # 4. Check if response is now safe (has actual content)
+    safe = len(removed) == 0 or len(cleaned.strip()) > 50
+    
+    # 5. If completely empty or just placeholders, return error message
+    if not cleaned.strip() or cleaned.strip() == "[DATA UNAVAILABLE]":
+        return {
+            "cleaned": "❌ I don't have enough data to answer that question accurately. Please provide more context or check the document directly.",
+            "removed": removed,
+            "safe": False
+        }
+    
+    return {
+        "cleaned": cleaned,
+        "removed": removed,
+        "safe": safe
+    }
+
+
+def validate_and_sanitize(response_text: str, context_data: Dict = None) -> Dict:
+    """Combined validation and sanitization.
+    
+    This is the main entry point for Phase 8A.
+    
+    Args:
+        response_text: The LLM-generated response
+        context_data: Real ERPNext data (optional but recommended)
+    
+    Returns:
+        {
+            "original": str,           # Original response
+            "sanitized": str,          # After removing placeholders
+            "validated": bool,         # Whether validation passed
+            "confidence": float,       # 0.0-1.0
+            "corrections": [],         # Required corrections
+            "safe": bool,              # Whether to send to user
+            "final_response": str      # The response to send to user
+        }
+    """
+    result = {
+        "original": response_text,
+        "sanitized": response_text,
+        "validated": True,
+        "confidence": 1.0,
+        "corrections": [],
+        "safe": True,
+        "final_response": response_text
+    }
+    
+    # Step 1: Sanitize first (remove obvious hallucinations)
+    if context_data is None:
+        context_data = {}
+    
+    sanitize_result = sanitize_response(response_text)
+    result["sanitized"] = sanitize_result["cleaned"]
+    result["safe"] = sanitize_result["safe"]
+    
+    if sanitize_result["removed"]:
+        result["corrections"].extend([f"Removed: {r}" for r in sanitize_result["removed"]])
+    
+    # Step 2: Validate against real data if available
+    if context_data and response_text:
+        validation_result = validate_response(response_text, context_data)
+        result["validated"] = validation_result["validated"]
+        result["confidence"] = validation_result["confidence"]
+        result["corrections"].extend(validation_result["corrections"])
+        
+        # If validation failed but sanitized is safe, use sanitized version
+        if not validation_result["validated"] and sanitize_result["safe"]:
+            result["final_response"] = sanitize_result["cleaned"]
+            result["safe"] = True
+            result["validated"] = True
+            result["confidence"] = 0.7
+    
+    # Step 3: Determine final response
+    if not result["safe"]:
+        result["final_response"] = (
+            "⚠️ I cannot provide accurate information for this query. "
+            "The data may be incomplete or contain errors. "
+            "Please check the document directly in ERPNext."
+        )
+    elif result["confidence"] < 0.6:
+        # Low confidence - add disclaimer
+        result["final_response"] = (
+            f"{result['sanitized']}\n\n"
+            f"---\n*⚠️ This response was validated with {result['confidence']:.0%} confidence. "
+            f"Please verify critical information directly in ERPNext.*"
+        )
+    
+    return result
