@@ -12,6 +12,14 @@ This folder contains project documentation, specifications, and architectural pl
 | [AGENTS.md](./AGENTS.md) | Agent configuration and prompt templates | ✅ Active |
 | [FORMULATION_ORCHESTRATOR_SPEC_V4.pdf](./FORMULATION_ORCHESTRATOR_SPEC_V4.pdf) | Aloe powder formulation orchestrator specification | ✅ Active |
 
+### Phase 6 - Deployment & Operations
+
+| Document | Description | Status |
+|----------|-------------|--------|
+| [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) | Deployment procedures for dev/staging/production environments, rollout strategy, rollback procedures | ✅ Active |
+| [MONITORING_ALERTING.md](./MONITORING_ALERTING.md) | Monitoring setup, alert thresholds, troubleshooting guide, known issues | ✅ Active |
+| [FEEDBACK_IMPROVEMENT.md](./FEEDBACK_IMPROVEMENT.md) | Feedback capture, monthly review process, governance structure, continuous improvement | ✅ Active |
+
 ### Implementation Roadmaps
 
 | Document | Description | Status |
