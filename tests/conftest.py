@@ -13,43 +13,7 @@ import pytest
 PROJECT_ROOT = "/workspace/raven_ai_agent"
 
 
-class _FrappeMock(MagicMock):
-    """MagicMock subclass that always returns real exception classes.
-    
-    When @patch replaces frappe with a new MagicMock, the exception classes
-    become MagicMock objects which can't be used in except/raise.
-    This subclass returns real exceptions for known exception names.
-    """
-    _exceptions = dict(FRAPPE_EXCEPTIONS)  # Use the FRAPPE_EXCEPTIONS dict
-    
-    def __getattr__(self, name):
-        # Return real exception for known exception names
-        if name in self._exceptions:
-            return self._exceptions[name]
-        return super().__getattr__(name)
-
-
-# Monkey-patch unittest.mock.patch to use _FrappeMock for frappe patches
-import unittest.mock
-_original_patch = unittest.mock.patch
-
-def _patch_with_frappe_mock(*args, **kwargs):
-    """Custom patch that uses _FrappeMock for frappe-related patches"""
-    # Check if any argument targets frappe
-    target_is_frappe = any(
-        (isinstance(a, str) and 'frappe' in a) for a in args
-    )
-    if target_is_frappe and 'spec' not in kwargs:
-        # Use our custom mock class for frappe patches
-        kwargs['Mock'] = _FrappeMock
-    
-    return _original_patch(*args, **kwargs)
-
-# Replace the global patch function
-import unittest.mock
-unittest.mock.patch = _patch_with_frappe_mock
-
-
+# Exception classes must be defined BEFORE _FrappeMock
 # === REAL exception classes matching frappe/exceptions.py hierarchy ===
 class ValidationError(Exception):
     http_status_code = 417
@@ -117,6 +81,43 @@ FRAPPE_EXCEPTIONS = {
     'TimestampMismatchError': TimestampMismatchError,
     'LinkExistsError': LinkExistsError,
 }
+
+
+class _FrappeMock(MagicMock):
+    """MagicMock subclass that always returns real exception classes.
+    
+    When @patch replaces frappe with a new MagicMock, the exception classes
+    become MagicMock objects which can't be used in except/raise.
+    This subclass returns real exceptions for known exception names.
+    """
+    _exceptions = FRAPPE_EXCEPTIONS
+    
+    def __getattr__(self, name):
+        # Return real exception for known exception names
+        if name in self._exceptions:
+            return self._exceptions[name]
+        return super().__getattr__(name)
+
+
+# Monkey-patch unittest.mock.patch to use _FrappeMock for frappe patches
+import unittest.mock
+_original_patch = unittest.mock.patch
+
+def _patch_with_frappe_mock(*args, **kwargs):
+    """Custom patch that uses _FrappeMock for frappe-related patches"""
+    # Check if any argument targets frappe
+    target_is_frappe = any(
+        (isinstance(a, str) and 'frappe' in a) for a in args
+    )
+    if target_is_frappe and 'spec' not in kwargs:
+        # Use our custom mock class for frappe patches
+        kwargs['Mock'] = _FrappeMock
+    
+    return _original_patch(*args, **kwargs)
+
+# Replace the global patch function
+import unittest.mock
+unittest.mock.patch = _patch_with_frappe_mock
 
 
 def _create_mock_frappe_module():
