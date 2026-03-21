@@ -137,6 +137,9 @@ def _create_mock_frappe_module():
     frappe_module.utils.add_days = lambda date, days: date
     frappe_module.utils.date_diff = lambda end, start: 0
     frappe_module.utils.fmt_money = lambda x: str(x)
+    frappe_module.utils.flt = lambda x: float(x) if x else 0.0
+    frappe_module.utils.cint = lambda x: int(x) if x else 0
+    frappe_module.utils.cstr = lambda x: str(x) if x else ""
     
     # Mock frappe.defaults
     frappe_module.defaults = MagicMock()
@@ -214,6 +217,9 @@ def pytest_configure(config):
     frappe_utils.add_days = lambda date, days: date
     frappe_utils.date_diff = lambda end, start: 0
     frappe_utils.fmt_money = lambda x: str(x)
+    frappe_utils.flt = lambda x: float(x) if x else 0.0
+    frappe_utils.cint = lambda x: int(x) if x else 0
+    frappe_utils.cstr = lambda x: str(x) if x else ""
     sys.modules["frappe.utils"] = frappe_utils
     
     frappe_defaults = types.ModuleType("frappe.defaults")
