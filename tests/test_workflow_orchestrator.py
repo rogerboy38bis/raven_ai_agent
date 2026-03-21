@@ -77,10 +77,11 @@ class TestWorkflowOrchestrator(unittest.TestCase):
     def test_run_full_cycle_so_not_found(self):
         """W-03: Test handling when Sales Order does not exist"""
         from raven_ai_agent.agents.workflow_orchestrator import WorkflowOrchestrator
+        from tests.conftest import FrappeDoesNotExistError
 
         with patch('raven_ai_agent.agents.workflow_orchestrator.frappe') as mock_frappe:
-            mock_frappe.DoesNotExistError = type('DoesNotExistError', (Exception,), {})
-            mock_frappe.get_doc.side_effect = mock_frappe.DoesNotExistError("SO-001")
+            mock_frappe.DoesNotExistError = FrappeDoesNotExistError
+            mock_frappe.get_doc.side_effect = FrappeDoesNotExistError("SO-001")
 
             orchestrator = WorkflowOrchestrator()
             result = orchestrator.run_full_cycle("SO-001")
