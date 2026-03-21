@@ -152,7 +152,12 @@ class RaymondLucyAgent(
     def __init__(self, user: str):
         self.user = user
         self.settings = self._get_settings()
-        self.client = OpenAI(api_key=self.settings.get("openai_api_key"))
+        # Bug fix: Only initialize client if API key is available
+        api_key = self.settings.get("openai_api_key")
+        if api_key:
+            self.client = OpenAI(api_key=api_key)
+        else:
+            self.client = None
         self.model = self.settings.get("model", "gpt-4o-mini")
         self.autonomy_level = 1  # Default to COPILOT
 
@@ -304,6 +309,14 @@ class RaymondLucyAgent(
             autonomy_warning = f"\n\n⚠️ This query suggests LEVEL {suggested_autonomy} autonomy. Please confirm before executing any changes. (Tip: Use `@ai !command` to skip confirmation)"
 
         messages.append({"role": "user", "content": query + autonomy_warning})
+
+        # Bug fix: Check if API key is available before calling LLM
+        if not self.client:
+            return {
+                "success": False,
+                "response": "❌ AI service not configured. Please configure an API key in AI Agent Settings, Raven Settings, or site config (openai_api_key). Without an API key, I can only perform basic queries that don't require AI.",
+                "error": "OPENAI_API_KEY not configured"
+            }
 
         # Call LLM
         try:
