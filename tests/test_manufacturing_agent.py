@@ -210,7 +210,7 @@ class TestManufacturingAgent(unittest.TestCase):
             
             with patch('erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry', return_value=mock_se):
                 agent = ManufacturingAgent()
-                result = agent.create_material_transfer_for_manufacture("MFG-WO-TEST-001")
+                result = agent.create_material_transfer("MFG-WO-TEST-001")
                 
                 self.assertIsInstance(result, dict)
     

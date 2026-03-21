@@ -30,12 +30,29 @@ def fix_imports():
     yield
 
 
+@pytest.fixture(autouse=True)
+def fix_frappe_mocks():
+    """Ensure frappe module always has proper Exception classes after patches"""
+    yield
+    
+    # After each test, fix the frappe module in sys.modules
+    if "frappe" in sys.modules:
+        frappe = sys.modules["frappe"]
+        # Only fix if it's a MagicMock (patched version)
+        if isinstance(frappe, MagicMock):
+            # Use type() with 3rd arg {} to create proper Exception subclasses
+            frappe.DoesNotExistError = type('DoesNotExistError', (Exception,), {})
+            frappe.ValidationError = type('ValidationError', (Exception,), {})
+            frappe.PermissionError = type('PermissionError', (Exception,), {})
+            frappe._ = lambda x: x
+
+
 def pytest_configure(config):
     """Setup mock frappe module with proper Exception classes"""
-    # Create proper Exception subclasses for frappe errors
-    class DoesNotExistError(Exception): pass
-    class ValidationError(Exception): pass
-    class PermissionError(Exception): pass
+    # Use type() with 3rd arg {} to create proper Exception subclasses
+    DoesNotExistError = type('DoesNotExistError', (Exception,), {})
+    ValidationError = type('ValidationError', (Exception,), {})
+    PermissionError = type('PermissionError', (Exception,), {})
     
     mock_frappe = MagicMock()
     mock_frappe.local = MagicMock()
@@ -63,3 +80,11 @@ def pytest_configure(config):
     sys.modules["erpnext.selling.doctype.sales_order"] = MagicMock()
     sys.modules["erpnext.controllers"] = MagicMock()
     sys.modules["erpnext.controllers.stock_controller"] = MagicMock()
+    sys.modules["erpnext.manufacturing"] = MagicMock()
+    sys.modules["erpnext.manufacturing.doctype"] = MagicMock()
+    sys.modules["erpnext.manufacturing.doctype.work_order"] = MagicMock()
+    sys.modules["erpnext.manufacturing.doctype.work_order.work_order"] = MagicMock()
+    sys.modules["erpnext.accounts"] = MagicMock()
+    sys.modules["erpnext.accounts.doctype"] = MagicMock()
+    sys.modules["erpnext.accounts.doctype.payment_entry"] = MagicMock()
+    sys.modules["erpnext.accounts.doctype.payment_entry.payment_entry"] = MagicMock()

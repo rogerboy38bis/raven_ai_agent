@@ -43,7 +43,7 @@ class TestWorkflowOrchestrator(unittest.TestCase):
                 mock_frappe.db.get_value.side_effect = ["BOM-001", "BOM-002"]
 
                 orchestrator = WorkflowOrchestrator()
-                result = orchestrator.run_full_cycle("SO-001", "BOM-MFG", "BOM-SALES")
+                result = orchestrator.run_full_cycle(so_name="SO-001", mfg_bom="BOM-MFG", sales_bom="BOM-SALES")
 
                 self.assertTrue(result["success"])
                 self.assertEqual(len(result["results"]), 8)
@@ -68,7 +68,7 @@ class TestWorkflowOrchestrator(unittest.TestCase):
                 mock_frappe.db.get_value.side_effect = ["BOM-001", "BOM-002"]
 
                 orchestrator = WorkflowOrchestrator()
-                result = orchestrator.run_full_cycle("SO-001", skip_steps=[1, 2])
+                result = orchestrator.run_full_cycle(so_name="SO-001", skip_steps=[1, 2])
 
                 self.assertTrue(result["success"])
                 self.assertTrue(result["results"][0]["skipped"])
