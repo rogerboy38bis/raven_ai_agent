@@ -58,7 +58,7 @@ def is_multi_agent_command(command: str) -> bool:
     command_lower = command.lower().strip()
     
     for pattern, _ in MULTI_AGENT_PATTERNS:
-        if re.search(pattern, command_lower):
+        if re.search(pattern, command_lower, re.IGNORECASE):
             return True
     
     return False
@@ -96,7 +96,7 @@ def build_agent_pipeline(command: str) -> List[Dict[str, str]]:
     # Determine pipeline type
     pipeline_type = None
     for pattern, ptype in MULTI_AGENT_PATTERNS:
-        if re.search(pattern, command_lower):
+        if re.search(pattern, command_lower, re.IGNORECASE):
             pipeline_type = ptype
             break
     
