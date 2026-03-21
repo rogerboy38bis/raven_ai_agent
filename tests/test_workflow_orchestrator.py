@@ -54,14 +54,26 @@ class TestWorkflowOrchestrator(unittest.TestCase):
 
         with patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_1_create_mfg_wo') as mock_mfg_wo, \
              patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_2_manufacture') as mock_mfg, \
-             patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_3_submit_so') as mock_submit_so:
+             patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_3_submit_so') as mock_submit_so, \
+             patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_4_create_sales_wo') as mock_sales_wo, \
+             patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_5_manufacture_sales') as mock_sales_mfg, \
+             patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_6_delivery_note') as mock_dn, \
+             patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_7_sales_invoice') as mock_si, \
+             patch('raven_ai_agent.agents.workflow_orchestrator.WorkflowOrchestrator._step_8_payment_entry') as mock_pe:
             
             mock_mfg_wo.return_value = {"step": 1, "success": True, "wo_name": "WO-001"}
+            mock_submit_so.return_value = {"step": 3, "success": True, "message": "SO submitted"}
+            mock_sales_wo.return_value = {"step": 4, "success": True, "wo_name": "WO-002"}
+            mock_sales_mfg.return_value = {"step": 5, "success": True, "se_name": "SE-002"}
+            mock_dn.return_value = {"step": 6, "success": True, "dn_name": "DN-001"}
+            mock_si.return_value = {"step": 7, "success": True, "si_name": "SI-001"}
+            mock_pe.return_value = {"step": 8, "success": True, "pe_name": "PE-001"}
 
             mock_so = MagicMock()
             mock_so.name = "SO-001"
             mock_so.items = [MagicMock(item_code="ITEM-001", qty=100, warehouse="WH-001")]
             mock_so.project = None
+            mock_so.docstatus = 0
 
             with patch('raven_ai_agent.agents.workflow_orchestrator.frappe') as mock_frappe:
                 mock_frappe.get_doc.return_value = mock_so

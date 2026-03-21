@@ -43,6 +43,7 @@ class TestPaymentAgent(unittest.TestCase):
                     "Cash - AMB-W",
                 ]
                 mock_frappe.db.get_default.return_value = "AMB-Wellness"
+                mock_frappe.db.sql.return_value = []  # No existing payment entries
                 
                 agent = PaymentAgent()
                 result = agent.create_payment_entry("ACC-SINV-2026-00001")
@@ -69,16 +70,32 @@ class TestPaymentAgent(unittest.TestCase):
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
             mock_si = MagicMock()
             mock_si.name = "ACC-SINV-2026-00001"
-            mock_si.docstatus = 0
+            mock_si.docstatus = 0  # Draft SI - will be auto-submitted
             mock_si.outstanding_amount = 1000.0
+            mock_si.customer = "Test Customer"
+            mock_si.company = "AMB-Wellness"
+            mock_si.currency = "MXN"
+            mock_si.conversion_rate = 1.0
+            mock_si.party_account_currency = "MXN"
             mock_si.submit = MagicMock()
+            mock_si.reload = MagicMock()  # Handle the reload() call after submit
             mock_frappe.get_doc.return_value = mock_si
             
             # Mock get_payment_entry 
             mock_pe = MagicMock()
+            mock_pe.name = "ACC-PAY-2026-00001"
             mock_pe.insert = MagicMock()
+            mock_pe.submit = MagicMock()
             
             with patch('erpnext.accounts.doctype.payment_entry.payment_entry.get_payment_entry', return_value=mock_pe):
+                mock_frappe.db.get_value.side_effect = [
+                    "AMB-Wellness",
+                    "Wire Transfer",
+                    "Cash - AMB-W",
+                ]
+                mock_frappe.db.get_default.return_value = "AMB-Wellness"
+                mock_frappe.db.sql.return_value = []  # No existing payment entries
+                
                 agent = PaymentAgent()
                 result = agent.create_payment_entry("ACC-SINV-2026-00001")
                 
@@ -133,6 +150,7 @@ class TestPaymentAgent(unittest.TestCase):
                     "Cash - AMB-W",
                 ]
                 mock_frappe.db.get_default.return_value = "AMB-Wellness"
+                mock_frappe.db.sql.return_value = []  # No existing payment entries (idempotency check)
                 
                 agent = PaymentAgent()
                 result = agent.create_payment_entry("ACC-SINV-2026-00001")
@@ -226,12 +244,26 @@ class TestPaymentAgent(unittest.TestCase):
         from raven_ai_agent.agents.payment_agent import PaymentAgent
         
         with patch('raven_ai_agent.agents.payment_agent.frappe') as mock_frappe:
-            mock_frappe.get_all.return_value = [
-                {"name": "ACC-SINV-2026-00001", "customer": "Cust1", "grand_total": 1000.0, 
-                 "outstanding_amount": 500.0, "currency": "USD", "posting_date": "2026-01-01", "due_date": "2026-02-01"},
-                {"name": "ACC-SINV-2026-00002", "customer": "Cust2", "grand_total": 2000.0, 
-                 "outstanding_amount": 1000.0, "currency": "USD", "posting_date": "2026-01-15", "due_date": "2026-02-15"},
-            ]
+            # Use MagicMock objects instead of dicts to support attribute access (flt(inv.outstanding_amount))
+            mock_inv1 = MagicMock()
+            mock_inv1.name = "ACC-SINV-2026-00001"
+            mock_inv1.customer = "Cust1"
+            mock_inv1.grand_total = 1000.0
+            mock_inv1.outstanding_amount = 500.0
+            mock_inv1.currency = "USD"
+            mock_inv1.posting_date = "2026-01-01"
+            mock_inv1.due_date = "2026-02-01"
+            
+            mock_inv2 = MagicMock()
+            mock_inv2.name = "ACC-SINV-2026-00002"
+            mock_inv2.customer = "Cust2"
+            mock_inv2.grand_total = 2000.0
+            mock_inv2.outstanding_amount = 1000.0
+            mock_inv2.currency = "USD"
+            mock_inv2.posting_date = "2026-01-15"
+            mock_inv2.due_date = "2026-02-15"
+            
+            mock_frappe.get_all.return_value = [mock_inv1, mock_inv2]
             
             agent = PaymentAgent()
             result = agent.get_outstanding_invoices()
