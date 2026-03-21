@@ -20,6 +20,7 @@ import re
 from frappe import _
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
+from frappe.utils import flt, getdate, nowdate, today
 from raven_ai_agent.skills.data_quality_scanner.skill import DataQualityScannerSkill
 
 
@@ -461,13 +462,42 @@ class TaskValidator:
                     si_link = f"https://{site_name}/app/sales-invoice/{si.name}"
                     # Get company currency - outstanding_amount is in company currency (MXN), NOT invoice currency
                     company_currency = frappe.db.get_value("Company", si.company, "default_currency") or "MXN"
+                    
+                    # Determine actual payment status based on outstanding_amount
+                    if si.docstatus == 1:
+                        if flt(si.outstanding_amount) <= 0:
+                            payment_status = "Paid"
+                        elif si.due_date and getdate(si.due_date) < getdate(nowdate()):
+                            payment_status = "Overdue"
+                        else:
+                            payment_status = "Unpaid"
+                    else:
+                        payment_status = status_map.get(si.docstatus, "Unknown")
+                    
+                    # Find Payment Entries for this Sales Invoice
+                    payment_entries = []
+                    pe_refs = frappe.db.sql("""
+                        SELECT parent FROM `tabPayment Entry Reference`
+                        WHERE reference_name = %s AND parenttype = 'Payment Entry'
+                        AND parent IN (SELECT name FROM `tabPayment Entry` WHERE docstatus = 1)
+                    """, (si.name,))
+                    for pe_ref in pe_refs:
+                        pe_name = pe_ref[0]
+                        payment_entries.append({
+                            "name": pe_name,
+                            "link": f"https://{site_name}/app/payment-entry/{pe_name}",
+                            "status": "Submitted"
+                        })
+                    
                     pipeline.setdefault("sales_invoices", []).append({
                         "name": si.name,
-                        "status": status_map.get(si.docstatus, "Unknown"),
+                        "status": payment_status,  # Use actual payment status: Paid/Unpaid/Overdue/Draft/Cancelled
+                        "docstatus": si.docstatus,  # Keep for backward compatibility
                         "total": si.grand_total,
                         "currency": si.currency,  # Invoice currency (e.g., USD)
                         "company_currency": company_currency,  # Company currency (MXN) - for outstanding
                         "outstanding": si.outstanding_amount if hasattr(si, 'outstanding_amount') else None,
+                        "payment_entries": payment_entries,  # List of Payment Entries
                     })
 
         # ── Build Report ──
@@ -1454,11 +1484,30 @@ The invoice **{sinv_name}** is now marked as **Paid**.
         sis = pipeline.get("sales_invoices", [])
         if sis:
             for si in sis:
-                si_icon = "✅" if si.get("status") == "Submitted" else "📝"
+                # Use actual payment status: Paid/Unpaid/Overdue/Draft/Cancelled
+                status = si.get("status", "N/A")
+                si_icon = "✅" if status == "Paid" else "⚠️" if status == "Overdue" else "📝" if status == "Draft" else "❌" if status == "Cancelled" else "⏳"
+                
                 # Outstanding amount is in company currency (MXN), use company_currency field
                 currency = si.get("company_currency", "MXN")
-                outstanding = f" — Outstanding: {si.get('outstanding', 'N/A')} {currency}" if si.get("outstanding") else ""
-                msg += f"            └─ {si_icon} SINV: {si.get('name', 'N/A')} ({si.get('status', 'N/A')}){outstanding}\n"
+                outstanding_amt = si.get("outstanding")
+                
+                # Always show Outstanding, with PAID badge when 0
+                if outstanding_amt is not None:
+                    if flt(outstanding_amt) <= 0:
+                        outstanding = f" — Outstanding: 0.0 {currency} — PAID ✅"
+                    else:
+                        outstanding = f" — Outstanding: {flt(outstanding_amt):,.2f} {currency}"
+                else:
+                    outstanding = ""
+                
+                msg += f"            └─ {si_icon} SINV: {si.get('name', 'N/A')} ({status}){outstanding}\n"
+                
+                # Show Payment Entries as child nodes
+                payment_entries = si.get("payment_entries", [])
+                for pe in payment_entries:
+                    pe_icon = "💳"
+                    msg += f"                └─ {pe_icon} PE: {pe.get('name', 'N/A')} ({pe.get('status', 'N/A')})\n"
         elif dns:
             msg += "            └─ ⏳ No Sales Invoice yet\n"
 
