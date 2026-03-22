@@ -69,6 +69,64 @@ As a minimum for month-end:
 - All pipelines for designated strategic customers
 - Any pipeline flagged by finance for CFDI discrepancies in the prior month
 
+## 6. Batch Validation (Finance Only)
+
+For larger month-end audits, finance can run a batch validation that processes multiple IDs at once and generates a consolidated report.
+
+### Run Batch Validation
+
+```bash
+cd ~/frappe-bench
+bench --site <site> execute raven_ai_agent.cli.batch_pipeline_validation.run_batch_validation
+```
+
+### Output Files
+
+The command writes two files under `apps/raven_ai_agent/raven_ai_agent/transcripts/`:
+
+- `batch_pipeline_<timestamp>.json` — Machine-readable JSON with all results
+- `batch_pipeline_<timestamp>.md` — Human-readable Markdown report
+
+### Default IDs
+
+The batch validates a curated list defined in the CLI:
+
+```python
+DEFAULT_IDS = [
+    "0752",
+    "0753",
+    "0754",
+    "0755",
+    "SAL-QTN-2024-00752",
+    "SAL-QTN-2024-00763",
+]
+```
+
+You can customize this list in the CLI file for your organization's needs.
+
+### Range Helper
+
+The CLI also provides a helper to expand numeric ranges:
+
+```python
+from raven_ai_agent.cli.batch_pipeline_validation import expand_range, run_batch_validation
+
+# Generate IDs 0752-0760
+ids = expand_range("", 752, 760)
+run_batch_validation(ids)
+```
+
+### Evidence Attachment
+
+Attach the Markdown report to your month-end close ticket as audit evidence:
+
+```bash
+# Find the latest report
+ls -t ~/frappe-bench/apps/raven_ai_agent/raven_ai_agent/transcripts/batch_pipeline_*.md | head -1
+```
+
+---
+
 ## 5. Evidence for Closing
 
 Optionally, capture the validation output for key pipelines:
