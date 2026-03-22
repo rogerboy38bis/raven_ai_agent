@@ -14,8 +14,9 @@ Usage:
 """
 from __future__ import annotations
 
+import calendar
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -165,6 +166,73 @@ def run_batch_validation(raw_ids: Iterable[str] | None = None) -> dict:
 def main():
     """Entry point for bench execute."""
     return run_batch_validation()
+
+
+def _is_last_day_of_month(today: date | None = None) -> bool:
+    """Check if today is the last day of the month."""
+    today = today or date.today()
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    return today.day == last_day
+
+
+def run_month_end_batch():
+    """
+    Entry point for Frappe scheduler.
+    
+    Runs daily at 23:30 via cron (defined in hooks.py).
+    Only executes batch validation on the last day of the month.
+    
+    Uses same env vars as CLI:
+      - RAVEN_BATCH_IDS
+      - RAVEN_BATCH_RANGE
+    
+    Returns:
+        Dict with ids processed and output file paths, or None if skipped.
+    """
+    if not _is_last_day_of_month():
+        frappe.logger().info("raven_ai_agent: month-end batch skipped (not last day)")
+        return None
+
+    frappe.logger().info("raven_ai_agent: starting month-end batch validation")
+    res = run_batch_validation()
+    
+    frappe.logger().info(
+        "raven_ai_agent: month-end batch complete ids=%s md=%s",
+        res.get("ids"),
+        res.get("md_path"),
+    )
+    
+    # Optionally symlink latest report to sites folder for easy access
+    _symlink_latest_report(res.get("md_path"), res.get("json_path"))
+    
+    return res
+
+
+def _symlink_latest_report(md_path: str | None, json_path: str | None):
+    """Create symlinks to latest report in sites folder for easy access."""
+    if not md_path or not json_path:
+        return
+    
+    try:
+        site_path = Path(frappe.get_site_path())
+        reports_dir = site_path / "private" / "files" / "raven_reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Symlink latest files
+        latest_md = reports_dir / "latest_batch.md"
+        latest_json = reports_dir / "latest_batch.json"
+        
+        if latest_md.exists():
+            latest_md.unlink()
+        if latest_json.exists():
+            latest_json.unlink()
+            
+        Path(md_path).symlink_to(latest_md)
+        Path(json_path).symlink_to(latest_json)
+        
+        frappe.logger().info("raven_ai_agent: symlinked reports to %s", reports_dir)
+    except Exception as e:
+        frappe.logger().warning("raven_ai_agent: failed to create symlinks: %s", e)
 
 
 if __name__ == "__main__":

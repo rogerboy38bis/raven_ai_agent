@@ -21,7 +21,13 @@ doc_events = {
 scheduler_events = {
     "daily": [
         "raven_ai_agent.utils.memory.generate_daily_summaries"
-    ]
+    ],
+    "cron": {
+        # Run at 23:30 daily; wrapper will only act on last day of month
+        "30 23 * * *": [
+            "raven_ai_agent.cli.batch_pipeline_validation.run_month_end_batch"
+        ],
+    },
 }
 
 # Website
