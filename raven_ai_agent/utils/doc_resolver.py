@@ -53,6 +53,22 @@ def resolve_document_name(doctype: str, partial_name: str) -> str:
         limit=10
     )
     
+    # If no matches, try extracting just the numeric part and search more broadly
+    if not matches:
+        import re
+        numbers = re.findall(r'\d+', partial_name)
+        if numbers:
+            # Try searching with the last number (might have leading zeros issue)
+            last_num = numbers[-1]
+            if len(last_num) >= 4:
+                # Search for any document with this number pattern
+                matches = frappe.get_all(
+                    doctype,
+                    filters={"name": ["like", f"%{last_num}%"]},
+                    fields=["name"],
+                    limit=10
+                )
+    
     if not matches:
         raise frappe.DoesNotExistError(f"{doctype} '{partial_name}' not found")
     
