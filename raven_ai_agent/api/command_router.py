@@ -44,8 +44,33 @@ class CommandRouterMixin:
             frappe.logger().info("[Workflow] Workflows disabled")
             return None
 
-        query_lower = query.lower()
+        # ---- VALIDATE without argument: show mini-help ----
+        # Check if user typed @workflow validate but without a document name
+        # Use broader pattern that matches partial names too
+        qtn_match = re.search(r'(SAL-QTN-[\w-]+|QTN-[\w-]+)', query, re.IGNORECASE)
+        if "validate" in query_lower and not qtn_match:
+            # Extract just "validate" part to check if it's standalone
+            # Match @workflow validate or workflow validate (with or without @)
+            validate_pattern = re.search(r'^\s*@?\w+\s+validate\s*$', query, re.IGNORECASE|re.MULTILINE)
+            if validate_pattern or re.search(r'^\s*validate\s*$', query_lower.strip()):
+                return {
+                    "success": True,
+                    "message": (
+                        "❓ **Usage:** @workflow validate <Quotation or Sales Order>\n\n"
+                        "**Examples:**\n"
+                        "- @workflow validate SAL-QTN-2024-00752\n"
+                        "- @workflow validate SAL-QTN-2024-0753\n"
+                        "- @workflow validate SO-00752\n\n"
+                        "**Partial names supported:**\n"
+                        "- 0753 → SAL-QTN-2024-00753\n"
+                        "- SO-00752 → SO-00752-LEGOSAN AB\n\n"
+                        "The system will auto-resolve partial / mistyped names."
+                    )
+                }
+        
         executor = WorkflowExecutor(self.user)
+
+        # ---- Confirmation state management (Redis-backed) ----
 
         # ---- Confirmation state management (Redis-backed) ----
         cache_key = f"pending_confirm:{self.user}:{channel_id}"
@@ -81,7 +106,6 @@ class CommandRouterMixin:
                 pass  # is_confirm stays as-is from keyword check above
 
         # Quotation patterns
-        qtn_match = re.search(r'(SAL-QTN-\d+-\d+)', query, re.IGNORECASE)
         frappe.logger().info(f"[Workflow] qtn_match: {qtn_match}, 'sales order' in query: {'sales order' in query_lower}")
 
         # Dry-run mode
