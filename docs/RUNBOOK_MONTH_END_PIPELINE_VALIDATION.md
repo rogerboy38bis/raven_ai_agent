@@ -80,6 +80,16 @@ cd ~/frappe-bench
 bench --site <site> execute raven_ai_agent.cli.batch_pipeline_validation.run_batch_validation
 ```
 
+By default, it validates IDs 0752-0760. You can customize via environment variables:
+
+```bash
+# With explicit IDs (comma-separated)
+RAVEN_BATCH_IDS="0752,0753,SAL-QTN-2024-00763" bench --site <site> execute raven_ai_agent.cli.batch_pipeline_validation.run_batch_validation
+
+# With numeric range
+RAVEN_BATCH_RANGE="752-765" bench --site <site> execute raven_ai_agent.cli.batch_pipeline_validation.run_batch_validation
+```
+
 ### Output Files
 
 The command writes two files under `apps/raven_ai_agent/raven_ai_agent/transcripts/`:
@@ -87,34 +97,14 @@ The command writes two files under `apps/raven_ai_agent/raven_ai_agent/transcrip
 - `batch_pipeline_<timestamp>.json` — Machine-readable JSON with all results
 - `batch_pipeline_<timestamp>.md` — Human-readable Markdown report
 
-### Default IDs
+### Environment Variables
 
-The batch validates a curated list defined in the CLI:
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `RAVEN_BATCH_IDS` | Comma-separated list of IDs | `"0752,SAL-QTN-2024-00763"` |
+| `RAVEN_BATCH_RANGE` | Numeric range (start-end) | `"752-765"` |
 
-```python
-DEFAULT_IDS = [
-    "0752",
-    "0753",
-    "0754",
-    "0755",
-    "SAL-QTN-2024-00752",
-    "SAL-QTN-2024-00763",
-]
-```
-
-You can customize this list in the CLI file for your organization's needs.
-
-### Range Helper
-
-The CLI also provides a helper to expand numeric ranges:
-
-```python
-from raven_ai_agent.cli.batch_pipeline_validation import expand_range, run_batch_validation
-
-# Generate IDs 0752-0760
-ids = expand_range("", 752, 760)
-run_batch_validation(ids)
-```
+If neither is set, defaults to range 752-760.
 
 ### Evidence Attachment
 

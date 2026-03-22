@@ -4,9 +4,17 @@ Batch Pipeline Validation CLI for Finance/Month-End
 This module provides a batch validation runner for pipeline validation,
 intended for finance month-end checks. It reuses validate_pipeline()
 without modifying any chat behavior.
+
+Usage:
+  # By numeric range (e.g., 0752-0760)
+  bench --site <site> execute raven_ai_agent.cli.batch_pipeline_validation.run_batch_validation
+
+  # With explicit IDs via environment variable
+  RAVEN_BATCH_IDS="0752,0753,SAL-QTN-2024-00763" bench --site <site> execute raven_ai_agent.cli.batch_pipeline_validation.run_batch_validation
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -14,17 +22,6 @@ from typing import Iterable
 import frappe
 
 from raven_ai_agent.api.truth_hierarchy import validate_pipeline
-
-
-# Default IDs to validate - finance can customize this list
-DEFAULT_IDS = [
-    "0752",
-    "0753",
-    "0754",
-    "0755",
-    "SAL-QTN-2024-00752",
-    "SAL-QTN-2024-00763",
-]
 
 
 def expand_range(prefix: str, start: int, end: int) -> list[str]:
@@ -47,21 +44,62 @@ def _normalize_ids(raw_ids: Iterable[str]) -> list[str]:
     return [i.strip() for i in raw_ids if i and i.strip()]
 
 
+def _get_ids_from_env() -> list[str]:
+    """
+    Get IDs from environment variable RAVEN_BATCH_IDS (comma-separated)
+    or RAVEN_BATCH_RANGE (e.g., "752-760" for numeric range).
+    """
+    # Check for explicit IDs
+    ids_env = os.environ.get("RAVEN_BATCH_IDS", "").strip()
+    if ids_env:
+        return _normalize_ids(ids_env.split(","))
+    
+    # Check for range
+    range_env = os.environ.get("RAVEN_BATCH_RANGE", "").strip()
+    if range_env:
+        try:
+            if "-" in range_env:
+                start, end = map(int, range_env.split("-"))
+                return expand_range("", start, end)
+            else:
+                # Single number
+                return [f"{int(range_env):04d}"]
+        except ValueError:
+            pass
+    
+    return []
+
+
 def run_batch_validation(raw_ids: Iterable[str] | None = None) -> dict:
     """
     Batch runner for pipeline validation, intended for finance month-end.
 
     Usage from bench:
+      # By range (default: 752-760)
       bench --site <site> execute raven_ai_agent.cli.batch_pipeline_validation.run_batch_validation
+      
+      # With explicit IDs
+      RAVEN_BATCH_IDS="0752,0753,SAL-QTN-2024-00763" bench --site <site> execute raven_ai_agent.cli.batch_pipeline_validation.run_batch_validation
+      
+      # With numeric range
+      RAVEN_BATCH_RANGE="752-765" bench --site <site> execute raven_ai_agent.cli.batch_pipeline_validation.run_batch_validation
 
     Args:
-        raw_ids: Optional list of Quotation/SO IDs to validate. 
-                 If None, uses DEFAULT_IDS.
+        raw_ids: Optional list of Quotation/SO IDs to validate.
+                 If None, reads from RAVEN_BATCH_IDS or RAVEN_BATCH_RANGE env vars.
 
     Returns:
         Dict with ids processed and output file paths.
     """
-    ids = _normalize_ids(raw_ids or DEFAULT_IDS)
+    # Get IDs from env if not provided
+    if raw_ids is None:
+        raw_ids = _get_ids_from_env()
+    
+    # Default to range 752-760 if still empty
+    if not raw_ids:
+        raw_ids = expand_range("", 752, 760)
+    
+    ids = _normalize_ids(raw_ids)
 
     app_path = Path(frappe.get_app_path("raven_ai_agent"))
     out_dir = app_path / "transcripts"
@@ -81,6 +119,7 @@ def run_batch_validation(raw_ids: Iterable[str] | None = None) -> dict:
     md_lines.append("## Summary")
     md_lines.append("")
     md_lines.append(f"- Total IDs processed: {len(ids)}")
+    md_lines.append(f"- IDs: {', '.join(ids)}")
     md_lines.append("")
 
     for raw_id in ids:
