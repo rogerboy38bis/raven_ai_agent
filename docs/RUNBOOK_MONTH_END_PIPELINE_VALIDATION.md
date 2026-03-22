@@ -97,6 +97,8 @@ The command writes two files under `apps/raven_ai_agent/raven_ai_agent/transcrip
 - `batch_pipeline_<timestamp>.json` — Machine-readable JSON with all results
 - `batch_pipeline_<timestamp>.md` — Human-readable Markdown report
 
+The latest month-end batch report is also available in ERPNext under **Files → raven_reports/latest_batch.md** for each site, via the private files area.
+
 ### Environment Variables
 
 | Variable | Description | Example |
