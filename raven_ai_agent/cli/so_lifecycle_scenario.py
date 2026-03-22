@@ -253,24 +253,37 @@ def run_quotation_scenario(
     Returns:
         List of (message, response) tuples for transcript capture
     """
-    from raven_ai_agent.api.router import handle_raven_message
-
     transcript = []
 
-    def send(msg: str) -> str:
+    def send_to_agent(bot_type: str, msg: str) -> str:
+        """Send message to appropriate agent and return response."""
         print(f"\n>> {user}: {msg}")
         try:
-            resp = handle_raven_message(
-                user=user,
-                message=msg,
-                channel=channel,
-            )
-            # Truncate long responses for display
-            if resp and len(str(resp)) > 500:
-                print(f"<< Raven: {resp[:500]}...")
+            if bot_type == "sales_order_follow_up":
+                from raven_ai_agent.agents import SalesOrderFollowupAgent
+                agent = SalesOrderFollowupAgent(user)
+                response = agent.process_command(msg)
+            elif bot_type == "manufacturing":
+                from raven_ai_agent.agents import ManufacturingAgent
+                agent = ManufacturingAgent()
+                response = agent.process_command(msg)
+            elif bot_type == "payment":
+                from raven_ai_agent.agents import PaymentAgent
+                agent = PaymentAgent()
+                response = agent.process_command(msg)
+            elif bot_type == "workflow_orchestrator":
+                from raven_ai_agent.agents import WorkflowOrchestrator
+                agent = WorkflowOrchestrator()
+                response = agent.process_command(msg)
             else:
-                print(f"<< Raven: {resp}")
-            return resp
+                response = f"Unknown bot type: {bot_type}"
+
+            # Truncate long responses for display
+            if response and len(str(response)) > 500:
+                print(f"<< Raven: {response[:500]}...")
+            else:
+                print(f"<< Raven: {response}")
+            return response
         except Exception as e:
             error_msg = f"ERROR: {e}"
             print(f"<< {error_msg}")
@@ -283,29 +296,29 @@ def run_quotation_scenario(
     print("=" * 60)
 
     # 1) Validate pipeline for quotation
-    response = send(f"@workflow validate {qtn_name}")
+    response = send_to_agent("workflow_orchestrator", f"validate {qtn_name}")
     transcript.append((f"@workflow validate {qtn_name}", response))
 
     # 2) Create Sales Order from Quotation
-    response = send(f"@workflow create so from {qtn_name}")
+    response = send_to_agent("workflow_orchestrator", f"create so from {qtn_name}")
     transcript.append((f"@workflow create so from {qtn_name}", response))
 
     # 3) Show workflow status for resulting SO (assuming same suffix pattern)
     #    For first pass, we just reuse the QTN suffix. Adjust once you see actual SO name.
     so_guess = qtn_name.replace("QTN", "SO")
-    response = send(f"@workflow status {so_guess}")
+    response = send_to_agent("workflow_orchestrator", f"status {so_guess}")
     transcript.append((f"@workflow status {so_guess}", response))
 
     # 4) Full status
-    response = send(f"@ai full status {so_guess}")
+    response = send_to_agent("sales_order_follow_up", f"full status {so_guess}")
     transcript.append((f"@ai full status {so_guess}", response))
 
     # 5) Manufacturing status
-    response = send(f"@ai mfg status {so_guess}")
+    response = send_to_agent("manufacturing", f"mfg status {so_guess}")
     transcript.append((f"@ai mfg status {so_guess}", response))
 
     # 6) Pipeline status
-    response = send(f"@ai pipeline status {so_guess}")
+    response = send_to_agent("workflow_orchestrator", f"pipeline status {so_guess}")
     transcript.append((f"@ai pipeline status {so_guess}", response))
 
     print("=" * 60)
