@@ -19,7 +19,8 @@ SITE_USER = "administrator@yourcompany.com"  # change if needed
 
 def run_so_lifecycle_scenario(
     user: str = SITE_USER,
-    so_name: str = "SO-00763-LORAND LABORATORIES"
+    so_name: str = "SO-00763-LORAND LABORATORIES",
+    channel: str = "Raven Golden Runs"
 ) -> list:
     """
     Run the Phase 9 scenario: SO lifecycle + manufacturing delay + payment edge.
@@ -33,6 +34,7 @@ def run_so_lifecycle_scenario(
     Args:
         user: The user to run as
         so_name: The Sales Order to test with (use full name from your system)
+        channel: The chat channel (for transcript metadata)
         
     Returns:
         List of (message, response) tuples for transcript capture
@@ -121,7 +123,8 @@ def run_so_lifecycle_scenario(
 
 def run_scenario_2(
     user: str = SITE_USER,
-    so_name: str = "SO-00763-LORAND LABORATORIES"
+    so_name: str = "SO-00763-LORAND LABORATORIES",
+    channel: str = "Raven Golden Runs"
 ) -> list:
     """
     Phase 9 Scenario 2: Workflow Status + Manufacturing + Payments
@@ -140,6 +143,7 @@ def run_scenario_2(
     Args:
         user: The user to run as
         so_name: The Sales Order to test with
+        channel: The chat channel (for transcript metadata)
         
     Returns:
         List of (message, response) tuples

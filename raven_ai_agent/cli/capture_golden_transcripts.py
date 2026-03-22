@@ -167,5 +167,76 @@ def main():
     print("=" * 60)
 
 
+def run_and_capture():
+    """
+    Run curated scenarios and store request/response transcripts
+    as JSON and Markdown under raven_ai_agent/transcripts/.
+    """
+    from raven_ai_agent.cli.so_lifecycle_scenario import run_so_lifecycle_scenario, run_scenario_2
+    
+    SITE_USER = "runbook_user@yourcompany.com"
+    CHANNEL = "Raven Golden Runs"
+    
+    base_path = Path(frappe.get_app_path("raven_ai_agent"))
+    out_dir = base_path / "transcripts"
+    out_dir.mkdir(exist_ok=True)
+
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    json_path = out_dir / f"golden_{ts}.json"
+    md_path = out_dir / f"golden_{ts}.md"
+
+    all_records = []
+    md_lines = [
+        f"# Raven Golden Transcripts ({ts})",
+        "",
+        f"- User: {SITE_USER}",
+        f"- Channel: {CHANNEL}",
+        "",
+    ]
+
+    # Scenario A: SO lifecycle (reuse existing CLI)
+    md_lines.append("## Scenario A: SO Lifecycle")
+    md_lines.append("")
+    for msg, resp in run_so_lifecycle_scenario(user=SITE_USER, channel=CHANNEL):
+        record = {
+            "scenario": "so_lifecycle",
+            "user": SITE_USER,
+            "channel": CHANNEL,
+            "message": msg,
+            "response": resp,
+        }
+        all_records.append(record)
+        md_lines.append(f"**User:** {msg}")
+        md_lines.append("")
+        md_lines.append(f"**Raven:** {resp}")
+        md_lines.append("")
+
+    md_lines.append("---")
+    md_lines.append("")
+
+    # Scenario B: Workflow + MFG + Payments (Scenario 2)
+    md_lines.append("## Scenario B: Workflow + MFG + Payments")
+    md_lines.append("")
+    for msg, resp in run_scenario_2(user=SITE_USER, channel=CHANNEL):
+        record = {
+            "scenario": "workflow_mfg_payments",
+            "user": SITE_USER,
+            "channel": CHANNEL,
+            "message": msg,
+            "response": resp,
+        }
+        all_records.append(record)
+        md_lines.append(f"**User:** {msg}")
+        md_lines.append("")
+        md_lines.append(f"**Raven:** {resp}")
+        md_lines.append("")
+
+    json_path.write_text(json.dumps(all_records, indent=2), encoding="utf-8")
+    md_path.write_text("\n".join(md_lines), encoding="utf-8")
+
+    print(f"Wrote JSON transcripts to: {json_path}")
+    print(f"Wrote Markdown runbook to: {md_path}")
+
+
 if __name__ == "__main__":
-    main()
+    run_and_capture()

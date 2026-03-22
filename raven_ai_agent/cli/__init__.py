@@ -14,6 +14,7 @@ from raven_ai_agent.cli.capture_golden_transcripts import (
     capture_transcript,
     save_transcript,
     load_transcript,
+    run_and_capture,
     main as capture_golden
 )
 
@@ -26,5 +27,6 @@ __all__ = [
     "capture_transcript",
     "save_transcript",
     "load_transcript",
+    "run_and_capture",
     "capture_golden",
 ]
