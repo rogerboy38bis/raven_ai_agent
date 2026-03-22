@@ -230,12 +230,96 @@ def run_scenario_2(
     return transcript
 
 
+def run_quotation_scenario(
+    qtn_name: str,
+    user: str = SITE_USER,
+    channel: str = "Raven Golden Runs"
+) -> list:
+    """
+    Phase 9 Quotation Scenario:
+    1) Validate the quotation
+    2) Create SO from Quotation via workflow
+    3) Inspect workflow / SO / MFG / Payments for the resulting SO
+
+    Usage from bench console:
+        from raven_ai_agent.cli.so_lifecycle_scenario import run_quotation_scenario
+        run_quotation_scenario("QTN-00752")
+
+    Args:
+        qtn_name: The Quotation name to test (e.g., "QTN-00752")
+        user: The user to run as
+        channel: The chat channel (for transcript metadata)
+
+    Returns:
+        List of (message, response) tuples for transcript capture
+    """
+    from raven_ai_agent.api.router import handle_raven_message
+
+    transcript = []
+
+    def send(msg: str) -> str:
+        print(f"\n>> {user}: {msg}")
+        try:
+            resp = handle_raven_message(
+                user=user,
+                message=msg,
+                channel=channel,
+            )
+            # Truncate long responses for display
+            if resp and len(str(resp)) > 500:
+                print(f"<< Raven: {resp[:500]}...")
+            else:
+                print(f"<< Raven: {resp}")
+            return resp
+        except Exception as e:
+            error_msg = f"ERROR: {e}"
+            print(f"<< {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return error_msg
+
+    print("=" * 60)
+    print(f"Phase 9 Quotation Scenario for {qtn_name}")
+    print("=" * 60)
+
+    # 1) Validate pipeline for quotation
+    response = send(f"@workflow validate {qtn_name}")
+    transcript.append((f"@workflow validate {qtn_name}", response))
+
+    # 2) Create Sales Order from Quotation
+    response = send(f"@workflow create so from {qtn_name}")
+    transcript.append((f"@workflow create so from {qtn_name}", response))
+
+    # 3) Show workflow status for resulting SO (assuming same suffix pattern)
+    #    For first pass, we just reuse the QTN suffix. Adjust once you see actual SO name.
+    so_guess = qtn_name.replace("QTN", "SO")
+    response = send(f"@workflow status {so_guess}")
+    transcript.append((f"@workflow status {so_guess}", response))
+
+    # 4) Full status
+    response = send(f"@ai full status {so_guess}")
+    transcript.append((f"@ai full status {so_guess}", response))
+
+    # 5) Manufacturing status
+    response = send(f"@ai mfg status {so_guess}")
+    transcript.append((f"@ai mfg status {so_guess}", response))
+
+    # 6) Pipeline status
+    response = send(f"@ai pipeline status {so_guess}")
+    transcript.append((f"@ai pipeline status {so_guess}", response))
+
+    print("=" * 60)
+    print("Quotation scenario complete!")
+    print("=" * 60)
+    return transcript
+
+
 def main():
     """Entry point for CLI execution."""
     print("Starting Phase 9 Scenario...")
     print(f"User: {SITE_USER}")
     print()
-    
+
     run_so_lifecycle_scenario(user=SITE_USER)
     print("\n\n")
     run_scenario_2(user=SITE_USER)
