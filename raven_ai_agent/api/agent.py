@@ -503,7 +503,7 @@ def handle_raven_message(doc=None, method=None):
                 "receive payment", "payment received"
             ]
             orch_keywords = [
-                "pipeline status", "run full cycle", "run pipeline",
+                "@workflow", "pipeline status", "run full cycle", "run pipeline",
                 "dry run", "validate so", "full cycle", "complete workflow"
             ]
             batch_keywords = [

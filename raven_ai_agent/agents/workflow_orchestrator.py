@@ -683,16 +683,13 @@ class WorkflowOrchestrator:
         message_lower = message.lower().strip()
 
         # ---- PARSE SUBCOMMAND ----
-        # Extract the first word after @workflow
-        subcommand_match = re.search(r'@workflow\s+(\w+)', message, re.IGNORECASE)
-        subcommand = subcommand_match.group(1).lower() if subcommand_match else ""
+        # Extract the first word (after @workflow was stripped by agent.py)
+        # Message is now like "validate 0753" or "run SO-00752" or "help"
+        parts = message.split()
+        subcommand = parts[0].lower() if parts else ""
         
         # Get everything after the subcommand
-        if subcommand_match:
-            arg_start = subcommand_match.end()
-            subcommand_arg = message[arg_start:].strip()
-        else:
-            subcommand_arg = ""
+        subcommand_arg = " ".join(parts[1:]).strip() if len(parts) > 1 else ""
 
         # Extract document names
         so_pattern = r'(SO-[\w-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*|SAL-ORD-[\d-]+)'
