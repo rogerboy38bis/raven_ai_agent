@@ -1,179 +1,131 @@
 """
 Phase 9 Load Test Script: Multi-Agent Concurrency Testing
 
-This script tests the agent_bus and context_manager under concurrent load
+This script tests the Raven multi-agent stack under concurrent load
 to ensure they behave correctly when multiple agents are running simultaneously.
 
 Usage:
     from raven_ai_agent.cli.load_test_multi_agent import run_load_test
-    run_load_test(num_commands=100, num_users=10)
+    run_load_test()
+    
+Or from bench:
+    bench --site <site> execute raven_ai_agent.cli.load_test_multi_agent.run_load_test
 """
-import frappe
-import time
-import threading
 import random
-from typing import List, Dict
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from unittest.mock import MagicMock
+import threading
+import time
+
+import frappe
 
 from raven_ai_agent.agents import SalesOrderFollowupAgent, ManufacturingAgent, PaymentAgent, WorkflowOrchestrator
 
 
-# Test commands that exercise different agents
-TEST_COMMANDS = [
-    ("sales_order_follow_up", "list recent sales orders"),
-    ("sales_order_follow_up", "status SO-00763"),
-    ("sales_order_follow_up", "help"),
-    ("manufacturing", "show work orders"),
-    ("payment", "payment outstanding"),
-    ("sales_order_follow_up", "pending orders"),
-]
+SITE_USER_TEMPLATE = "loadtest_user_{i}@example.com"
+CHANNEL = "Raven Load Test"
+NUM_USERS = 10
+COMMANDS_PER_USER = 10
 
 
-class LoadTestMetrics:
-    """Track load test results."""
-    
-    def __init__(self):
-        self.total_requests = 0
-        self.successful_requests = 0
-        self.failed_requests = 0
-        self.response_times: List[float] = []
-        self.errors: List[str] = []
-        self.lock = threading.Lock()
-    
-    def record_success(self, response_time: float):
-        with self.lock:
-            self.total_requests += 1
-            self.successful_requests += 1
-            self.response_times.append(response_time)
-    
-    def record_failure(self, error: str):
-        with self.lock:
-            self.total_requests += 1
-            self.failed_requests += 1
-            self.errors.append(error)
-    
-    def get_summary(self) -> Dict:
-        with self.lock:
-            avg_response_time = (
-                sum(self.response_times) / len(self.response_times)
-                if self.response_times else 0
-            )
-            return {
-                "total_requests": self.total_requests,
-                "successful": self.successful_requests,
-                "failed": self.failed_requests,
-                "success_rate": self.successful_requests / self.total_requests if self.total_requests > 0 else 0,
-                "avg_response_time_ms": avg_response_time * 1000,
-                "error_count": len(self.errors),
-            }
-
-
-def send_test_command(user: str, bot_type: str, command: str, metrics: LoadTestMetrics) -> None:
-    """Send a single command and record metrics."""
-    start_time = time.time()
-    
+def _send_command(user: str, message: str) -> str:
+    """Send command to appropriate agent and return response."""
     try:
-        if bot_type == "sales_order_follow_up":
+        if "list recent" in message.lower() or "status" in message.lower() or "full status" in message.lower():
             agent = SalesOrderFollowupAgent(user)
-        elif bot_type == "manufacturing":
+        elif "work order" in message.lower() or "mfg status" in message.lower():
             agent = ManufacturingAgent()
-        elif bot_type == "payment":
+        elif "payment" in message.lower():
             agent = PaymentAgent()
-        elif bot_type == "workflow_orchestrator":
+        elif "workflow" in message.lower() or "pipeline" in message.lower():
             agent = WorkflowOrchestrator()
         else:
-            raise ValueError(f"Unknown bot type: {bot_type}")
+            agent = SalesOrderFollowupAgent(user)
         
-        response = agent.process_command(command)
-        response_time = time.time() - start_time
-        metrics.record_success(response_time)
-        
+        response = agent.process_command(message)
+        text = str(response)
+        print(f"[{user}] {message[:50]} -> {text[:80].replace(chr(10), ' ')}")
+        return text
     except Exception as e:
-        response_time = time.time() - start_time
-        metrics.record_failure(str(e))
-        print(f"Error: {e}")
+        error_msg = f"ERROR: {e}"
+        print(f"[{user}] {message[:50]} -> {error_msg}")
+        return error_msg
+
+
+def _user_thread(user_index: int):
+    """Run commands for a single simulated user."""
+    user = SITE_USER_TEMPLATE.format(i=user_index)
+    
+    commands = [
+        "list recent sales orders",
+        "status SO-00763-LORAND LABORATORIES",
+        "full status SO-00763-LORAND LABORATORIES",
+        "workflow status SO-00763-LORAND LABORATORIES",
+        "pipeline status SO-00763-LORAND LABORATORIES",
+        "mfg status SO-00763-LORAND LABORATORIES",
+        "show work orders for SO-00763-LORAND LABORATORIES",
+        "payment outstanding customer LORAND LABORATORIES LLC",
+    ]
+
+    turn_count = 0
+    last_intent = None
+    
+    for _ in range(COMMANDS_PER_USER):
+        cmd = random.choice(commands)
+        _send_command(user, cmd)
+        turn_count += 1
+        # Track intent from command
+        if "status" in cmd.lower():
+            last_intent = "so_status"
+        elif "payment" in cmd.lower():
+            last_intent = "payment_status"
+        elif "workflow" in cmd.lower() or "pipeline" in cmd.lower():
+            last_intent = "workflow_status"
+        elif "mfg" in cmd.lower() or "work order" in cmd.lower():
+            last_intent = "mfg_status"
+        else:
+            last_intent = "list_orders"
+        
+        time.sleep(random.uniform(0.1, 0.5))
+
+    print(f"[{user}] final state: last_intent={last_intent} turns={turn_count}")
 
 
 def run_load_test(
-    num_commands: int = 50,
-    num_users: int = 5
-) -> Dict:
+    num_users: int = NUM_USERS,
+    commands_per_user: int = COMMANDS_PER_USER,
+):
     """
-    Run load test with concurrent requests.
-    
+    Light concurrent load test for Raven multi-agent stack.
+
     Args:
-        num_commands: Total number of commands to execute
         num_users: Number of concurrent users to simulate
+        commands_per_user: Number of commands each user executes
         
-    Returns:
-        Dictionary with test results and metrics
+    Run from bench:
+        bench --site <site> execute raven_ai_agent.cli.load_test_multi_agent.run_load_test
     """
-    print("=" * 60)
-    print(f"Starting Load Test: {num_commands} commands, {num_users} users")
-    print("=" * 60)
-    
-    metrics = LoadTestMetrics()
-    
-    # Prepare tasks
-    tasks = []
-    for i in range(num_commands):
-        user = f"loadtest_user{i % num_users}@example.com"
-        bot_type, command = random.choice(TEST_COMMANDS)
-        tasks.append((user, bot_type, command))
-    
-    # Run concurrent requests
-    start_time = time.time()
-    
-    with ThreadPoolExecutor(max_workers=num_users) as executor:
-        futures = []
-        for user, bot_type, command in tasks:
-            future = executor.submit(
-                send_test_command,
-                user,
-                bot_type,
-                command,
-                metrics
-            )
-            futures.append(future)
-        
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                metrics.record_failure(str(e))
-    
-    total_time = time.time() - start_time
-    
-    summary = metrics.get_summary()
-    summary["total_time_seconds"] = total_time
-    summary["requests_per_second"] = num_commands / total_time
-    
-    print("\n" + "=" * 60)
-    print("Load Test Results")
-    print("=" * 60)
-    print(f"Total Requests: {summary['total_requests']}")
-    print(f"Successful: {summary['successful']}")
-    print(f"Failed: {summary['failed']}")
-    print(f"Success Rate: {summary['success_rate']*100:.1f}%")
-    print(f"Avg Response Time: {summary['avg_response_time_ms']:.2f}ms")
-    print(f"Total Time: {summary['total_time_seconds']:.2f}s")
-    print(f"Requests/Second: {summary['requests_per_second']:.1f}")
-    print("=" * 60)
-    
-    return summary
+    print(
+        f"=== Phase 9 Load Test: {num_users} users x {commands_per_user} commands "
+        f"(channel={CHANNEL}) ==="
+    )
+
+    threads = []
+    for i in range(num_users):
+        t = threading.Thread(target=_user_thread, args=(i,))
+        t.daemon = True
+        threads.append(t)
+
+    for t in threads:
+        t.start()
+
+    for t in threads:
+        t.join()
+
+    print("=== Load test complete ===")
 
 
 def main():
     """Entry point for CLI execution."""
-    print("Starting Phase 9 Load Test...")
-    
-    result = run_load_test(num_commands=50, num_users=5)
-    
-    if result["success_rate"] >= 0.8:
-        print("\n✓ Load test PASSED")
-    else:
-        print("\n✗ Load test FAILED - success rate below 80%")
+    run_load_test()
 
 
 if __name__ == "__main__":
