@@ -24,6 +24,7 @@ import frappe
 import re
 from typing import Dict, List, Optional
 from frappe.utils import nowdate, getdate, flt, add_days
+from raven_ai_agent.utils.doc_resolver import resolve_document_name_safe
 
 
 class WorkflowOrchestrator:
@@ -72,6 +73,11 @@ class WorkflowOrchestrator:
         pipeline_state = {"so_name": so_name, "errors": []}
 
         try:
+            # Resolve partial SO name to full name (e.g., "SO-00752" → "SO-00752-LEGOSAN AB")
+            resolved_so = resolve_document_name_safe("Sales Order", so_name)
+            if resolved_so:
+                so_name = resolved_so
+            
             so = frappe.get_doc("Sales Order", so_name)
         except frappe.DoesNotExistError:
             return {"success": False, "error": f"Sales Order '{so_name}' not found."}
@@ -422,6 +428,11 @@ class WorkflowOrchestrator:
             Dict with pipeline position and status of each step
         """
         try:
+            # Resolve partial SO name to full name
+            resolved_so = resolve_document_name_safe("Sales Order", so_name)
+            if resolved_so:
+                so_name = resolved_so
+            
             so = frappe.get_doc("Sales Order", so_name)
             item_code = so.items[0].item_code if so.items else None
 
