@@ -668,44 +668,49 @@ def format_pipeline_validation(result: Dict) -> str:
     }
     
     emoji = status_emoji.get(result["status"], "❓")
-    lines.append(f"{emoji} **Pipeline Validation: {result['quotation']}**\n")
+    lines.append(f"{emoji} **Pipeline Validation: {result['quotation']}**")
+    lines.append("")  # Blank line after header
     
-    # Documents
+    # Documents - each on its own line with clear separation
     docs = result.get("documents", {})
     if "quotation" in docs:
         q = docs["quotation"]
-        lines.append(f"  📋 QTN: {q['name']} | {q['status']} | {q['currency']} {q['grand_total']:,.2f}")
+        lines.append(f"📋 **QTN:** {q['name']} | {q['status']} | {q['currency']} {q['grand_total']:,.2f}")
     if "sales_order" in docs:
         s = docs["sales_order"]
-        lines.append(f"  📦 SO: {s['name']} | Status: {s['status']} | Terms: {s.get('payment_terms','N/A')}")
+        lines.append(f"📦 **SO:** {s['name']} | Status: {s['status']} | Terms: {s.get('payment_terms','N/A')}")
     if "delivery_note" in docs:
         d = docs["delivery_note"]
-        lines.append(f"  🚚 DN: {d['name']} | Submitted: {'✅' if d['docstatus'] == 1 else '❌'}")
+        lines.append(f"🚚 **DN:** {d['name']} | Submitted: {'✅' if d['docstatus'] == 1 else '❌'}")
     if "sales_invoice" in docs:
         i = docs["sales_invoice"]
-        lines.append(f"  🧾 SI: {i['name']} | Status: {i['status']} | {i['currency']} {i['grand_total']:,.2f}")
+        lines.append(f"🧾 **SI:** {i['name']} | Status: {i['status']} | {i['currency']} {i['grand_total']:,.2f}")
+    
+    lines.append("")  # Blank line before CFDI section
     
     # CFDI
     cfdi = result.get("cfdi", {})
     if cfdi:
-        lines.append(f"\n  🇲🇽 CFDI: {cfdi.get('actual_payment_option','?')} (expected: {cfdi.get('expected_payment_option','?')})")
+        lines.append(f"🇲🇽 **CFDI:** {cfdi.get('actual_payment_option','?')} (expected: {cfdi.get('expected_payment_option','?')})")
         # BUG 22: Show QTN credit_days reference for traceability
         if cfdi.get("qtn_credit_days"):
-            lines.append(f"    📎 {cfdi['qtn_credit_days']}")
+            lines.append(f"  📎 {cfdi['qtn_credit_days']}")
         if cfdi.get("audit"):
             for a in cfdi["audit"][:3]:
-                lines.append(f"    └─ {a}")
+                lines.append(f"  └─ {a}")
+    
+    lines.append("")  # Blank line before Issues
     
     # Issues
     issues = result.get("issues", [])
     if issues:
-        lines.append(f"\n  **Issues ({len(issues)}):**")
+        lines.append(f"**Issues ({len(issues)}):**")
         for issue in issues:
-            lines.append(f"  ⚠️ {issue}")
+            lines.append(f"⚠️ {issue}")
     else:
-        lines.append(f"\n  **No issues found** ✅")
+        lines.append(f"**No issues found** ✅")
     
-    return "\n".join(lines)
+    return "<br>".join(lines)
 
 
 
