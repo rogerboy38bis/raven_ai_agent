@@ -734,21 +734,11 @@ class WorkflowOrchestrator:
 
         # ---- VALIDATE PIPELINE (R6) ----
         if subcommand == "validate":
-            # Case A: No argument - show mini-help
+            # If no argument, fall through to full help (don't show mini-help)
             if not subcommand_arg:
-                return (
-                    "❓ **Usage:** @workflow validate <Quotation or Sales Order>\n\n"
-                    "**Examples:**\n"
-                    "- @workflow validate SAL-QTN-2024-00752\n"
-                    "- @workflow validate SAL-QTN-2024-0753\n"
-                    "- @workflow validate SO-00752\n\n"
-                    "**Partial names supported:**\n"
-                    "- 0753 → SAL-QTN-2024-00753\n"
-                    "- SO-00752 → SO-00752-LEGOSAN AB\n\n"
-                    "The system will auto-resolve partial / mistyped names."
-                )
+                return self._help_text()
             
-            # Case B: Argument present - run validation
+            # Argument present: run validation
             # Use qtn_name if found, otherwise try numeric_name
             target = qtn_name if qtn_name else (numeric_name if numeric_name else subcommand_arg)
             
