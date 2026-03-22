@@ -720,21 +720,7 @@ class WorkflowOrchestrator:
             return result.get("message", result.get("error", "Unknown error"))
 
         # ---- VALIDATE PIPELINE (R6) ----
-        if "validate" in message_lower:
-            # Check if validate is called without an argument
-            if not qtn_name:
-                return (
-                    "❓ **Usage:** @workflow validate <Quotation or Sales Order>\n\n"
-                    "**Examples:**\n"
-                    "- @workflow validate SAL-QTN-2024-00752\n"
-                    "- @workflow validate SAL-QTN-2024-0753\n"
-                    "- @workflow validate SO-00752\n\n"
-                    "**Partial names supported:**\n"
-                    "- 0753 → SAL-QTN-2024-00753\n"
-                    "- SO-00752 → SO-00752-LEGOSAN AB\n\n"
-                    "The system will auto-resolve partial / mistyped names."
-                )
-            
+        if "validate" in message_lower and qtn_name:
             # Validate with argument provided
             try:
                 # Resolve partial Quotation name to full name
