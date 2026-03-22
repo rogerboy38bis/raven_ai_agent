@@ -124,18 +124,18 @@ def run_scenario_2(
     so_name: str = "SO-00763-LORAND LABORATORIES"
 ) -> list:
     """
-    Phase 9 Scenario 2: Morning Briefing + Manufacturing Status + Payments
+    Phase 9 Scenario 2: Workflow Status + Manufacturing + Payments
     
     This scenario focuses on:
-    - Morning briefing (sales summary + pending WOs + overdue payments)
+    - Workflow status for a specific SO
     - Manufacturing status for a specific SO with many items
-    - Payment tracking
+    - Payment tracking for the customer
     
     All commands are pre-tuned to return concrete data instead of help text.
     Key adjustments from Scenario 1 learnings:
     - Use full SO names (not shortened)
     - Use specific phrasing that maps to concrete actions
-    - Include SO name in manufacturing commands
+    - Use "payment outstanding customer" for specific customer payments
     
     Args:
         user: The user to run as
@@ -183,48 +183,40 @@ def run_scenario_2(
             return error_msg
     
     print("=" * 60)
-    print("Phase 9 Scenario 2: Morning Briefing + MFG Status + Payments")
+    print("Phase 9 Scenario 2: Workflow Status + MFG Status + Payments")
     print(f"Using SO: {so_name}")
     print("=" * 60)
     
-    # 1) Morning briefing via workflow orchestrator
-    # Pre-tuned: morning briefing should return a summary dashboard
-    response = send_to_agent("workflow_orchestrator", "morning briefing")
-    transcript.append(("@ai morning briefing", response))
+    # 1) Workflow status - returns concrete pipeline data
+    response = send_to_agent("workflow_orchestrator", f"workflow status {so_name}")
+    transcript.append((f"@ai workflow status {so_name}", response))
     
-    # 2) Manufacturing status for SPECIFIC SO (not generic)
-    # Pre-tuned: include SO name to get concrete data instead of help
+    # 2) Manufacturing status for SPECIFIC SO
     response = send_to_agent("manufacturing", f"mfg status {so_name}")
     transcript.append((f"@ai mfg status {so_name}", response))
     
     # 3) Show work orders for specific SO
-    # Pre-tuned: use "show work orders for <SO>" format
     response = send_to_agent("manufacturing", f"show work orders for {so_name}")
     transcript.append((f"@ai show work orders for {so_name}", response))
     
-    # 4) Sales order status - full status
-    # Pre-tuned: use "full status <SO>" for complete info
+    # 4) Sales order - full status
     response = send_to_agent("sales_order_follow_up", f"full status {so_name}")
     transcript.append((f"@ai full status {so_name}", response))
     
     # 5) Diagnose SO - find issues blocking the order
-    # Pre-tuned: "diagnose <SO>" should return concrete issues
     response = send_to_agent("sales_order_follow_up", f"diagnose {so_name}")
     transcript.append((f"@ai diagnose {so_name}", response))
     
     # 6) Next steps for SO
-    # Pre-tuned: "next steps <SO>" should return actionable items
     response = send_to_agent("sales_order_follow_up", f"next steps {so_name}")
     transcript.append((f"@ai next steps {so_name}", response))
     
-    # 7) Payment status for specific SO
-    # Pre-tuned: check payment status for specific SO
-    response = send_to_agent("payment", f"payment status {so_name}")
-    transcript.append((f"@ai payment status {so_name}", response))
+    # 7) Payment outstanding for specific customer
+    response = send_to_agent("payment", "payment outstanding customer LORAND LABORATORIES LLC")
+    transcript.append(("@ai payment outstanding customer LORAND LABORATORIES LLC", response))
     
     # 8) Workflow pipeline status
-    # Pre-tuned: check workflow status for specific SO
-    response = send_to_agent("workflow_orchestrator", f"status {so_name}")
+    response = send_to_agent("workflow_orchestrator", f"pipeline status {so_name}")
     transcript.append((f"@ai pipeline status {so_name}", response))
     
     print("\n" + "=" * 60)
