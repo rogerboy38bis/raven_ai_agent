@@ -712,12 +712,21 @@ class WorkflowOrchestrator:
         # ---- PIPELINE STATUS ----
         if ("status" in message_lower or "dashboard" in message_lower
                 or "pipeline" in message_lower) and so_name:
+            # Resolve partial SO name to full name
+            resolved_so = resolve_document_name_safe("Sales Order", so_name)
+            if resolved_so:
+                so_name = resolved_so
             result = self.get_pipeline_status(so_name)
             return result.get("message", result.get("error", "Unknown error"))
 
         # ---- VALIDATE PIPELINE (R6) ----
         if "validate" in message_lower and qtn_name:
             try:
+                # Resolve partial Quotation name to full name
+                resolved_qtn = resolve_document_name_safe("Quotation", qtn_name)
+                if resolved_qtn:
+                    qtn_name = resolved_qtn
+                    
                 from raven_ai_agent.api.truth_hierarchy import validate_pipeline, format_pipeline_validation
                 result = validate_pipeline(qtn_name)
                 return format_pipeline_validation(result)
@@ -728,6 +737,11 @@ class WorkflowOrchestrator:
 
         # ---- CREATE SO FROM QUOTATION ----
         if "create" in message_lower and "so" in message_lower and qtn_name:
+            # Resolve partial Quotation name to full name
+            resolved_qtn = resolve_document_name_safe("Quotation", qtn_name)
+            if resolved_qtn:
+                qtn_name = resolved_qtn
+                
             result = self.create_so_from_quotation(qtn_name)
             return result.get("message", result.get("error", "Unknown error"))
 

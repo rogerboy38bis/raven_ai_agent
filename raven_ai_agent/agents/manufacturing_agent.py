@@ -1356,6 +1356,11 @@ class ManufacturingAgent:
         if ("mfg status" in message_lower or "mfg dashboard" in message_lower
                 or "manufacturing status" in message_lower
                 or "manufacturing dashboard" in message_lower):
+            # Resolve partial SO name to full name
+            if so_name:
+                resolved_so = resolve_document_name_safe("Sales Order", so_name)
+                if resolved_so:
+                    so_name = resolved_so
             return self.mfg_status_dashboard(so_name=so_name)
 
         # ---- MANUFACTURE / FINISH (Steps 2, 5) ----
