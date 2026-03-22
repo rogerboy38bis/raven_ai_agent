@@ -682,6 +682,18 @@ class WorkflowOrchestrator:
         """
         message_lower = message.lower().strip()
 
+        # ---- PARSE SUBCOMMAND ----
+        # Extract the first word after @workflow
+        subcommand_match = re.search(r'@workflow\s+(\w+)', message, re.IGNORECASE)
+        subcommand = subcommand_match.group(1).lower() if subcommand_match else ""
+        
+        # Get everything after the subcommand
+        if subcommand_match:
+            arg_start = subcommand_match.end()
+            subcommand_arg = message[arg_start:].strip()
+        else:
+            subcommand_arg = ""
+
         # Extract document names
         so_pattern = r'(SO-[\w-]+(?:\s+(?!from\b|to\b|pipeline\b|status\b|check\b|audit\b|validate\b|diagnose\b|bom\b|qty\b|quantity\b|item\b|warehouse\b|wh\b)[\w\.]+)*|SAL-ORD-[\d-]+)'
         so_match = re.search(so_pattern, message, re.IGNORECASE)
@@ -690,6 +702,10 @@ class WorkflowOrchestrator:
         qtn_pattern = r'(SAL-QTN-[\w-]+|QTN-[\w-]+)'
         qtn_match = re.search(qtn_pattern, message, re.IGNORECASE)
         qtn_name = qtn_match.group(1) if qtn_match else None
+        
+        # Also check for numeric-only names like 0753
+        numeric_match = re.search(r'(\d{3,5})', message, re.IGNORECASE)
+        numeric_name = numeric_match.group(1) if numeric_match else None
 
         # ---- HELP ----
         if "help" in message_lower or "capabilities" in message_lower:
@@ -720,16 +736,33 @@ class WorkflowOrchestrator:
             return result.get("message", result.get("error", "Unknown error"))
 
         # ---- VALIDATE PIPELINE (R6) ----
-        if "validate" in message_lower and qtn_name:
-            # Validate with argument provided
+        if subcommand == "validate":
+            # Case A: No argument - show mini-help
+            if not subcommand_arg:
+                return (
+                    "❓ **Usage:** @workflow validate <Quotation or Sales Order>\n\n"
+                    "**Examples:**\n"
+                    "- @workflow validate SAL-QTN-2024-00752\n"
+                    "- @workflow validate SAL-QTN-2024-0753\n"
+                    "- @workflow validate SO-00752\n\n"
+                    "**Partial names supported:**\n"
+                    "- 0753 → SAL-QTN-2024-00753\n"
+                    "- SO-00752 → SO-00752-LEGOSAN AB\n\n"
+                    "The system will auto-resolve partial / mistyped names."
+                )
+            
+            # Case B: Argument present - run validation
+            # Use qtn_name if found, otherwise try numeric_name
+            target = qtn_name if qtn_name else (numeric_name if numeric_name else subcommand_arg)
+            
+            # Resolve partial/mistyped names
+            resolved = resolve_document_name_safe("Quotation", target)
+            if resolved:
+                target = resolved
+            
             try:
-                # Resolve partial Quotation name to full name
-                resolved_qtn = resolve_document_name_safe("Quotation", qtn_name)
-                if resolved_qtn:
-                    qtn_name = resolved_qtn
-                    
                 from raven_ai_agent.api.truth_hierarchy import validate_pipeline, format_pipeline_validation
-                result = validate_pipeline(qtn_name)
+                result = validate_pipeline(target)
                 return format_pipeline_validation(result)
             except ImportError:
                 return "Pipeline validation requires truth_hierarchy module."
