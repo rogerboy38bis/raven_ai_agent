@@ -22,6 +22,7 @@ Usage:
 import frappe
 from typing import Dict, List, Optional, Any
 from frappe.utils import nowdate
+from raven_ai_agent.utils.doc_resolver import resolve_document_name
 
 
 # =============================================================================
@@ -507,8 +508,21 @@ def validate_pipeline(quotation_name: str) -> Dict:
         Dict with validation results and any issues found.
     """
     issues = []
+    
+    # Resolve partial/misspelled quotation names
+    resolved_qtn = resolve_document_name("Quotation", quotation_name)
+    if not resolved_qtn:
+        results = {
+            "quotation": quotation_name,
+            "status": "FAIL",
+            "documents": {},
+            "cfdi": {},
+            "issues": [f"Quotation '{quotation_name}' not found"]
+        }
+        return results
+    
     results = {
-        "quotation": quotation_name,
+        "quotation": resolved_qtn,
         "status": "PASS",
         "documents": {},
         "cfdi": {},
@@ -517,7 +531,7 @@ def validate_pipeline(quotation_name: str) -> Dict:
     
     # 1. Check Quotation
     try:
-        qtn = frappe.get_doc("Quotation", quotation_name)
+        qtn = frappe.get_doc("Quotation", resolved_qtn)
         results["documents"]["quotation"] = {
             "name": qtn.name,
             "status": qtn.status,
@@ -534,9 +548,9 @@ def validate_pipeline(quotation_name: str) -> Dict:
         return results
     
     # 2. Check Sales Order
-    so_name = check_existing_so(quotation_name)
+    so_name = check_existing_so(resolved_qtn)
     if not so_name:
-        issues.append(f"No Sales Order found for {quotation_name}")
+        issues.append(f"No Sales Order found for {resolved_qtn}")
         results["status"] = "FAIL"
         return results
     
