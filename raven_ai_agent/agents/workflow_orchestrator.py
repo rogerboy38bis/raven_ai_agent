@@ -687,7 +687,7 @@ class WorkflowOrchestrator:
         so_match = re.search(so_pattern, message, re.IGNORECASE)
         so_name = so_match.group(1) if so_match else None
 
-        qtn_pattern = r'(SAL-QTN-[\d-]+|QTN-[\d-]+)'
+        qtn_pattern = r'(SAL-QTN-[\w-]+|QTN-[\w-]+)'
         qtn_match = re.search(qtn_pattern, message, re.IGNORECASE)
         qtn_name = qtn_match.group(1) if qtn_match else None
 
