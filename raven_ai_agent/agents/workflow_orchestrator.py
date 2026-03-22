@@ -734,9 +734,9 @@ class WorkflowOrchestrator:
 
         # ---- VALIDATE PIPELINE (R6) ----
         if subcommand == "validate":
-            # If no argument, fall through to full help (don't show mini-help)
+            # If no argument, show validation-specific mini-help
             if not subcommand_arg:
-                return self._help_text()
+                return self._validate_mini_help()
             
             # Argument present: run validation
             # Use qtn_name if found, otherwise try numeric_name
@@ -803,7 +803,8 @@ class WorkflowOrchestrator:
             "`@workflow dashboard [SO-NAME]` — Same as status\n\n"
             "**Pre-workflow**\n"
             "`@workflow create so from [QTN-NAME]` — Create SO from Quotation\n"
-            "`@workflow validate [QTN-NAME]` — Validate full pipeline (R6)\n\n"
+            "`@workflow validate [QTN or SO]` — Validate full pipeline (R6)\n"
+            "  Examples: @workflow validate SAL-QTN-2024-00753 | @workflow validate 0753 | @workflow validate SO-00752\n\n"
             "**The 8 Steps:**\n"
             "```\n"
             "1. Manufacturing WO (create + submit)\n"
@@ -820,4 +821,16 @@ class WorkflowOrchestrator:
             "@workflow run SO-00752-LEGOSAN AB mfg-bom BOM-0307-005 sales-bom BOM-0307-001\n"
             "@workflow status SO-00752-LEGOSAN AB\n"
             "```"
+        )
+
+    def _validate_mini_help(self) -> str:
+        """Return mini-help for @workflow validate with no argument"""
+        return (
+            "❓ **Usage: @workflow validate <Quotation or Sales Order>**\n\n"
+            "**Examples:**\n"
+            "- `@workflow validate SAL-QTN-2024-00753`\n"
+            "- `@workflow validate 0753` (→ SAL-QTN-2024-00753)\n"
+            "- `@workflow validate SO-00752` (→ SO-00752-LEGOSAN AB)\n\n"
+            "You can pass full names, partial names, or just the numeric part.\n"
+            "The system will auto-resolve them using the document resolver."
         )
