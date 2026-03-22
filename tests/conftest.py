@@ -4,13 +4,14 @@ Pytest configuration for raven_ai_agent unit tests.
 This conftest.py provides a comprehensive mock of the frappe module
 for unit testing without requiring a real Frappe/ERPNext installation.
 """
+import os
 import sys
 import types
 from unittest.mock import MagicMock
 import pytest
 
 
-PROJECT_ROOT = "/workspace/raven_ai_agent"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # Exception classes must be defined BEFORE _FrappeMock

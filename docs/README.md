@@ -20,6 +20,24 @@ This folder contains project documentation, specifications, and architectural pl
 | [MONITORING_ALERTING.md](./MONITORING_ALERTING.md) | Monitoring setup, alert thresholds, troubleshooting guide, known issues | ✅ Active |
 | [FEEDBACK_IMPROVEMENT.md](./FEEDBACK_IMPROVEMENT.md) | Feedback capture, monthly review process, governance structure, continuous improvement | ✅ Active |
 
+### Phase 7 - Intent Resolver
+
+| Document | Description | Status |
+|----------|-------------|--------|
+| [INTENT_RESOLVER_SPEC.md](./INTENT_RESOLVER_SPEC.md) | NL→command resolution, confidence thresholds, router integration | ✅ Active |
+
+### Phase 8A - Anti-Hallucination
+
+| Document | Description | Status |
+|----------|-------------|--------|
+| [ANTI_HALLUCINATION_SPEC.md](./ANTI_HALLUCINATION_SPEC.md) | Response validation, fact-checking against ground truth, confidence scoring | ✅ Active |
+
+### Phase 8B - Multi-Agent Orchestration
+
+| Document | Description | Status |
+|----------|-------------|--------|
+| [MULTI_AGENT_SPEC.md](./MULTI_AGENT_SPEC.md) | Session context, inter-agent event bus, pipeline execution, workflow commands | ✅ Active |
+
 ### Implementation Roadmaps
 
 | Document | Description | Status |

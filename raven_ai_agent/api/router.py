@@ -239,6 +239,18 @@ def handle_raven_message(doc=None, method=None):
             
             bot_name = _detect_ai_intent(query)
             frappe.logger().info(f"[AI Agent] @ai intent detected: {bot_name}")
+            
+            # Phase 8B: Try multi-agent pipeline first (only for @ai commands)
+            try:
+                from raven_ai_agent.api.multi_agent_router import handle_multi_agent_command
+                multi_result = handle_multi_agent_command(query, user)
+                if multi_result is not None:
+                    # Multi-agent pipeline handled it - send response and return
+                    response_text = apply_post_processing(multi_result)
+                    _send_bot_message(doc, response_text)
+                    return
+            except Exception as e:
+                frappe.logger().warning(f"[MultiAgentRouter] Pipeline failed, falling through: {e}")
         
         # Check for @sales_order_bot mention
         elif "sales_order_bot" in plain_text.lower():
@@ -396,6 +408,26 @@ def handle_raven_message(doc=None, method=None):
         
         frappe.logger().info(f"[AI Agent] Result: success={result.get('success')}")
         
+        # Phase 8B: Update context store after successful response
+        if result.get('success'):
+            try:
+                from raven_ai_agent.utils.context_manager import ContextStore
+                store = ContextStore()
+                ctx = store.get_or_create(user)
+                
+                # Extract document from query for context
+                so_match = re.search(r'SO-[\w\-\.\s]+', query, re.IGNORECASE)
+                extracted_doc = so_match.group(0).strip() if so_match else None
+                
+                ctx.update(
+                    intent=bot_name,
+                    document=extracted_doc,
+                    agent=bot_name,
+                    command=query
+                )
+            except Exception as e:
+                frappe.logger().warning(f"[ContextManager] Failed to update context: {e}")
+        
         # Get bot for proper message sending
         bot = None
         if bot_name:
@@ -460,3 +492,23 @@ def handle_raven_message(doc=None, method=None):
             publish_message_created_event(error_doc, doc.channel_id)
         except:
             pass
+
+
+
+def _send_bot_message(doc, text):
+    """Send a bot message to the Raven channel."""
+    try:
+        bot = frappe.get_doc("Raven Bot", "sales_order_bot")
+        bot.send_message(channel_id=doc.channel_id, text=text, markdown=True)
+    except frappe.DoesNotExistError:
+        # Fallback: create message directly
+        reply_doc = frappe.get_doc({
+            "doctype": "Raven Message",
+            "channel_id": doc.channel_id,
+            "text": text,
+            "message_type": "Text",
+            "is_bot_message": 1
+        })
+        reply_doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+        publish_message_created_event(reply_doc, doc.channel_id)
