@@ -299,17 +299,20 @@ def run_quotation_scenario(
     response = send_to_agent("workflow_orchestrator", f"validate {qtn_name}")
     transcript.append((f"@workflow validate {qtn_name}", response))
 
-    # 2) Create Sales Order from Quotation
+    # 2) Create Sales Order from Quotation (skip if SO already exists)
+    #    For testing, we'll assume SO might already exist, so handle gracefully
     response = send_to_agent("workflow_orchestrator", f"create so from {qtn_name}")
     transcript.append((f"@workflow create so from {qtn_name}", response))
 
-    # 3) Show workflow status for resulting SO (assuming same suffix pattern)
-    #    For first pass, we just reuse the QTN suffix. Adjust once you see actual SO name.
-    so_guess = qtn_name.replace("QTN", "SO")
+    # 3) Show workflow status for resulting SO
+    #    The SO name format is SO-XXXXX-CUSTOMER (e.g., SO-00752-LEGOSAN AB)
+    #    Try to resolve partial name or use known pattern
+    so_base = qtn_name.split("-")[-1] if "-" in qtn_name else qtn_name[-4:]
+    so_guess = f"SO-{so_base}"
     response = send_to_agent("workflow_orchestrator", f"status {so_guess}")
     transcript.append((f"@workflow status {so_guess}", response))
 
-    # 4) Full status
+    # 4) Full status - try partial SO name, resolver will find full name
     response = send_to_agent("sales_order_follow_up", f"full status {so_guess}")
     transcript.append((f"@ai full status {so_guess}", response))
 
