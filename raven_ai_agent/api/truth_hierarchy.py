@@ -659,7 +659,20 @@ def validate_pipeline(quotation_name: str) -> Dict:
 
 def format_pipeline_validation(result: Dict) -> str:
     """Format pipeline validation result as a readable message."""
+    from urllib.parse import quote
+    
     lines = []
+    
+    # Get site URL for links
+    site = frappe.local.site
+    base_url = f"/desk"
+    
+    def make_link(doctype: str, docname: str) -> str:
+        """Create ERPNext link for a document."""
+        # URL encode the docname to handle special characters
+        from urllib.parse import quote
+        encoded_name = quote(docname, safe='')
+        return f"[{docname}]({base_url}/{doctype}/{encoded_name})"
     
     status_emoji = {
         "PASS": "✅",
@@ -668,23 +681,28 @@ def format_pipeline_validation(result: Dict) -> str:
     }
     
     emoji = status_emoji.get(result["status"], "❓")
-    lines.append(f"{emoji} **Pipeline Validation: {result['quotation']}**")
+    qtn_name = result["quotation"]
+    lines.append(f"{emoji} **Pipeline Validation:** {make_link('Quotation', qtn_name)}")
     lines.append("")  # Blank line after header
     
     # Documents - each on its own line with clear separation
     docs = result.get("documents", {})
     if "quotation" in docs:
         q = docs["quotation"]
-        lines.append(f"📋 **QTN:** {q['name']} | {q['status']} | {q['currency']} {q['grand_total']:,.2f}")
+        q_link = make_link("Quotation", q['name'])
+        lines.append(f"📋 **QTN:** {q_link} | {q['status']} | {q['currency']} {q['grand_total']:,.2f}")
     if "sales_order" in docs:
         s = docs["sales_order"]
-        lines.append(f"📦 **SO:** {s['name']} | Status: {s['status']} | Terms: {s.get('payment_terms','N/A')}")
+        so_link = make_link("Sales Order", s['name'])
+        lines.append(f"📦 **SO:** {so_link} | Status: {s['status']} | Terms: {s.get('payment_terms','N/A')}")
     if "delivery_note" in docs:
         d = docs["delivery_note"]
-        lines.append(f"🚚 **DN:** {d['name']} | Submitted: {'✅' if d['docstatus'] == 1 else '❌'}")
+        dn_link = make_link("Delivery Note", d['name'])
+        lines.append(f"🚚 **DN:** {dn_link} | Submitted: {'✅' if d['docstatus'] == 1 else '❌'}")
     if "sales_invoice" in docs:
         i = docs["sales_invoice"]
-        lines.append(f"🧾 **SI:** {i['name']} | Status: {i['status']} | {i['currency']} {i['grand_total']:,.2f}")
+        si_link = make_link("Sales Invoice", i['name'])
+        lines.append(f"🧾 **SI:** {si_link} | Status: {i['status']} | {i['currency']} {i['grand_total']:,.2f}")
     
     lines.append("")  # Blank line before CFDI section
     
