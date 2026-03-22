@@ -44,29 +44,33 @@ class CommandRouterMixin:
             frappe.logger().info("[Workflow] Workflows disabled")
             return None
 
-        # ---- VALIDATE without argument: show mini-help ----
-        # Check if user typed @workflow validate but without a document name
-        # Use broader pattern that matches partial names too
-        qtn_match = re.search(r'(SAL-QTN-[\w-]+|QTN-[\w-]+)', query, re.IGNORECASE)
+        # ---- VALIDATE: Check for partial/numeric names ----
+        # Match full quotation names OR partial numeric names (like 0753)
+        qtn_match = re.search(r'(SAL-QTN-[\w-]+|QTN-[\w-]+|\d{3,5})', query, re.IGNORECASE)
+        
+        # ---- VALIDATE without argument: show full help ----
         if "validate" in query_lower and not qtn_match:
-            # Extract just "validate" part to check if it's standalone
-            # Match @workflow validate or workflow validate (with or without @)
-            validate_pattern = re.search(r'^\s*@?\w+\s+validate\s*$', query, re.IGNORECASE|re.MULTILINE)
-            if validate_pattern or re.search(r'^\s*validate\s*$', query_lower.strip()):
-                return {
-                    "success": True,
-                    "message": (
-                        "❓ **Usage:** @workflow validate <Quotation or Sales Order>\n\n"
-                        "**Examples:**\n"
-                        "- @workflow validate SAL-QTN-2024-00752\n"
-                        "- @workflow validate SAL-QTN-2024-0753\n"
-                        "- @workflow validate SO-00752\n\n"
-                        "**Partial names supported:**\n"
-                        "- 0753 → SAL-QTN-2024-00753\n"
-                        "- SO-00752 → SO-00752-LEGOSAN AB\n\n"
-                        "The system will auto-resolve partial / mistyped names."
-                    )
-                }
+            # User typed just @workflow validate - show the full command catalog
+            # Let it fall through to WorkflowOrchestrator which will show the full help
+            pass
+        elif "validate" in query_lower and qtn_match:
+            # User typed @workflow validate with an argument - run validation
+            target = qtn_match.group(1)
+            # If it's numeric-only, try to resolve it
+            if target.isdigit():
+                from raven_ai_agent.utils.doc_resolver import resolve_document_name_safe
+                resolved = resolve_document_name_safe("Quotation", target)
+                if resolved:
+                    target = resolved
+            
+            try:
+                from raven_ai_agent.api.truth_hierarchy import validate_pipeline, format_pipeline_validation
+                result = validate_pipeline(target.upper() if not target.isdigit() else target)
+                return {"success": True, "message": format_pipeline_validation(result)}
+            except ImportError:
+                return {"success": False, "error": "Pipeline validation requires truth_hierarchy module."}
+            except Exception as e:
+                return {"success": False, "error": f"Validation error: {str(e)}"}
         
         executor = WorkflowExecutor(self.user)
 
@@ -112,17 +116,6 @@ class CommandRouterMixin:
         is_dry_run = "--dry-run" in query_lower or "dry run" in query_lower
         if is_dry_run:
             executor.dry_run = True
-
-        # R6: Validate pipeline for a Quotation
-        if qtn_match and ("validate" in query_lower or "check pipeline" in query_lower):
-            try:
-                from raven_ai_agent.api.truth_hierarchy import validate_pipeline, format_pipeline_validation
-                result = validate_pipeline(qtn_match.group(1).upper())
-                return {"success": True, "message": format_pipeline_validation(result)}
-            except ImportError:
-                return {"success": False, "error": "Pipeline validation requires truth_hierarchy module."}
-            except Exception as e:
-                return {"success": False, "error": f"Validation error: {str(e)}"}
 
         # Complete workflow: Quotation → Invoice
         if qtn_match and "complete" in query_lower and ("workflow" in query_lower or "invoice" in query_lower):
