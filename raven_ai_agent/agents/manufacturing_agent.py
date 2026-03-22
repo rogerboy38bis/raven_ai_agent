@@ -189,6 +189,11 @@ class ManufacturingAgent:
             Dict with created Work Orders
         """
         try:
+            # Resolve partial SO name to full name (e.g., "SO-00752" → "SO-00752-LEGOSAN AB")
+            resolved_so = resolve_document_name_safe("Sales Order", so_name)
+            if resolved_so:
+                so_name = resolved_so
+            
             so = frappe.get_doc("Sales Order", so_name)
 
             if so.docstatus != 1:
@@ -827,6 +832,11 @@ class ManufacturingAgent:
             - fully_allocated: bool
         """
         try:
+            # Resolve partial SO name to full name (e.g., "SO-00752" → "SO-00752-LEGOSAN AB")
+            resolved_so = resolve_document_name_safe("Sales Order", so_name)
+            if resolved_so:
+                so_name = resolved_so
+            
             so = frappe.get_doc("Sales Order", so_name)
             if so.docstatus != 1:
                 return {"success": False, "error": f"Sales Order '{so_name}' must be submitted first."}

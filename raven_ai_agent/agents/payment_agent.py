@@ -26,6 +26,7 @@ import frappe
 import re
 from typing import Dict, List, Optional
 from frappe.utils import nowdate, getdate, flt
+from raven_ai_agent.utils.doc_resolver import resolve_document_name_safe
 
 
 class PaymentAgent:

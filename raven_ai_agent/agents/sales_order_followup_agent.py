@@ -22,6 +22,7 @@ import frappe
 from typing import Dict, List, Optional
 from frappe.utils import nowdate, getdate, flt
 import re
+from raven_ai_agent.utils.doc_resolver import resolve_document_name, resolve_document_name_safe
 
 
 class SalesOrderFollowupAgent:
@@ -1012,6 +1013,11 @@ class SalesOrderFollowupAgent:
     def get_so_status(self, so_name: str) -> Dict:
         """Get detailed status of a specific Sales Order"""
         try:
+            # Resolve partial SO name to full name (e.g., "SO-00752" → "SO-00752-LEGOSAN AB")
+            resolved_so = resolve_document_name_safe("Sales Order", so_name)
+            if resolved_so:
+                so_name = resolved_so
+            
             so = frappe.get_doc("Sales Order", so_name)
             
             # Get linked documents
