@@ -174,17 +174,92 @@ The document resolver from `raven_ai_agent` will be used for bulk import:
 | ✅ Naming Templates | Consistent filename patterns |
 | ✅ Link Fields | Field names for ERPNext forms |
 | ✅ Privacy Policy | Private-by-default agreement |
-| ✅ Drive Mapping Rule | DocType definition with example data |
+| ✅ Drive Mapping Rule | Already exists in drive app |
+| ✅ Drive API Research | Documented available methods |
 
 ---
 
-## 8. Sign-Off
+## 8. Drive API Research
+
+### Available Drive DocTypes
+
+| DocType | Purpose |
+|---------|---------|
+| **Drive File** | Core file entity - stores file metadata, content path, permissions |
+| **Drive Entity** | Base entity for files and folders |
+| **Drive Document** | Wrapper for ERPNext documents in Drive |
+| **Drive Team** | Team/workspace for organizing files |
+| **Drive Team Member** | Team membership and roles |
+| **Drive Permission** | Access control between users/teams |
+| **Drive Settings** | Global Drive configuration |
+| **Drive Mapping Rule** | Already exists - defines folder/filename templates |
+
+### Key API Methods
+
+#### File Upload (`drive.api.files.upload_file`)
+
+```python
+# Server-side call
+frappe.call({
+    method: "drive.api.files.upload_file",
+    args: {
+        team: "Drive Team Name",
+        parent: "parent_folder_name",
+        fullpath: "folder/subfolder/",
+        transfer: 0,
+        embed: 0,
+    }
+})
+```
+
+#### Drive Mapping Rule API (Already Implemented!)
+
+```python
+# Get mapping for a doctype
+frappe.call({
+    method: "drive_mapping_rule.get_mapping_for_doctype",
+    args: { doctype: "Sales Order", file_role: "Customer PO" }
+})
+# Returns: {folder_template, filename_template, file_role}
+
+# Resolve folder path
+frappe.call({
+    method: "drive_mapping_rule.resolve_folder_path",
+    args: { doctype: "Sales Order", docname: "SO-00752" }
+})
+# Returns: "Drive/Sales Orders/SO-00752/"
+```
+
+---
+
+## 9. Implementation Architecture
+
+### Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| Drive Mapping Rule | `drive` app | Folder/filename templates (EXISTING) |
+| File Upload Hook | `raven_ai_agent` | Handle upload events |
+| Link Fields | ERPNext Custom Fields | Display file links on forms |
+| Bulk Import | `raven_ai_agent` | Import legacy PDFs |
+
+### Workflow
+
+```
+User uploads file → Hook triggers → Get Drive Mapping Rule → 
+Resolve folder + filename → Create folder in Drive → 
+Upload file → Update link field on DocType
+```
+
+---
+
+## 10. Sign-Off
 
 **This design specification is ready for review.**
 
 Once approved, the next sub-phases are:
 
-- **10.2** – Implement Drive Mapping Rule DocType + file hooks + upload UI
+- **10.2** – Implement file hooks + upload UI + link fields
 - **10.3** – Bulk import tool for legacy PDFs using naming conventions
 - **10.4** – Drive UI enhancements and training materials
 
@@ -197,9 +272,10 @@ Once approved, the next sub-phases are:
 3. ✅ Is the "private by default" privacy policy correct?
 4. ✅ Are the Link-to-File field names intuitive for users?
 5. ✅ Should we add any additional doctypes to the first wave?
+6. ✅ Is the Drive API integration approach clear?
 
 ---
 
 *Document Author: MiniMax Agent*
-*Date: 2026-03-23*
+*Date: 2026-03-25*
 *Phase: 10.1*
