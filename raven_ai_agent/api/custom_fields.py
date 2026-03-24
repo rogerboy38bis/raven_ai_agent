@@ -15,6 +15,17 @@ def create_po_extraction_fields():
     fields = [
         {
             "dt": "Sales Order",
+            "fieldname": "customer_po_file",
+            "fieldtype": "Link",
+            "label": "Customer PO",
+            "description": "Linked Customer PO PDF from Drive",
+            "options": "File",
+            "insert_after": "customer",
+            "read_only": 1,
+            "module": "Raven AI Agent"
+        },
+        {
+            "dt": "Sales Order",
             "fieldname": "po_extraction_data",
             "fieldtype": "Small Text",
             "label": "PO Extraction Data",
@@ -82,6 +93,7 @@ def delete_po_extraction_fields():
     Remove custom fields on app uninstall
     """
     fields_to_remove = [
+        "customer_po_file",
         "po_extraction_data",
         "po_extracted", 
         "po_extraction_status",

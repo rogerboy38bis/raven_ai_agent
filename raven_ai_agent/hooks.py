@@ -10,6 +10,11 @@ required_apps = ["frappe"]
 # app_include_css = "/assets/raven_ai_agent/css/raven_ai_agent.css"
 # app_include_js = "/assets/raven_ai_agent/js/raven_ai_agent.js"
 
+# Doctype-specific JS (Phase 10.2.1 - Sales Order Upload)
+doctype_js = {
+    "Sales Order": "raven_ai_agent/public/js/sales_order_upload.js"
+}
+
 # Hooks
 doc_events = {
     "Raven Message": {
