@@ -35,3 +35,18 @@ website_route_rules = []
 
 # Fixtures
 fixtures = ["AI Agent Settings"]
+
+# ================================================
+# ORPHAN DELETION FIX (Frappe GitHub Issue #37799)
+# Prevent custom DocTypes from being deleted during bench migrate
+# ================================================
+override_doctype_class = {
+    "IoT Sensor Reading": "raven_ai_agent.raven_ai_agent.doctype.iot_sensor_reading.iot_sensor_reading.IoTSensorReading",
+    "IoT Ollama Settings": "raven_ai_agent.raven_ai_agent.doctype.iot_ollama_settings.iot_ollama_settings.IoTOllamaSettings",
+    "Alexa User Mapping": "raven_ai_agent.raven_ai_agent.doctype.alexa_user_mapping.alexa_user_mapping.AlexaUserMapping",
+    "AI Memory": "raven_ai_agent.raven_ai_agent.doctype.ai_memory.ai_memory.AIMemory",
+    "AI Agent Settings": "raven_ai_agent.raven_ai_agent.doctype.ai_agent_settings.ai_agent_settings.AIAgentSettings",
+}
+
+# Run workspace orphan fix before migration
+before_migrate = ["amb_w_tds.patches.fix_workspace_orphan.apply_patch"]
