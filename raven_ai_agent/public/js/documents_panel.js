@@ -3,12 +3,14 @@
 
 frappe.ui.form.on('Sales Order', {
     refresh: function(frm) {
+        console.log("Documents panel JS loaded for Sales Order:", frm.doc.name);
         add_documents_panel(frm, 'Sales Order');
     }
 });
 
 frappe.ui.form.on('Sales Invoice', {
     refresh: function(frm) {
+        console.log("Documents panel JS loaded for Sales Invoice:", frm.doc.name);
         add_documents_panel(frm, 'Sales Invoice');
     }
 });
@@ -16,6 +18,8 @@ frappe.ui.form.on('Sales Invoice', {
 function add_documents_panel(frm, doctype) {
     // Only show for saved documents
     if (frm.is_new()) return;
+    
+    console.log("Adding documents panel for", doctype, frm.doc.name);
     
     // Define document fields for each doctype
     var docFields = [];

@@ -10,15 +10,18 @@ required_apps = ["frappe"]
 # app_include_css = "/assets/raven_ai_agent/css/raven_ai_agent.css"
 # app_include_js = "/assets/raven_ai_agent/js/raven_ai_agent.js"
 
-# Doctype-specific JS 
-# Note: Multiple JS files for same doctype should be combined or use app_include_js
+# Doctype-specific JS (Phase 10.2.x - Upload buttons, Phase 10.4 - Documents Panel)
+# Note: Using lists to include multiple JS files per doctype
 doctype_js = {
-    "Sales Order": "raven_ai_agent/public/js/sales_order_upload.js",
-    "Sales Invoice": "raven_ai_agent/public/js/sales_invoice_upload.js"
+    "Sales Order": [
+        "raven_ai_agent/public/js/sales_order_upload.js",
+        "raven_ai_agent/public/js/documents_panel.js"
+    ],
+    "Sales Invoice": [
+        "raven_ai_agent/public/js/sales_invoice_upload.js",
+        "raven_ai_agent/public/js/documents_panel.js"
+    ]
 }
-
-# App-level JS (includes Phase 10.4 Documents Panel)
-app_include_js = "/assets/raven_ai_agent/js/documents_panel.js"
 
 # Hooks
 doc_events = {
