@@ -88,6 +88,67 @@ def create_po_extraction_fields():
     print("Custom fields created successfully!")
 
 
+def create_pedimento_fields():
+    """
+    Create custom fields for Sales Invoice Pedimento upload (Phase 10.2.2)
+    """
+    
+    fields = [
+        {
+            "dt": "Sales Invoice",
+            "fieldname": "pedimento_file",
+            "fieldtype": "Link",
+            "label": "Pedimento File",
+            "description": "Linked Pedimento PDF from Drive",
+            "options": "File",
+            "insert_after": "customer",
+            "read_only": 1,
+            "module": "Raven AI Agent"
+        }
+    ]
+    
+    for field in fields:
+        # Check if field already exists
+        if not frappe.db.exists("Custom Field", f"{field['dt']}-{field['fieldname']}"):
+            doc = frappe.get_doc({
+                "doctype": "Custom Field",
+                "dt": field["dt"],
+                "dtype": field["fieldtype"],
+                "fieldname": field["fieldname"],
+                "label": field["label"],
+                "description": field.get("description"),
+                "insert_after": field.get("insert_after"),
+                "hidden": field.get("hidden", 0),
+                "options": field.get("options"),
+                "default": field.get("default"),
+                "module": field.get("module"),
+                "is_system_generated": 0
+            })
+            doc.insert(ignore_permissions=True)
+            print(f"Created: {field['dt']}-{field['fieldname']}")
+    
+    frappe.db.commit()
+    print("Pedimento custom fields created successfully!")
+
+
+def delete_pedimento_fields():
+    """
+    Remove Sales Invoice Pedimento fields on app uninstall
+    """
+    fields_to_remove = [
+        "pedimento_file"
+    ]
+    
+    for field in fields_to_remove:
+        cf_name = f"Sales Invoice-{field}"
+        if frappe.db.exists("Custom Field", cf_name):
+            frappe.delete_doc("Custom Field", cf_name)
+            print(f"Deleted: {field}")
+    
+    frappe.db.commit()
+    print("Pedimento custom fields removed!")
+
+
 def delete_po_extraction_fields():
     """
     Remove custom fields on app uninstall

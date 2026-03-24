@@ -10,9 +10,10 @@ required_apps = ["frappe"]
 # app_include_css = "/assets/raven_ai_agent/css/raven_ai_agent.css"
 # app_include_js = "/assets/raven_ai_agent/js/raven_ai_agent.js"
 
-# Doctype-specific JS (Phase 10.2.1 - Sales Order Upload)
+# Doctype-specific JS (Phase 10.2.1 - Sales Order Upload, Phase 10.2.2 - Sales Invoice Upload)
 doctype_js = {
-    "Sales Order": "raven_ai_agent/public/js/sales_order_upload.js"
+    "Sales Order": "raven_ai_agent/public/js/sales_order_upload.js",
+    "Sales Invoice": "raven_ai_agent/public/js/sales_invoice_upload.js"
 }
 
 # Hooks
@@ -28,18 +29,21 @@ doc_events = {
 # App lifecycle hooks
 def post_install():
     """Create custom fields after app install"""
-    from raven_ai_agent.api.custom_fields import create_po_extraction_fields
+    from raven_ai_agent.api.custom_fields import create_po_extraction_fields, create_pedimento_fields
     create_po_extraction_fields()
+    create_pedimento_fields()
 
 def app_install():
     """Create custom fields on app install"""
-    from raven_ai_agent.api.custom_fields import create_po_extraction_fields
+    from raven_ai_agent.api.custom_fields import create_po_extraction_fields, create_pedimento_fields
     create_po_extraction_fields()
+    create_pedimento_fields()
 
 def app_uninstall():
     """Clean up custom fields on app uninstall"""
-    from raven_ai_agent.api.custom_fields import delete_po_extraction_fields
+    from raven_ai_agent.api.custom_fields import delete_po_extraction_fields, delete_pedimento_fields
     delete_po_extraction_fields()
+    delete_pedimento_fields()
 
 # Scheduler
 scheduler_events = {
