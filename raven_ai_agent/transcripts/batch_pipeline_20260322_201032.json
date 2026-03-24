@@ -1,0 +1,482 @@
+[
+  {
+    "error": null,
+    "input": "0752",
+    "output": {
+      "cfdi": {
+        "actual_cfdi_use": "G03",
+        "actual_payment_option": "PPD",
+        "audit": [
+          "QTN Traceback: Source QTN SAL-QTN-2024-00752 payment_schedule has credit_days=30",
+          "Template DB: Last invoice for LEGOSAN AB has mx_cfdi_use=G03",
+          "Template DB: Last invoice for LEGOSAN AB has mode_of_payment=Wire Transfer"
+        ],
+        "expected_cfdi_use": "G03",
+        "expected_payment_option": "PPD",
+        "qtn_credit_days": "QTN SAL-QTN-2024-00752 credit_days=30"
+      },
+      "documents": {
+        "delivery_note": {
+          "docstatus": 1,
+          "grand_total": 15271.5,
+          "name": "MAT-DN-2026-00002",
+          "status": "Completed"
+        },
+        "quotation": {
+          "currency": "USD",
+          "customer": "LEGOSAN AB",
+          "docstatus": 1,
+          "grand_total": 15271.5,
+          "name": "SAL-QTN-2024-00752",
+          "status": "Ordered"
+        },
+        "sales_invoice": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 15271.5,
+          "name": "ACC-SINV-2026-00001",
+          "status": "Overdue"
+        },
+        "sales_order": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 15271.5,
+          "name": "SO-00752-LEGOSAN AB",
+          "payment_terms": "30 days after Invoice Date",
+          "status": "Completed"
+        }
+      },
+      "issues": [],
+      "quotation": "SAL-QTN-2024-00752",
+      "status": "PASS"
+    },
+    "status": "ok"
+  },
+  {
+    "error": null,
+    "input": "0753",
+    "output": {
+      "cfdi": {
+        "actual_cfdi_use": "G01",
+        "actual_payment_option": "PUE",
+        "audit": [
+          "QTN Traceback: Source QTN SAL-QTN-2024-00753 payment_schedule has credit_days=30",
+          "Template DB: Last invoice for GREENTECH S.A has mx_cfdi_use=G01",
+          "Template DB: Last invoice for GREENTECH S.A has mode_of_payment=Wire Transfer"
+        ],
+        "expected_cfdi_use": "G01",
+        "expected_payment_option": "PPD",
+        "qtn_credit_days": "QTN SAL-QTN-2024-00753 credit_days=30"
+      },
+      "documents": {
+        "delivery_note": {
+          "docstatus": 1,
+          "grand_total": 187200.0,
+          "name": "MAT-DN-2026-00003",
+          "status": "Completed"
+        },
+        "quotation": {
+          "currency": "USD",
+          "customer": "GREENTECH S.A",
+          "docstatus": 0,
+          "grand_total": 187200.0,
+          "name": "SAL-QTN-2024-00753",
+          "status": "Draft"
+        },
+        "sales_invoice": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 187200.0,
+          "name": "ACC-SINV-2026-00004",
+          "status": "Overdue"
+        },
+        "sales_order": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 187200.0,
+          "name": "SO-00753-GREENTECH SA",
+          "payment_terms": "T/T In Advance",
+          "status": "Completed"
+        }
+      },
+      "issues": [
+        "QTN SAL-QTN-2024-00753 status is 'Draft', expected 'Ordered'",
+        "CFDI mismatch: SI has PUE, expected PPD (Source QTN SAL-QTN-2024-00753 payment_schedule has credit_days=30)"
+      ],
+      "quotation": "SAL-QTN-2024-00753",
+      "status": "ISSUES_FOUND"
+    },
+    "status": "ok"
+  },
+  {
+    "error": null,
+    "input": "0754",
+    "output": {
+      "cfdi": {
+        "actual_cfdi_use": "G01",
+        "actual_payment_option": "PPD",
+        "audit": [
+          "QTN Traceback: Source QTN SAL-QTN-2024-00754 payment_schedule has credit_days=90",
+          "Template DB: Last invoice for Calipso s.r.l has mx_cfdi_use=G01",
+          "Template DB: Last invoice for Calipso s.r.l has mode_of_payment=Wire Transfer"
+        ],
+        "expected_cfdi_use": "G01",
+        "expected_payment_option": "PPD",
+        "qtn_credit_days": "QTN SAL-QTN-2024-00754 credit_days=90"
+      },
+      "documents": {
+        "delivery_note": {
+          "docstatus": 1,
+          "grand_total": 69189.12,
+          "name": "MAT-DN-2026-00006",
+          "status": "Completed"
+        },
+        "quotation": {
+          "currency": "USD",
+          "customer": "Calipso s.r.l",
+          "docstatus": 1,
+          "grand_total": 69189.12,
+          "name": "SAL-QTN-2024-00754",
+          "status": "Ordered"
+        },
+        "sales_invoice": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 69189.12,
+          "name": "ACC-SINV-2026-00009",
+          "status": "Paid"
+        },
+        "sales_order": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 69189.12,
+          "name": "SO-00754-Calipso s.r.l",
+          "payment_terms": "90 Days from invoice date",
+          "status": "Completed"
+        }
+      },
+      "issues": [],
+      "quotation": "SAL-QTN-2024-00754",
+      "status": "PASS"
+    },
+    "status": "ok"
+  },
+  {
+    "error": null,
+    "input": "0755",
+    "output": {
+      "cfdi": {
+        "actual_cfdi_use": "G01",
+        "actual_payment_option": "PPD",
+        "audit": [
+          "QTN Traceback: Source QTN SAL-QTN-2024-00755 payment_schedule has credit_days=30",
+          "Template DB: Last invoice for CHARKIT CHEMICAL CORP, INC. has mx_cfdi_use=G01",
+          "Template DB: Last invoice for CHARKIT CHEMICAL CORP, INC. has mode_of_payment=Wire Transfer"
+        ],
+        "expected_cfdi_use": "G01",
+        "expected_payment_option": "PPD",
+        "qtn_credit_days": "QTN SAL-QTN-2024-00755 credit_days=30"
+      },
+      "documents": {
+        "delivery_note": {
+          "docstatus": 1,
+          "grand_total": 13844.0,
+          "name": "MAT-DN-2026-00007",
+          "status": "Completed"
+        },
+        "quotation": {
+          "currency": "USD",
+          "customer": "CHARKIT CHEMICAL CORP, INC.",
+          "docstatus": 1,
+          "grand_total": 13844.0,
+          "name": "SAL-QTN-2024-00755",
+          "status": "Ordered"
+        },
+        "sales_invoice": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 13844.0,
+          "name": "ACC-SINV-2026-00010",
+          "status": "Overdue"
+        },
+        "sales_order": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 13844.0,
+          "name": "SO-00755-CHARKIT CHEMICAL COR",
+          "payment_terms": "3% 10 NET 30",
+          "status": "Completed"
+        }
+      },
+      "issues": [],
+      "quotation": "SAL-QTN-2024-00755",
+      "status": "PASS"
+    },
+    "status": "ok"
+  },
+  {
+    "error": null,
+    "input": "0756",
+    "output": {
+      "cfdi": {
+        "actual_cfdi_use": "G01",
+        "actual_payment_option": "PPD",
+        "audit": [
+          "QTN Traceback: Source QTN SAL-QTN-2024-00756 payment_schedule has credit_days=60",
+          "Template DB: Last invoice for Barentz Italia S.p.A. has mx_cfdi_use=G03",
+          "Template DB: Last invoice for Barentz Italia S.p.A. has mode_of_payment=Wire Transfer"
+        ],
+        "expected_cfdi_use": "G03",
+        "expected_payment_option": "PPD",
+        "qtn_credit_days": "QTN SAL-QTN-2024-00756 credit_days=60"
+      },
+      "documents": {
+        "delivery_note": {
+          "docstatus": 1,
+          "grand_total": 35385.0,
+          "name": "MAT-DN-2026-00008",
+          "status": "Completed"
+        },
+        "quotation": {
+          "currency": "USD",
+          "customer": "Barentz Italia S.p.A.",
+          "docstatus": 1,
+          "grand_total": 35385.0,
+          "name": "SAL-QTN-2024-00756",
+          "status": "Ordered"
+        },
+        "sales_invoice": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 35385.0,
+          "name": "ACC-SINV-2026-00011",
+          "status": "Overdue"
+        },
+        "sales_order": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 35385.0,
+          "name": "SO-00756-BARENTZ Italia S.p.A",
+          "payment_terms": "60 days after Invoice Date",
+          "status": "Completed"
+        }
+      },
+      "issues": [],
+      "quotation": "SAL-QTN-2024-00756",
+      "status": "PASS"
+    },
+    "status": "ok"
+  },
+  {
+    "error": null,
+    "input": "0757",
+    "output": {
+      "cfdi": {
+        "actual_cfdi_use": "G03",
+        "actual_payment_option": "PPD",
+        "audit": [
+          "QTN Traceback: Source QTN SAL-QTN-2024-00757 payment_schedule has credit_days=30",
+          "Template DB: Last invoice for ALBAFLOR has mx_cfdi_use=G03",
+          "Template DB: Last invoice for ALBAFLOR has mode_of_payment=Wire Transfer"
+        ],
+        "expected_cfdi_use": "G03",
+        "expected_payment_option": "PPD",
+        "qtn_credit_days": "QTN SAL-QTN-2024-00757 credit_days=30"
+      },
+      "documents": {
+        "delivery_note": {
+          "docstatus": 1,
+          "grand_total": 5973.0,
+          "name": "MAT-DN-2026-00009",
+          "status": "Completed"
+        },
+        "quotation": {
+          "currency": "USD",
+          "customer": "ALBAFLOR",
+          "docstatus": 1,
+          "grand_total": 5973.0,
+          "name": "SAL-QTN-2024-00757",
+          "status": "Ordered"
+        },
+        "sales_invoice": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 5973.0,
+          "name": "ACC-SINV-2026-00080",
+          "status": "Overdue"
+        },
+        "sales_order": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 5973.0,
+          "name": "SO-00757-ALBAFLOR",
+          "payment_terms": "30 days after Invoice Date",
+          "status": "Completed"
+        }
+      },
+      "issues": [],
+      "quotation": "SAL-QTN-2024-00757",
+      "status": "PASS"
+    },
+    "status": "ok"
+  },
+  {
+    "error": null,
+    "input": "0758",
+    "output": {
+      "cfdi": {
+        "actual_cfdi_use": "G03",
+        "actual_payment_option": "PPD",
+        "audit": [
+          "QTN Traceback: Source QTN SAL-QTN-2024-00758 payment_schedule has credit_days=100",
+          "Template DB: Last invoice for ALPHATECH SCIENCE (THAILAND) CO.,LTD. has mx_cfdi_use=G03",
+          "Template DB: Last invoice for ALPHATECH SCIENCE (THAILAND) CO.,LTD. has mode_of_payment=Wire Transfer"
+        ],
+        "expected_cfdi_use": "G03",
+        "expected_payment_option": "PPD",
+        "qtn_credit_days": "QTN SAL-QTN-2024-00758 credit_days=100"
+      },
+      "documents": {
+        "delivery_note": {
+          "docstatus": 1,
+          "grand_total": 46080.0,
+          "name": "MAT-DN-2026-00010",
+          "status": "Completed"
+        },
+        "quotation": {
+          "currency": "USD",
+          "customer": "ALPHATECH SCIENCE (THAILAND) CO.,LTD.",
+          "docstatus": 1,
+          "grand_total": 46080.0,
+          "name": "SAL-QTN-2024-00758",
+          "status": "Ordered"
+        },
+        "sales_invoice": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 46080.0,
+          "name": "ACC-SINV-2026-00072",
+          "status": "Unpaid"
+        },
+        "sales_order": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 46080.0,
+          "name": "SO-00758-ALPHATECH SCIENCE (T",
+          "payment_terms": "T/T After Reception of the goods",
+          "status": "Completed"
+        }
+      },
+      "issues": [],
+      "quotation": "SAL-QTN-2024-00758",
+      "status": "PASS"
+    },
+    "status": "ok"
+  },
+  {
+    "error": null,
+    "input": "0759",
+    "output": {
+      "cfdi": {
+        "actual_cfdi_use": "G03",
+        "actual_payment_option": "PPD",
+        "audit": [
+          "QTN Traceback: Source QTN SAL-QTN-2024-00759 payment_schedule has credit_days=45",
+          "Template DB: Last invoice for ALBAAD DEUTSCHLAND GMBH has mx_cfdi_use=G03",
+          "Template DB: Last invoice for ALBAAD DEUTSCHLAND GMBH has mode_of_payment=Wire Transfer"
+        ],
+        "expected_cfdi_use": "G03",
+        "expected_payment_option": "PPD",
+        "qtn_credit_days": "QTN SAL-QTN-2024-00759 credit_days=45"
+      },
+      "documents": {
+        "delivery_note": {
+          "docstatus": 1,
+          "grand_total": 13500.0,
+          "name": "MAT-DN-2026-00011",
+          "status": "Completed"
+        },
+        "quotation": {
+          "currency": "USD",
+          "customer": "ALBAAD DEUTSCHLAND GMBH",
+          "docstatus": 1,
+          "grand_total": 13500.0,
+          "name": "SAL-QTN-2024-00759",
+          "status": "Ordered"
+        },
+        "sales_invoice": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 13500.0,
+          "name": "ACC-SINV-2026-00074",
+          "status": "Overdue"
+        },
+        "sales_order": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 13500.0,
+          "name": "SO-00759-ALBAAD DEUTSCHLAND G",
+          "payment_terms": "45 DAYS NET CASH",
+          "status": "Completed"
+        }
+      },
+      "issues": [],
+      "quotation": "SAL-QTN-2024-00759",
+      "status": "PASS"
+    },
+    "status": "ok"
+  },
+  {
+    "error": null,
+    "input": "0760",
+    "output": {
+      "cfdi": {
+        "actual_cfdi_use": "G03",
+        "actual_payment_option": "PPD",
+        "audit": [
+          "QTN Traceback: Source QTN SAL-QTN-2024-00760 payment_schedule has credit_days=45",
+          "Template DB: Last invoice for ALBAAD DEUTSCHLAND GMBH has mx_cfdi_use=G03",
+          "Template DB: Last invoice for ALBAAD DEUTSCHLAND GMBH has mode_of_payment=Wire Transfer"
+        ],
+        "expected_cfdi_use": "G03",
+        "expected_payment_option": "PPD",
+        "qtn_credit_days": "QTN SAL-QTN-2024-00760 credit_days=45"
+      },
+      "documents": {
+        "delivery_note": {
+          "docstatus": 1,
+          "grand_total": 13500.0,
+          "name": "MAT-DN-2026-00012",
+          "status": "Completed"
+        },
+        "quotation": {
+          "currency": "USD",
+          "customer": "ALBAAD DEUTSCHLAND GMBH",
+          "docstatus": 1,
+          "grand_total": 13500.0,
+          "name": "SAL-QTN-2024-00760",
+          "status": "Ordered"
+        },
+        "sales_invoice": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 13500.0,
+          "name": "ACC-SINV-2026-00075",
+          "status": "Overdue"
+        },
+        "sales_order": {
+          "currency": "USD",
+          "docstatus": 1,
+          "grand_total": 13500.0,
+          "name": "SO-00760-ALBAAD DEUTSCHLAND G",
+          "payment_terms": "45 DAYS NET CASH",
+          "status": "Completed"
+        }
+      },
+      "issues": [],
+      "quotation": "SAL-QTN-2024-00760",
+      "status": "PASS"
+    },
+    "status": "ok"
+  }
+]
