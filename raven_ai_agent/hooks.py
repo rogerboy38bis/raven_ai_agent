@@ -10,11 +10,15 @@ required_apps = ["frappe"]
 # app_include_css = "/assets/raven_ai_agent/css/raven_ai_agent.css"
 # app_include_js = "/assets/raven_ai_agent/js/raven_ai_agent.js"
 
-# Doctype-specific JS (Phase 10.2.1 - Sales Order Upload, Phase 10.2.2 - Sales Invoice Upload)
+# Doctype-specific JS 
+# Note: Multiple JS files for same doctype should be combined or use app_include_js
 doctype_js = {
     "Sales Order": "raven_ai_agent/public/js/sales_order_upload.js",
     "Sales Invoice": "raven_ai_agent/public/js/sales_invoice_upload.js"
 }
+
+# App-level JS (includes Phase 10.4 Documents Panel)
+app_include_js = "/assets/raven_ai_agent/js/documents_panel.js"
 
 # Hooks
 doc_events = {
@@ -58,3 +62,7 @@ website_route_rules = []
 # Fixtures (disabled temporarily)
 # fixtures = ["AI Agent Settings"]
 fixtures = ["IoT Ollama Settings"]
+
+# Commands (Phase 10.3 - Bulk Import)
+from raven_ai_agent.commands.drive_import import commands
+command = commands
