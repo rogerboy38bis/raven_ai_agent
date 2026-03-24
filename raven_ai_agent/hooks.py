@@ -67,5 +67,5 @@ website_route_rules = []
 fixtures = ["IoT Ollama Settings"]
 
 # Commands (Phase 10.3 - Bulk Import)
-from raven_ai_agent.commands.drive_import import commands
-command = commands
+# Note: Commands are registered via the commands directory in the app
+# bench command is auto-discovered from app/commands folder
