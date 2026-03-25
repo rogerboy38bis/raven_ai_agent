@@ -7,21 +7,25 @@ app_license = "MIT"
 required_apps = ["frappe"]
 
 # App includes (required for build)
-# app_include_css = "/assets/raven_ai_agent/css/raven_ai_agent.css"
-# app_include_js = "/assets/raven_ai_agent/js/raven_ai_agent.js"
+# BUG 80C: Switched from doctype_js to app_include_js to avoid bench build in Docker
+app_include_js = [
+    "/assets/raven_ai_agent/js/raven_ai_agent.js",
+    "raven_ai_agent/public/js/sales_order_upload.js",
+    "raven_ai_agent/public/js/sales_invoice_upload.js",
+    "raven_ai_agent/public/js/documents_panel.js"
+]
 
-# Doctype-specific JS (Phase 10.2.x - Upload buttons, Phase 10.4 - Documents Panel)
-# Note: Using lists to include multiple JS files per doctype
-doctype_js = {
-    "Sales Order": [
-        "raven_ai_agent/public/js/sales_order_upload.js",
-        "raven_ai_agent/public/js/documents_panel.js"
-    ],
-    "Sales Invoice": [
-        "raven_ai_agent/public/js/sales_invoice_upload.js",
-        "raven_ai_agent/public/js/documents_panel.js"
-    ]
-}
+# Commented out doctype_js - not used (switched to app_include_js for Docker compatibility)
+# doctype_js = {
+#     "Sales Order": [
+#         "raven_ai_agent/public/js/sales_order_upload.js",
+#         "raven_ai_agent/public/js/documents_panel.js"
+#     ],
+#     "Sales Invoice": [
+#         "raven_ai_agent/public/js/sales_invoice_upload.js",
+#         "raven_ai_agent/public/js/documents_panel.js"
+#     ]
+# }
 
 # Hooks
 doc_events = {
