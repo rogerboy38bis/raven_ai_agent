@@ -11,6 +11,7 @@ def create_po_extraction_fields():
     
     Run this on app install or manually
     """
+    print("[raven_ai_agent] Creating PO extraction fields...")
     
     fields = [
         {
@@ -66,26 +67,32 @@ def create_po_extraction_fields():
     
     for field in fields:
         # Check if field already exists
-        if not frappe.db.exists("Custom Field", f"{field['dt']}-{field['fieldname']}"):
-            doc = frappe.get_doc({
-                "doctype": "Custom Field",
-                "dt": field["dt"],
-                "dtype": field["fieldtype"],
-                "fieldname": field["fieldname"],
-                "label": field["label"],
-                "description": field.get("description"),
-                "insert_after": field.get("insert_after"),
-                "hidden": field.get("hidden", 0),
-                "options": field.get("options"),
-                "default": field.get("default"),
-                "module": field.get("module"),
-                "is_system_generated": 0
-            })
-            doc.insert(ignore_permissions=True)
-            print(f"Created: {field['fieldname']}")
+        field_id = f"{field['dt']}-{field['fieldname']}"
+        try:
+            if not frappe.db.exists("Custom Field", field_id):
+                doc = frappe.get_doc({
+                    "doctype": "Custom Field",
+                    "dt": field["dt"],
+                    "dtype": field["fieldtype"],
+                    "fieldname": field["fieldname"],
+                    "label": field["label"],
+                    "description": field.get("description"),
+                    "insert_after": field.get("insert_after"),
+                    "hidden": field.get("hidden", 0),
+                    "options": field.get("options"),
+                    "default": field.get("default"),
+                    "module": field.get("module"),
+                    "is_system_generated": 0
+                })
+                doc.insert(ignore_permissions=True)
+                print(f"[raven_ai_agent] Created custom field: {field['fieldname']}")
+            else:
+                print(f"[raven_ai_agent] Custom field already exists: {field['fieldname']}")
+        except Exception as e:
+            print(f"[raven_ai_agent] Error creating field {field['fieldname']}: {e}")
     
     frappe.db.commit()
-    print("Custom fields created successfully!")
+    print("[raven_ai_agent] PO extraction custom fields created successfully!")
 
 
 def create_pedimento_fields():

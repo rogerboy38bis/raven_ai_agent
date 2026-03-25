@@ -36,15 +36,27 @@ doc_events = {
 # App lifecycle hooks
 def post_install():
     """Create custom fields after app install"""
+    print("[raven_ai_agent] Running post_install...")
     from raven_ai_agent.api.custom_fields import create_po_extraction_fields, create_pedimento_fields
     create_po_extraction_fields()
     create_pedimento_fields()
+    print("[raven_ai_agent] post_install complete.")
 
 def app_install():
     """Create custom fields on app install"""
+    print("[raven_ai_agent] Running app_install...")
     from raven_ai_agent.api.custom_fields import create_po_extraction_fields, create_pedimento_fields
     create_po_extraction_fields()
     create_pedimento_fields()
+    print("[raven_ai_agent] app_install complete.")
+
+def after_install(app=None):
+    """Create custom fields after app is installed (runs for each site)"""
+    print("[raven_ai_agent] Running after_install...")
+    from raven_ai_agent.api.custom_fields import create_po_extraction_fields, create_pedimento_fields
+    create_po_extraction_fields()
+    create_pedimento_fields()
+    print("[raven_ai_agent] after_install complete.")
 
 def app_uninstall():
     """Clean up custom fields on app uninstall"""
