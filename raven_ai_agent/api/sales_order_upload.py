@@ -162,8 +162,8 @@ def upload_to_drive(file_url: str = None, file_content: str = None,
             "file_url": file_url,
             "file_name": filename,
             "is_private": 1 if is_private else 0,
-            "attached_to_doctype": sales_order_name if sales_order_name else None,
-            "attached_to_name": sales_order_name if sales_order_name else None
+            "attached_to_doctype": "Sales Order",
+            "attached_to_name": sales_order_name
         })
         file_doc.insert()
         
@@ -194,8 +194,8 @@ def upload_to_drive(file_url: str = None, file_content: str = None,
                 "file_name": filename,
                 "content": file_content,
                 "is_private": 1 if is_private else 0,
-                "attached_to_doctype": sales_order_name if sales_order_name else None,
-                "attached_to_name": sales_order_name if sales_order_name else None
+                "attached_to_doctype": "Sales Order",
+                "attached_to_name": sales_order_name
             })
             file_doc.insert()
             
