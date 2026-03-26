@@ -45,12 +45,13 @@ def upload_customer_po(sales_order_name: str, file_url: str = None, file_content
     folder = ensure_drive_folder(folder_path)
     
     # Upload file to Drive
-    drive_file = upload_to_drive(
+    drive_file, file_doc = upload_to_drive(
         file_url=file_url,
         file_content=file_content,
         filename=filename,
         parent_folder=folder,
-        is_private=True
+        is_private=True,
+        sales_order_name=sales_order_name  # Pass to link to SO
     )
     
     # Update Sales Order link field
@@ -142,7 +143,7 @@ def ensure_drive_folder(folder_path: str) -> frappe.doc:
 
 def upload_to_drive(file_url: str = None, file_content: str = None, 
                    filename: str = None, parent_folder: str = None,
-                   is_private: bool = True) -> frappe.doc:
+                   is_private: bool = True, sales_order_name: str = None) -> tuple:
     """
     Upload file to Drive.
     """
@@ -160,7 +161,9 @@ def upload_to_drive(file_url: str = None, file_content: str = None,
             "doctype": "File",
             "file_url": file_url,
             "file_name": filename,
-            "is_private": 1 if is_private else 0
+            "is_private": 1 if is_private else 0,
+            "attached_to_doctype": sales_order_name if sales_order_name else None,
+            "attached_to_name": sales_order_name if sales_order_name else None
         })
         file_doc.insert()
         
@@ -190,7 +193,9 @@ def upload_to_drive(file_url: str = None, file_content: str = None,
                 "doctype": "File",
                 "file_name": filename,
                 "content": file_content,
-                "is_private": 1 if is_private else 0
+                "is_private": 1 if is_private else 0,
+                "attached_to_doctype": sales_order_name if sales_order_name else None,
+                "attached_to_name": sales_order_name if sales_order_name else None
             })
             file_doc.insert()
             
@@ -203,7 +208,7 @@ def upload_to_drive(file_url: str = None, file_content: str = None,
     else:
         frappe.throw(_("No file provided"))
     
-    return drive_file
+    return drive_file, file_doc  # Return both Drive File and Frappe File
 
 
 def create_drive_file_from_file(file_doc: frappe.doc, parent_folder, team: str) -> frappe.doc:
