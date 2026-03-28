@@ -546,6 +546,70 @@ class PaymentAgent:
                     )
                 }
             
+            # Check for missing UUID/CFDI on referenced Sales Invoice
+            if "uuid" in error_lower and "must be" in error_lower and "string" in error_lower:
+                # Get the referenced Sales Invoice
+                invoice_name = ""
+                try:
+                    pe = frappe.get_doc("Payment Entry", pe_name)
+                    if pe.references:
+                        for ref in pe.references:
+                            if ref.reference_doctype == "Sales Invoice":
+                                invoice_name = ref.reference_name
+                                break
+                except:
+                    pass
+                
+                if invoice_name:
+                    # Check if invoice has CFDI/UUID
+                    uuid = frappe.get_value("Sales Invoice", invoice_name, "uuid")
+                    if not uuid:
+                        return {
+                            "success": False,
+                            "error": (
+                                f"❌ Cannot submit Payment Entry: Referenced Sales Invoice has no CFDI (UUID).\n\n"
+                                f"The Sales Invoice **{invoice_name}** must be e-invoiced (CFDI generated) before "
+                                f"a Payment Entry can be submitted for it.\n\n"
+                                f"🔧 **Solution (in correct order):**\n\n"
+                                f"1. **Cancel** this Payment Entry first:\n"
+                                f"   `@ai payment cancel {pe_name}`\n\n"
+                                f"2. **E-invoice** the Sales Invoice:\n"
+                                f"   `@ai einvoice {invoice_name}`\n\n"
+                                f"3. **Create new** Payment Entry:\n"
+                                f"   `@ai create payment for {invoice_name}`\n\n"
+                                f"4. **Submit** the new Payment Entry:\n"
+                                f"   `@ai payment submit [new_pe_name]`\n\n"
+                                f"This is required because Mexican CFDI payments (Complemento de Pago) must reference "
+                                f"the original CFDI UUID from the e-invoice."
+                            )
+                        }
+            
+            # Check for duplicate payment submission error
+            if "payment entry already exists" in error_lower:
+                # Get the referenced Sales Invoice
+                invoice_name = ""
+                try:
+                    pe = frappe.get_doc("Payment Entry", pe_name)
+                    if pe.references:
+                        for ref in pe.references:
+                            if ref.reference_doctype == "Sales Invoice":
+                                invoice_name = ref.reference_name
+                                break
+                except:
+                    pass
+                
+                return {
+                    "success": False,
+                    "error": (
+                        f"❌ Duplicate Payment Entry detected.\n\n"
+                        f"A Payment Entry already exists for this Sales Invoice.\n\n"
+                        f"🔧 **Solution:** \n"
+                        f"1. Check if the existing Payment Entry needs to be submitted\n"
+                        f"2. Or cancel this Payment Entry if it was created in error\n\n"
+                        f"Use `@ai list payments for {invoice_name}` to see all payments."
+                    )
+                }
+            
             return {"success": False, "error": f"Error submitting Payment Entry: {error_msg}"}
 
     def reconcile_payment(self, pe_name: str) -> Dict:
