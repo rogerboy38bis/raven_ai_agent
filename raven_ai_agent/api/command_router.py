@@ -38,6 +38,9 @@ class CommandRouterMixin:
         """Parse and execute workflow commands"""
         frappe.logger().info(f"[Workflow] Checking query: {query}, confirm: {confirm}")
 
+        # BUG 89A FIX: Define query_lower at the start before it's referenced
+        query_lower = query.lower()
+
         try:
             from raven_ai_agent.api.workflows import WorkflowExecutor
         except ImportError:

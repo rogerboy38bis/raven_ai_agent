@@ -456,7 +456,21 @@ class PaymentAgent:
         except frappe.DoesNotExistError:
             return {"success": False, "error": f"Payment Entry '{pe_name}' not found."}
         except Exception as e:
-            return {"success": False, "error": f"Error submitting Payment Entry: {str(e)}"}
+            error_msg = str(e)
+            # BUG 89B FIX: Check for encryption key mismatch errors
+            if "unauthorized" in error_msg.lower() or "encryption key" in error_msg.lower() or "decrypt" in error_msg.lower():
+                return {
+                    "success": False, 
+                    "error": (
+                        "❌ Cannot submit Payment Entry: Site encryption key mismatch detected.\n\n"
+                        "The site was recently restored from a backup and the encryption key in site_config.json "
+                        "doesn't match the original key used to encrypt sensitive fields.\n\n"
+                        "🔧 **Solution:** Ask your system administrator to restore the original encryption_key "
+                        "from the source site's site_config.json into the current site's site_config.json.\n\n"
+                        "This is an infrastructure issue, not a code problem."
+                    )
+                }
+            return {"success": False, "error": f"Error submitting Payment Entry: {error_msg}"}
 
     def reconcile_payment(self, pe_name: str) -> Dict:
         """Check reconciliation status of a Payment Entry against its Sales Invoice(s).

@@ -474,10 +474,11 @@ class TaskValidator:
                     else:
                         payment_status = status_map.get(si.docstatus, "Unknown")
                     
-                    # Find Payment Entries for this Sales Invoice
+                    # Find Payment Entries for this Sales Invoice (both Draft and Submitted)
                     payment_entries = []
+                    # First get submitted PEs
                     pe_refs = frappe.db.sql("""
-                        SELECT parent FROM `tabPayment Entry Reference`
+                        SELECT parent, docstatus FROM `tabPayment Entry Reference`
                         WHERE reference_name = %s AND parenttype = 'Payment Entry'
                         AND parent IN (SELECT name FROM `tabPayment Entry` WHERE docstatus = 1)
                     """, (si.name,))
@@ -489,6 +490,21 @@ class TaskValidator:
                             "status": "Submitted"
                         })
                     
+                    # BUG 89C FIX: Also check for Draft Payment Entries
+                    draft_pe_refs = frappe.db.sql("""
+                        SELECT parent FROM `tabPayment Entry Reference`
+                        WHERE reference_name = %s AND parenttype = 'Payment Entry'
+                        AND parent IN (SELECT name FROM `tabPayment Entry` WHERE docstatus = 0)
+                    """, (si.name,))
+                    draft_payment_entries = []
+                    for pe_ref in draft_pe_refs:
+                        pe_name = pe_ref[0]
+                        draft_payment_entries.append({
+                            "name": pe_name,
+                            "link": f"https://{site_name}/app/payment-entry/{pe_name}",
+                            "status": "Draft"
+                        })
+                    
                     pipeline.setdefault("sales_invoices", []).append({
                         "name": si.name,
                         "status": payment_status,  # Use actual payment status: Paid/Unpaid/Overdue/Draft/Cancelled
@@ -498,6 +514,7 @@ class TaskValidator:
                         "company_currency": company_currency,  # Company currency (MXN) - for outstanding
                         "outstanding": si.outstanding_amount if hasattr(si, 'outstanding_amount') else None,
                         "payment_entries": payment_entries,  # List of Payment Entries
+                        "draft_payment_entries": draft_payment_entries,  # BUG 89C: List of Draft Payment Entries
                     })
 
         # ── Build Report ──
@@ -1595,8 +1612,16 @@ The invoice **{sinv_name}** is now marked as **Paid**.
                 if outstanding and float(outstanding) > 0:
                     si_name = si.get("name", "")
                     currency = si.get("company_currency", "MXN")
-                    msg += f"\n💰 Invoice has outstanding amount ({float(outstanding):,.2f} {currency}) — record payment:\n"
-                    msg += f"👉 Run: `@ai create payment for {si_name}`\n"
+                    
+                    # BUG 89C FIX: Check for Draft Payment Entries first
+                    draft_pes = si.get("draft_payment_entries", [])
+                    if draft_pes:
+                        for pe in draft_pes:
+                            msg += f"\n💰 Draft Payment Entry exists: {pe.get('name', '')} — submit it:\n"
+                            msg += f"👉 Run: `@ai payment submit {pe.get('name', '')}`\n"
+                    else:
+                        msg += f"\n💰 Invoice has outstanding amount ({float(outstanding):,.2f} {currency}) — record payment:\n"
+                        msg += f"👉 Run: `@ai create payment for {si_name}`\n"
 
         return {"success": True, "message": msg}
 
