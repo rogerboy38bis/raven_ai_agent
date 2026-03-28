@@ -561,8 +561,8 @@ class PaymentAgent:
                     pass
                 
                 if invoice_name:
-                    # Check if invoice has CFDI/UUID
-                    uuid = frappe.get_value("Sales Invoice", invoice_name, "uuid")
+                    # Check if invoice has CFDI/UUID - use db.get_value to avoid caching issues
+                    uuid = frappe.db.get_value("Sales Invoice", invoice_name, "uuid")
                     if not uuid:
                         return {
                             "success": False,
