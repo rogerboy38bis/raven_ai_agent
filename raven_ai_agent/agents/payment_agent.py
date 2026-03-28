@@ -488,6 +488,50 @@ class PaymentAgent:
                 except:
                     pass
                 
+                # Auto-fix: Try to update the customer's tax_system
+                if customer_name:
+                    try:
+                        customer = frappe.get_doc("Customer", customer_name)
+                        old_tax_system = customer.tax_system or "not set"
+                        customer.tax_system = required_tax_system
+                        customer.save()
+                        frappe.db.commit()
+                        
+                        # Retry the payment entry submission
+                        pe.reload()
+                        pe.submit()
+                        frappe.db.commit()
+                        
+                        return {
+                            "success": True,
+                            "pe_name": pe.name,
+                            "link": self.make_link("Payment Entry", pe.name),
+                            "message": (
+                                f"✅ Payment Entry submitted: {self.make_link('Payment Entry', pe.name)}\n\n"
+                                f"  Party: {pe.party_name}\n"
+                                f"  Amount: {pe.paid_amount} {pe.paid_from_account_currency}\n\n"
+                                f"🔧 **Auto-fixed:** Updated Customer **{customer_name}** tax_system from **{old_tax_system}** to **{required_tax_system}** for CFDI compliance."
+                            )
+                        }
+                    except Exception as auto_fix_error:
+                        # If auto-fix fails, fall back to manual instructions
+                        frappe.db.rollback()
+                        return {
+                            "success": False,
+                            "error": (
+                                f"❌ Cannot submit Payment Entry: Customer tax_system validation failed.\n\n"
+                                f"The Customer **{customer_name}** must have tax_system set to **{required_tax_system}** "
+                                f"for Mexican CFDI compliance.\n\n"
+                                f"🔧 **Solution:** \n"
+                                f"1. Go to the Customer form: [{customer_name}](https://{frappe.local.site}/app/customer/{customer_name})\n"
+                                f"2. Update the **Tax Regime** (tax_system) field to the correct SAT code\n"
+                                f"3. Common valid codes: 601 (General), 605 (S.A. de C.V.), 606 (S. de R.L.), 616 (R.F.B.)\n\n"
+                                f"This is a CFDI/Mexican tax compliance requirement.\n\n"
+                                f"Auto-fix attempted but failed: {str(auto_fix_error)}"
+                            )
+                        }
+                
+                # No customer name found - return manual instructions
                 return {
                     "success": False,
                     "error": (
