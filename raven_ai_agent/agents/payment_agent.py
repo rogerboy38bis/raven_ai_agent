@@ -457,8 +457,10 @@ class PaymentAgent:
             return {"success": False, "error": f"Payment Entry '{pe_name}' not found."}
         except Exception as e:
             error_msg = str(e)
+            error_lower = error_msg.lower()
+            
             # BUG 89B FIX: Check for encryption key mismatch errors
-            if "unauthorized" in error_msg.lower() or "encryption key" in error_msg.lower() or "decrypt" in error_msg.lower():
+            if "unauthorized" in error_lower or "encryption key" in error_lower or "decrypt" in error_lower:
                 return {
                     "success": False, 
                     "error": (
@@ -470,6 +472,36 @@ class PaymentAgent:
                         "This is an infrastructure issue, not a code problem."
                     )
                 }
+            
+            # Check for Customer tax_system validation errors (Mexican CFDI requirement)
+            if "tax_system" in error_lower and "must be" in error_lower:
+                # Extract the required tax system value
+                import re
+                match = re.search(r'must be \[(\d+)\]', error_msg)
+                required_tax_system = match.group(1) if match else "616"
+                
+                # Get the customer name from the PE
+                customer_name = ""
+                try:
+                    pe = frappe.get_doc("Payment Entry", pe_name)
+                    customer_name = pe.party or ""
+                except:
+                    pass
+                
+                return {
+                    "success": False,
+                    "error": (
+                        f"❌ Cannot submit Payment Entry: Customer tax_system validation failed.\n\n"
+                        f"The Customer **{customer_name}** must have tax_system set to **{required_tax_system}** "
+                        f"for Mexican CFDI compliance.\n\n"
+                        f"🔧 **Solution:** \n"
+                        f"1. Go to the Customer form: [{customer_name}](https://{frappe.local.site}/app/customer/{customer_name})\n"
+                        f"2. Update the **Tax Regime** (tax_system) field to the correct SAT code\n"
+                        f"3. Common valid codes: 601 (General), 605 (S.A. de C.V.), 606 (S. de R.L.), 616 (R.F.B.)\n\n"
+                        f"This is a CFDI/Mexican tax compliance requirement."
+                    )
+                }
+            
             return {"success": False, "error": f"Error submitting Payment Entry: {error_msg}"}
 
     def reconcile_payment(self, pe_name: str) -> Dict:
