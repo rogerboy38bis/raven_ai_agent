@@ -135,6 +135,24 @@ class PaymentAgent:
                 )
                 return {"success": False, "fixed": fixed, "error": error_msg}
             
+            # --- Multi-currency fix for Mexican companies ---
+            # If customer has USD accounting but all accounts are MXN,
+            # Frappe will complain. Set the currency fields to company currency.
+            company_currency = frappe.db.get_value("Company", pe.company, "default_currency") or "MXN"
+            
+            if not getattr(pe, 'paid_from_account_currency', None):
+                pe.paid_from_account_currency = company_currency
+                fixed.append(f"paid_from_account_currency -> {company_currency}")
+            
+            if not getattr(pe, 'paid_to_account_currency', None):
+                pe.paid_to_account_currency = company_currency
+                fixed.append(f"paid_to_account_currency -> {company_currency}")
+            
+            # Save if we made currency changes
+            if 'paid_from_account_currency' in str(fixed) or 'paid_to_account_currency' in str(fixed):
+                pe.save(ignore_permissions=True)
+                frappe.db.commit()
+            
             return {"success": True, "fixed": fixed, "error": None}
             
         except frappe.DoesNotExistError:
