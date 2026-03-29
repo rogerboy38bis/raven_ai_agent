@@ -149,6 +149,17 @@ class PaymentAgent:
                         frappe.db.commit()
                         fixed.append(f"export customer address pincode -> 00000 ({country})")
             
+            # --- Also set party_address and contact_person on the payment entry ---
+            if not getattr(pe, 'party_address', None):
+                if getattr(customer_doc, 'customer_primary_address', None):
+                    pe.party_address = customer_doc.customer_primary_address
+                    fixed.append(f"pe.party_address -> {customer_doc.customer_primary_address}")
+
+            if not getattr(pe, 'contact_person', None):
+                if getattr(customer_doc, 'customer_primary_contact', None):
+                    pe.contact_person = customer_doc.customer_primary_contact
+                    fixed.append(f"pe.contact_person -> {customer_doc.customer_primary_contact}")
+            
             # --- Multi-currency fix for Mexican companies ---
             # If customer has USD accounting but all accounts are MXN,
             # Frappe will complain. Set the currency fields to company currency.
