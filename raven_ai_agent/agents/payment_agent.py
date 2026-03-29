@@ -135,6 +135,20 @@ class PaymentAgent:
                 )
                 return {"success": False, "fixed": fixed, "error": error_msg}
             
+            # --- Fix postal code for export customers (CP = 00000) ---
+            # For foreign/export customers, SAT requires postal code "00000"
+            if getattr(customer_doc, 'customer_primary_address', None):
+                addr = frappe.get_doc("Address", customer_doc.customer_primary_address)
+                # Check if this is a foreign address (not Mexico)
+                country = getattr(addr, 'country', '')
+                if country and country != 'Mexico':
+                    # Export customer - postal code must be 00000
+                    if getattr(addr, 'pincode', None) and addr.pincode != '00000':
+                        addr.pincode = '00000'
+                        addr.save(ignore_permissions=True)
+                        frappe.db.commit()
+                        fixed.append(f"export customer address pincode -> 00000 ({country})")
+            
             # --- Multi-currency fix for Mexican companies ---
             # If customer has USD accounting but all accounts are MXN,
             # Frappe will complain. Set the currency fields to company currency.
