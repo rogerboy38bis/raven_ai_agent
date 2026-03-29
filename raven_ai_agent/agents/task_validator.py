@@ -381,7 +381,8 @@ class TaskValidator:
         # Check valid_till - use getdate for consistent datetime handling
         if qtn.valid_till:
             today = getdate(frappe.utils.today())
-            if qtn.valid_till < today:
+            valid_till_date = getdate(qtn.valid_till)
+            if valid_till_date < today:
                 warnings.append(f"Quotation expired on {qtn.valid_till}")
 
         # Check items for template vs variant
