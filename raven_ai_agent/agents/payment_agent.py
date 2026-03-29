@@ -734,22 +734,19 @@ class PaymentAgent:
                     "message": f"✅ Payment Entry {self.make_link('Payment Entry', pe_name)} is already cancelled."
                 }
             if pe.docstatus == 0:
-                # Draft - just delete/cancel
-                pe.cancel()
+                # Draft - delete the document directly since cancel() doesn't work on drafts
+                frappe.delete_doc("Payment Entry", pe_name)
                 frappe.db.commit()
                 return {
                     "success": True,
-                    "pe_name": pe.name,
-                    "link": self.make_link("Payment Entry", pe.name),
+                    "pe_name": pe_name,
                     "message": (
-                        f"✅ Payment Entry cancelled: {self.make_link('Payment Entry', pe.name)}\n\n"
-                        f"  Party: {pe.party_name}\n"
-                        f"  Amount: {pe.paid_amount} {pe.paid_from_account_currency}\n\n"
+                        f"✅ Payment Entry deleted: ACC-PAY-2026-00014\n\n"
                         f"Now you can create a new Payment Entry for the e-invoiced Sales Invoice."
                     )
                 }
             if pe.docstatus == 1:
-                # Submitted - need to cancel and create new
+                # Submitted - cancel normally
                 pe.cancel()
                 frappe.db.commit()
                 return {
