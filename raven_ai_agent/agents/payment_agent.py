@@ -159,10 +159,38 @@ class PaymentAgent:
                                     customer_doc.customer_primary_contact = si.contact_person
                                     fixed.append(f"customer_primary_contact -> {si.contact_person}")
             
-            # Save if we made changes
+            # Save if we made changes - use db.set_value to bypass full document validation
+            # (Customer may have broken CRM link fields that cause LinkValidationError)
             if fixed:
-                customer_doc.save(ignore_permissions=True)
-                frappe.db.commit()
+                try:
+                    # Update customer_primary_address if set
+                    if getattr(customer_doc, 'customer_primary_address', None):
+                        frappe.db.set_value("Customer", customer_name,
+                            "customer_primary_address",
+                            customer_doc.customer_primary_address,
+                            update_modified=False)
+                    # Update customer_primary_contact if set
+                    if getattr(customer_doc, 'customer_primary_contact', None):
+                        frappe.db.set_value("Customer", customer_name,
+                            "customer_primary_contact",
+                            customer_doc.customer_primary_contact,
+                            update_modified=False)
+                    frappe.db.commit()
+                except Exception as db_set_err:
+                    # Fallback: direct SQL update if db.set_value fails
+                    if getattr(customer_doc, 'customer_primary_address', None):
+                        frappe.db.sql(
+                            "UPDATE `tabCustomer` SET customer_primary_address=%s WHERE name=%s",
+                            (customer_doc.customer_primary_address, customer_name)
+                        )
+                        frappe.db.commit()
+                    if getattr(customer_doc, 'customer_primary_contact', None):
+                        frappe.db.sql(
+                            "UPDATE `tabCustomer` SET customer_primary_contact=%s WHERE name=%s",
+                            (customer_doc.customer_primary_contact, customer_name)
+                        )
+                        frappe.db.commit()
+                    fixed.append("(via SQL fallback)")
             
             if errors and not fixed:
                 # Construct helpful error message
@@ -564,13 +592,12 @@ class PaymentAgent:
                 except:
                     pass
                 
-                # Auto-fix: Try to update the customer's tax_system
+                # Auto-fix: Try to update the customer's tax_system using db.set_value
+                # to bypass full document validation on broken CRM link fields
                 if customer_name:
                     try:
-                        customer = frappe.get_doc("Customer", customer_name)
-                        old_tax_system = customer.tax_system or "not set"
-                        customer.tax_system = required_tax_system
-                        customer.save()
+                        old_tax_system = frappe.db.get_value("Customer", customer_name, "tax_system") or "not set"
+                        frappe.db.set_value("Customer", customer_name, "tax_system", required_tax_system, update_modified=False)
                         frappe.db.commit()
                         
                         # Retry the payment entry submission
@@ -623,7 +650,8 @@ class PaymentAgent:
                 }
             
             # Check for missing UUID/CFDI on referenced Sales Invoice
-            if "uuid" in error_lower and "must be" in error_lower and "string" in error_lower:
+            # BUG-88: Catch both old FacturAPI error and new pre-validation error
+            if "has no cfdi uuid" in error_lower or ("uuid" in error_lower and "must be" in error_lower and "string" in error_lower):
                 # Get the referenced Sales Invoice
                 invoice_name = ""
                 try:
