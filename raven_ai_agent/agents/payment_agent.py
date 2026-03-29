@@ -95,30 +95,69 @@ class PaymentAgent:
             
             # Check if customer_primary_address is set
             if not getattr(customer_doc, 'customer_primary_address', None):
-                # Trace to find address from Quotation
+                # Trace to find address from PE -> SI -> SO -> QTN chain
                 qtn = self._trace_to_quotation(pe)
                 if qtn and getattr(qtn, 'customer_address', None):
                     customer_doc.customer_primary_address = qtn.customer_address
                     fixed.append(f"customer_primary_address -> {qtn.customer_address}")
                 else:
-                    errors.append("Customer Primary Address not found in linked Quotation")
+                    # Try getting from Sales Order directly
+                    for ref in pe.references:
+                        if ref.reference_doctype == "Sales Invoice":
+                            si = frappe.get_doc("Sales Invoice", ref.reference_name)
+                            # Check SO for address
+                            for item in si.items or []:
+                                so_name = getattr(item, 'sales_order', None)
+                                if so_name:
+                                    so = frappe.get_doc("Sales Order", so_name)
+                                    if getattr(so, 'customer_address', None):
+                                        customer_doc.customer_primary_address = so.customer_address
+                                        fixed.append(f"customer_primary_address (from SO) -> {so.customer_address}")
+                                        break
+                                    elif getattr(so, 'shipping_address_name', None):
+                                        customer_doc.customer_primary_address = so.shipping_address_name
+                                        fixed.append(f"customer_primary_address (from SO shipping) -> {so.shipping_address_name}")
+                                        break
+                            
+                            # Fallback to SI fields
+                            if not getattr(customer_doc, 'customer_primary_address', None):
+                                if getattr(si, 'customer_address', None):
+                                    customer_doc.customer_primary_address = si.customer_address
+                                    fixed.append(f"customer_primary_address -> {si.customer_address}")
+                                elif getattr(si, 'shipping_address_name', None):
+                                    customer_doc.customer_primary_address = si.shipping_address_name
+                                    fixed.append(f"customer_primary_address (from shipping) -> {si.shipping_address_name}")
+                            
+                            if not getattr(customer_doc, 'customer_primary_address', None):
+                                errors.append("Customer Primary Address not found in linked Quotation")
             
             # Check if customer_primary_contact is set
             if not getattr(customer_doc, 'customer_primary_contact', None):
-                # Trace to find contact from Quotation
+                # Trace to find contact from PE -> SI -> SO -> QTN chain
                 qtn = self._trace_to_quotation(pe)
                 if qtn and getattr(qtn, 'contact_person', None):
                     customer_doc.customer_primary_contact = qtn.contact_person
                     fixed.append(f"customer_primary_contact -> {qtn.contact_person}")
                 else:
-                    # Try getting from Sales Invoice directly
+                    # Try getting from Sales Order directly
                     for ref in pe.references:
                         if ref.reference_doctype == "Sales Invoice":
                             si = frappe.get_doc("Sales Invoice", ref.reference_name)
-                            if getattr(si, 'contact_person', None):
-                                customer_doc.customer_primary_contact = si.contact_person
-                                fixed.append(f"customer_primary_contact -> {si.contact_person}")
-                                break
+                            # Check SO for contact
+                            for item in si.items or []:
+                                so_name = getattr(item, 'sales_order', None)
+                                if so_name:
+                                    so = frappe.get_doc("Sales Order", so_name)
+                                    if getattr(so, 'contact_person', None):
+                                        customer_doc.customer_primary_contact = so.contact_person
+                                        fixed.append(f"customer_primary_contact (from SO) -> {so.contact_person}")
+                                        break
+                            
+                            # Fallback to SI contact
+                            if not getattr(customer_doc, 'customer_primary_contact', None):
+                                if getattr(si, 'contact_person', None):
+                                    customer_doc.customer_primary_contact = si.contact_person
+                                    fixed.append(f"customer_primary_contact -> {si.contact_person}")
             
             # Save if we made changes
             if fixed:
@@ -150,15 +189,23 @@ class PaymentAgent:
                         fixed.append(f"export customer address pincode -> 00000 ({country})")
             
             # --- Also set party_address and contact_person on the payment entry ---
+            pe_changed = False
             if not getattr(pe, 'party_address', None):
                 if getattr(customer_doc, 'customer_primary_address', None):
                     pe.party_address = customer_doc.customer_primary_address
                     fixed.append(f"pe.party_address -> {customer_doc.customer_primary_address}")
+                    pe_changed = True
 
             if not getattr(pe, 'contact_person', None):
                 if getattr(customer_doc, 'customer_primary_contact', None):
                     pe.contact_person = customer_doc.customer_primary_contact
                     fixed.append(f"pe.contact_person -> {customer_doc.customer_primary_contact}")
+                    pe_changed = True
+            
+            # Save PE if party_address or contact_person changed
+            if pe_changed:
+                pe.save(ignore_permissions=True)
+                frappe.db.commit()
             
             # --- Multi-currency fix for Mexican companies ---
             # If customer has USD accounting but all accounts are MXN,
