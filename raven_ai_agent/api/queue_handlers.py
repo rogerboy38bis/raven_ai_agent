@@ -54,7 +54,7 @@ def _send_raven_result(channel_id: str, message: str, bot_name: str = "sales_ord
         frappe.db.commit()
         
         # Publish realtime event
-        publish_message_created_event(channel_id, msg_doc.name)
+        publish_message_created_event(msg_doc, channel_id)  # BUG 91: fix swapped args
     except Exception as e:
         frappe.log_error(f"Raven message failed: {str(e)}", "RAI Queue Handler")
 

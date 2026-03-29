@@ -48,7 +48,7 @@ def publish_message_created_event(message_doc, channel_id: str, use_adaptive: bo
                 channel_id=channel_id,
                 message_data=message_data,
                 event_name="message_created",
-                after_commit=True,
+                after_commit=False,  # BUG 91: publish immediately since db.commit() already called
                 log_debug=True
             )
             return
@@ -62,7 +62,7 @@ def publish_message_created_event(message_doc, channel_id: str, use_adaptive: bo
         message_data,
         doctype="Raven Channel",
         docname=channel_id,
-        after_commit=True,
+        after_commit=False,  # BUG 91: publish immediately since db.commit() already called
     )
 
 
