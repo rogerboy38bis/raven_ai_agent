@@ -716,6 +716,59 @@ class PaymentAgent:
             
             return {"success": False, "error": f"Error submitting Payment Entry: {error_msg}"}
 
+    def cancel_payment_entry(self, pe_name: str) -> Dict:
+        """Cancel a Payment Entry.
+        
+        Args:
+            pe_name: Payment Entry name
+        
+        Returns:
+            Dict with cancellation status
+        """
+        try:
+            pe = frappe.get_doc("Payment Entry", pe_name)
+
+            if pe.docstatus == 2:
+                return {
+                    "success": True,
+                    "message": f"✅ Payment Entry {self.make_link('Payment Entry', pe_name)} is already cancelled."
+                }
+            if pe.docstatus == 0:
+                # Draft - just delete/cancel
+                pe.cancel()
+                frappe.db.commit()
+                return {
+                    "success": True,
+                    "pe_name": pe.name,
+                    "link": self.make_link("Payment Entry", pe.name),
+                    "message": (
+                        f"✅ Payment Entry cancelled: {self.make_link('Payment Entry', pe.name)}\n\n"
+                        f"  Party: {pe.party_name}\n"
+                        f"  Amount: {pe.paid_amount} {pe.paid_from_account_currency}\n\n"
+                        f"Now you can create a new Payment Entry for the e-invoiced Sales Invoice."
+                    )
+                }
+            if pe.docstatus == 1:
+                # Submitted - need to cancel and create new
+                pe.cancel()
+                frappe.db.commit()
+                return {
+                    "success": True,
+                    "pe_name": pe.name,
+                    "link": self.make_link("Payment Entry", pe.name),
+                    "message": (
+                        f"✅ Payment Entry cancelled: {self.make_link('Payment Entry', pe.name)}\n\n"
+                        f"  Party: {pe.party_name}\n"
+                        f"  Amount: {pe.paid_amount} {pe.paid_from_account_currency}\n\n"
+                        f"Now you can create a new Payment Entry for the e-invoiced Sales Invoice."
+                    )
+                }
+
+        except frappe.DoesNotExistError:
+            return {"success": False, "error": f"Payment Entry '{pe_name}' not found."}
+        except Exception as e:
+            return {"success": False, "error": f"Error cancelling Payment Entry: {str(e)}"}
+
     def reconcile_payment(self, pe_name: str) -> Dict:
         """Check reconciliation status of a Payment Entry against its Sales Invoice(s).
         
@@ -918,6 +971,11 @@ class PaymentAgent:
             result = self.submit_payment_entry(pe_name)
             return result.get("message", result.get("error", "Unknown error"))
 
+        # ---- CANCEL PAYMENT ----
+        if "cancel" in message_lower and pe_name:
+            result = self.cancel_payment_entry(pe_name)
+            return result.get("message", result.get("error", "Unknown error"))
+
         # ---- RECONCILE ----
         if "reconcile" in message_lower and pe_name:
             result = self.reconcile_payment(pe_name)
@@ -947,6 +1005,7 @@ class PaymentAgent:
             "`@ai payment create [SI-NAME] amount [AMOUNT]` — Partial payment\n\n"
             "**Payment Actions**\n"
             "`@ai payment submit [PE-NAME]` — Submit Payment Entry\n"
+            "`@ai payment cancel [PE-NAME]` — Cancel Payment Entry\n"
             "`@ai payment reconcile [PE-NAME]` — Check reconciliation status\n\n"
             "**Status & Tracking**\n"
             "`@ai payment outstanding` — List all unpaid invoices\n"
