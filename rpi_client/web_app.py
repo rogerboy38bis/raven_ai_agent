@@ -445,6 +445,51 @@ def api_history():
     })
 
 
+@app.route('/api/cleanup-duplicates', methods=['POST'])
+def api_cleanup_duplicates():
+    """Remove duplicate entries, keeping only the latest for each barrel_serial.
+
+    Returns:
+        JSON with cleanup results.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        # Get count before
+        cur.execute('SELECT COUNT(*) FROM submission_history')
+        count_before = cur.fetchone()[0]
+
+        # Delete duplicates, keeping the latest (highest id) for each barrel_serial
+        cur.execute('''
+            DELETE FROM submission_history
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM submission_history
+                GROUP BY barrel_serial
+            )
+        ''')
+        deleted = cur.rowcount
+        conn.commit()
+
+        # Get count after
+        cur.execute('SELECT COUNT(*) FROM submission_history')
+        count_after = cur.fetchone()[0]
+        conn.close()
+
+        logger.info(f"Cleanup: removed {deleted} duplicates, {count_after} entries remain")
+
+        return jsonify({
+            'status': 'success',
+            'deleted': deleted,
+            'count_before': count_before,
+            'count_after': count_after
+        })
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 def main():
     """Main entry point."""
     host = os.getenv('FLASK_HOST', '0.0.0.0')

@@ -361,7 +361,10 @@
         </div>
 
         <div class="card">
-            <div class="card-title">Recent History</div>
+            <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Recent History</span>
+                <button onclick="cleanupDuplicates()" style="padding: 4px 8px; font-size: 12px;">Cleanup</button>
+            </div>
             <table class="history-table">
                 <thead>
                     <tr>
@@ -565,6 +568,22 @@
 
         function readScale() {
             alert('Scale reader coming in next version');
+        }
+
+        function cleanupDuplicates() {
+            if (!confirm('Remove duplicate entries, keeping only the latest for each barrel?')) return;
+            fetch('/api/cleanup-duplicates', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        showMessage('Removed ' + data.deleted + ' duplicates (' + data.count_after + ' entries remain)', 'success');
+                        loadHistory();
+                        updateStatus();
+                    } else {
+                        showMessage('Cleanup failed: ' + data.message, 'error');
+                    }
+                })
+                .catch(err => showMessage('Cleanup failed', 'error'));
         }
     </script>
 </body>
