@@ -1,0 +1,6 @@
+# RPi Client Requirements
+# Install: pip install -r requirements.txt
+
+flask>=3.0
+pyserial>=3.5
+requests>=2.32
