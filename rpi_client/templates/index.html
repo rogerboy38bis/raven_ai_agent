@@ -461,7 +461,11 @@
                 .then(r => r.json())
                 .then(data => {
                     if (data.status === 'success') {
-                        showMessage('Barrel validated: ' + serial, 'success');
+                    if (data.duplicate && data.duplicate.is_duplicate) {
+                        showMessage("WARNING: " + serial + " already submitted " + data.duplicate.count + " time(s). Last weight: " + data.duplicate.last_weight + " kg", "warning");
+                    } else {
+                        showMessage("Barrel validated: " + serial, "success");
+                    }
                         currentSerial = serial;
                         updateCurrentEntry();
                     } else {
@@ -529,7 +533,11 @@
             .then(r => r.json())
             .then(data => {
                 if (data.status === 'success') {
-                    showMessage('Weight submitted: ' + serial + ' = ' + weight + ' kg', 'success');
+                    if (data.duplicate && data.duplicate.is_duplicate) {
+                        showMessage("WARNING: Submitted but DUPLICATE: " + serial + " was already submitted " + data.duplicate.count + " time(s)", "warning");
+                    } else {
+                        showMessage('Weight submitted: ' + serial + ' = ' + weight + ' kg', 'success');
+                    }
                     currentSerial = '';
                     currentWeight = null;
                     document.getElementById('barrelSerial').value = '';
