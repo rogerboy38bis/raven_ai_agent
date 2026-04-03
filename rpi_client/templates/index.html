@@ -461,13 +461,13 @@
                 .then(r => r.json())
                 .then(data => {
                     if (data.status === 'success') {
-                    if (data.duplicate && data.duplicate.is_duplicate) {
-                        showMessage("WARNING: " + serial + " already submitted " + data.duplicate.count + " time(s). Last weight: " + data.duplicate.last_weight + " kg", "warning");
-                    } else {
-                        showMessage("Barrel validated: " + serial, "success");
-                    }
                         currentSerial = serial;
                         updateCurrentEntry();
+                        if (data.duplicate && data.duplicate.is_duplicate) {
+                            showMessage("WARNING: " + serial + " already submitted " + data.duplicate.count + " time(s). Last weight: " + data.duplicate.last_weight + " kg", "warning");
+                        } else {
+                            showMessage("Barrel validated: " + serial, "success");
+                        }
                     } else {
                         showMessage('Barrel not found: ' + serial, 'error');
                         currentSerial = '';

@@ -377,7 +377,7 @@ def api_validate_barrel(serial: str):
         'status': 'success',
         'barrel_serial': serial,
         'valid': True,
-            'duplicate': check_duplicate_serial(serial)
+        'duplicate': check_duplicate_serial(serial)
     })
 
 
