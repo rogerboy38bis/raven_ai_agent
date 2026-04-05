@@ -30,12 +30,14 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
-
+from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify
 
 import requests
 
 logger = logging.getLogger(__name__)
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 # Initialize Flask app
 app = Flask(__name__, template_folder='templates')
@@ -152,7 +154,7 @@ def validate_barrel_serial(serial: str) -> bool:
     return True
 
 
-def submit_to_erpnext(barrel_serial: str, gross_weight: float) -> Dict:
+def submit_to_erpnext(barrel_serial: str, gross_weight: float, batch_name: str = "", tara_weight: float = 0.0, mode: str = "keyboard") -> Dict:
     """Submit weight to ERPNext API.
 
     Args:
@@ -163,11 +165,20 @@ def submit_to_erpnext(barrel_serial: str, gross_weight: float) -> Dict:
         Result dictionary with status.
     """
     timestamp = datetime.now().isoformat()
+    from datetime import datetime, timezone
+    net_weight = gross_weight - tara_weight
     payload = {
-        'barrel_serial': barrel_serial,
-        'gross_weight': gross_weight,
         'device_id': CONFIG['device_id'],
-        'tara_weight': None
+        'mode': mode,
+        'batch_name': batch_name,
+        'barrel_serial': barrel_serial,
+        'gross_weight': float(gross_weight),
+        'tara_weight': float(tara_weight),
+        'net_weight': float(net_weight),
+        'unit': 'kg',
+        'tolerance_profile': 'PLANT',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'operator_id': CONFIG.get('operator_id', 'iot-bot@amb-wellness.com'),
     }
 
     if not CONFIG['api_key'] or not CONFIG['api_secret']:
@@ -175,7 +186,7 @@ def submit_to_erpnext(barrel_serial: str, gross_weight: float) -> Dict:
         buffer_submission(barrel_serial, gross_weight)
         return {'status': 'error', 'message': 'API credentials not configured'}
 
-    url = f"{CONFIG['erpnext_url']}/api/method/amb_w_tds.api.batch_api.receive_weight"
+    url = f"{CONFIG['erpnext_url']}/api/method/amb_w_spc.api.sensor_skill.receive_weight_event"
     try:
         resp = requests.post(
             url,
@@ -247,7 +258,7 @@ def retry_pending() -> Dict:
     results = {'success': 0, 'failed': 0}
 
     for item in pending:
-        result = submit_to_erpnext(item['barrel_serial'], item['gross_weight'])
+        result = submit_to_erpnext(item['barrel_serial'], item['gross_weight'], batch_name=item.get('batch_name', ''))
         if result['status'] == 'success':
             conn = sqlite3.connect(DB_PATH)
             conn.execute('DELETE FROM weight_buffer WHERE id = ?', (item['id'],))
@@ -298,6 +309,7 @@ def api_submit_weight():
 
     barrel_serial = data.get('barrel_serial', '').strip().upper()
     gross_weight = data.get('gross_weight')
+    batch_name = data.get("batch_name", "").strip()
 
     if not barrel_serial:
         return jsonify({'status': 'error', 'message': 'Barrel serial required'}), 400
@@ -325,7 +337,7 @@ def api_submit_weight():
         }), 400
 
     # Submit to ERPNext
-    result = submit_to_erpnext(barrel_serial, gross_weight)
+    result = submit_to_erpnext(barrel_serial, gross_weight, batch_name=batch_name)
 
     if result['status'] == 'success':
         return jsonify(result), 200
