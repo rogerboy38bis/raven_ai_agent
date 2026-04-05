@@ -318,6 +318,13 @@
         </div>
 
         <div class="card">
+            <div class="card-title">Batch Name</div>
+            <div class="form-group">
+                <input type="text" id="batchName" placeholder="LOTE-26-14-0002" autocomplete="off">
+            </div>
+        </div>
+
+        <div class="card">
             <div class="card-title">Barrel Serial</div>
             <div class="form-group">
                 <input type="text" id="barrelSerial" placeholder="JAR0001261-1-C1-001" autocomplete="off" autocapitalize="characters">
@@ -452,6 +459,11 @@
 
         function validateBarrel() {
             const serial = document.getElementById('barrelSerial').value.trim().toUpperCase();
+            if (!batch) {
+                showMessage('Please enter a batch name', 'error');
+                return;
+            }
+
             if (!serial) {
                 showMessage('Please enter a barrel serial', 'error');
                 return;
@@ -501,8 +513,14 @@
         }
 
         function submitWeight() {
+            const batch = document.getElementById('batchName').value.trim();
             const serial = currentSerial || document.getElementById('barrelSerial').value.trim().toUpperCase();
             const weight = currentWeight || parseFloat(document.getElementById('weight').value);
+
+            if (!batch) {
+                showMessage('Please enter a batch name', 'error');
+                return;
+            }
 
             if (!serial) {
                 showMessage('Please enter or validate a barrel serial', 'error');
@@ -522,6 +540,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    batch_name: batch,
                     barrel_serial: serial,
                     gross_weight: weight
                 })
