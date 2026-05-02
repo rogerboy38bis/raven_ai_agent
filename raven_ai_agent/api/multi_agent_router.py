@@ -379,3 +379,88 @@ def handle_multi_agent_command(command: str, user: str) -> Optional[str]:
     result = execute_pipeline(pipeline, user, context)
     
     return result
+
+
+# ---------------------------------------------------------------------------
+# Agentic-Design-Patterns: semantic Coordinator fallback (Chapter 7)
+# ---------------------------------------------------------------------------
+def coordinator_specs():
+    """AgentSpec catalog for the Coordinator pattern.
+
+    Mirrors the regex-driven pipelines above so the Coordinator can route
+    natural-language phrasings the regex layer doesn't catch.
+    """
+    try:
+        from raven_ai_agent.patterns import AgentSpec
+    except ImportError:
+        return []
+
+    return [
+        AgentSpec(
+            name="workflow_run",
+            description=(
+                "Run the complete 8-step manufacturing-to-payment cycle for "
+                "a Sales Order (WO -> SE -> SO -> Sales WO -> SE -> DN -> SI -> PE)."
+            ),
+            examples=[
+                "kick off the full workflow for SO-00752",
+                "execute the full cycle on SO-00800",
+            ],
+        ),
+        AgentSpec(
+            name="full_status",
+            description=(
+                "Return a combined sales + delivery + payment status report "
+                "for a Sales Order."
+            ),
+            examples=[
+                "give me the complete status of SO-00752",
+                "where do we stand on SO-00800 across sales, delivery, and payments",
+            ],
+        ),
+        AgentSpec(
+            name="diagnose_and_fix",
+            description=(
+                "Diagnose pipeline gaps for a Sales Order or Quotation and "
+                "suggest the next workflow actions."
+            ),
+            examples=[
+                "what's wrong with SO-00752 and how do I fix it",
+                "diagnose pipeline issues on SAL-QTN-0901 and propose fixes",
+            ],
+        ),
+        AgentSpec(
+            name="morning_briefing",
+            description=(
+                "Produce the daily Lucy-protocol briefing: pending WOs, "
+                "overdue invoices, and sales summary."
+            ),
+            examples=["give me my morning briefing", "what's on my plate today"],
+        ),
+    ]
+
+
+def semantic_route(command: str, provider) -> Optional[str]:
+    """Use the Coordinator pattern to map a free-form user request to one of
+    the multi-agent pipeline keys.  Returns the matched key or None.
+
+    Used as a SECOND-CHANCE router: only invoke this when the regex layer
+    in `is_multi_agent_command()` returns False.
+    """
+    try:
+        from raven_ai_agent.patterns import Coordinator
+    except ImportError:
+        return None
+
+    specs = coordinator_specs()
+    if not specs:
+        return None
+
+    decision = Coordinator(provider, agents=specs).decide(command)
+    if decision.agent in {s.name for s in specs} and decision.confidence >= 0.6:
+        logger.info(
+            "Coordinator pattern matched %s (confidence=%.2f) for: %s",
+            decision.agent, decision.confidence, command,
+        )
+        return decision.agent
+    return None
