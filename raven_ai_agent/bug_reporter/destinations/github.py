@@ -21,6 +21,12 @@ except ImportError:  # pragma: no cover
 _GITHUB_API = "https://api.github.com"
 _DEFAULT_OWNER = "rogerboy38bis"
 
+# Mapping from Frappe app name (filesystem) to GitHub repo name.
+# Some apps use a different name on GitHub than on disk; verified 2026-05-02.
+_FRAPPE_APP_TO_GITHUB_REPO = {
+    "amb_print": "amb_print_app",   # Frappe folder 'amb_print' → repo 'amb_print_app'
+}
+
 
 # ---- config ----- #
 def _resolve_token() -> Optional[str]:
@@ -89,7 +95,9 @@ def _resolve_repo_for_app(app: str) -> str:
         return candidates["_default"]
 
     # Convention: the rogerboy38bis fork keeps the same name as upstream.
-    return f"{owner}/{app}"
+    # Apply the Frappe-app → GitHub-repo translation when the names differ.
+    repo_name = _FRAPPE_APP_TO_GITHUB_REPO.get(app, app)
+    return f"{owner}/{repo_name}"
 
 
 # ---- public API ----- #
