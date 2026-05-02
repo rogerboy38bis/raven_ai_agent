@@ -27,6 +27,12 @@ scheduler_events = {
         "30 23 * * *": [
             "raven_ai_agent.cli.batch_pipeline_validation.run_month_end_batch"
         ],
+        # Bug Reporter escalation timer — every 5 minutes.  Cheap when there
+        # are no paused bugs (single COUNT query); meaningful work only when
+        # there are unacknowledged High failures.
+        "*/5 * * * *": [
+            "raven_ai_agent.bug_reporter.tasks.run_escalation_timer"
+        ],
     },
 }
 
@@ -46,6 +52,8 @@ override_doctype_class = {
     "Alexa User Mapping": "raven_ai_agent.raven_ai_agent.doctype.alexa_user_mapping.alexa_user_mapping.AlexaUserMapping",
     "AI Memory": "raven_ai_agent.raven_ai_agent.doctype.ai_memory.ai_memory.AIMemory",
     "AI Agent Settings": "raven_ai_agent.raven_ai_agent.doctype.ai_agent_settings.ai_agent_settings.AIAgentSettings",
+    "Raven Agent Bug": "raven_ai_agent.raven_ai_agent.doctype.raven_agent_bug.raven_agent_bug.RavenAgentBug",
+    "Raven Agent Bug Occurrence": "raven_ai_agent.raven_ai_agent.doctype.raven_agent_bug_occurrence.raven_agent_bug_occurrence.RavenAgentBugOccurrence",
 }
 
 # Run workspace orphan fix before migration

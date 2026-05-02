@@ -440,6 +440,23 @@ def handle_raven_message(doc=None, method=None):
                 )
             except Exception as _sup_exc:
                 frappe.logger().warning(f"[AI Agent] supervise failed: {_sup_exc}")
+
+            # === Bug Reporter: capture explicit success=False replies ===
+            try:
+                if isinstance(result, dict) and result.get("success") is False:
+                    from raven_ai_agent.bug_reporter import capture as _capture_bug
+                    _capture_bug(
+                        severity="Medium",
+                        bot=bot_name,
+                        intent=bot_name,
+                        user=user,
+                        query=query,
+                        failure_class="result_failure",
+                        result_text=(result.get("response") or result.get("error") or "")[:1500],
+                        supervisor_meta=result.get("supervisor"),
+                    )
+            except Exception:
+                pass
         finally:
             frappe.flags.ignore_permissions = original_ignore
         
@@ -514,6 +531,21 @@ def handle_raven_message(doc=None, method=None):
     except Exception as e:
         frappe.logger().error(f"[AI Agent] Error: {str(e)}")
         frappe.log_error(f"AI Agent Error: {str(e)}", "Raven AI Agent")
+        # Bug Reporter: capture the unhandled exception (best-effort, never raises).
+        try:
+            from raven_ai_agent.bug_reporter import capture as _capture_bug
+            _capture_bug(
+                severity="High",
+                bot=locals().get("bot_name"),
+                intent=locals().get("bot_name"),
+                user=locals().get("user"),
+                query=locals().get("query"),
+                exception=e,
+                failure_class="exception",
+                supervisor_meta=locals().get("_sup_pre"),
+            )
+        except Exception:
+            pass
         try:
             error_doc = frappe.get_doc({
                 "doctype": "Raven Message",
