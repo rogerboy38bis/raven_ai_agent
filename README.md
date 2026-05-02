@@ -1,16 +1,17 @@
 # Raven AI Agent
 
-Raymond-Lucy AI Agent for ERPNext with Raven Integration - Enhanced with OpenClaw-inspired architecture.
+Raymond-Lucy AI Agent for ERPNext with Raven Integration - Enhanced with OpenClaw-inspired architecture and an Agentic-Design-Patterns intelligence layer.
 
 ## Current Status
 
-**Latest Update:** March 2026 | **Version:** 2.1
+**Latest Update:** May 2026 | **Version:** 2.2
 **Production Deployment:** Active on https://erp.sysmayal2.cloud
 
 ### Recent Deployments
 
 | Date | Changes |
 |------|---------|
+| 2026-05-01 | Agentic Design Patterns intelligence layer (Reflection, Planner, Coordinator, Goal Loop, Fallback, RAG, Guardrails) wired into agent_v2 (PR #3) |
 | 2026-03-21 | Pipeline diagnosis commands (@ai pipeline, @ai diagnose), Payment Agent, Manufacturing workflow |
 | 2026-03-20 | Data Quality Scanner, Sample Request from Lead/Prospect/Opportunity/Quotation/SO |
 | 2026-03-19 | Payment Entry creation and submission fixes, @ai payment routing |
@@ -27,6 +28,7 @@ Raymond-Lucy AI Agent for ERPNext with Raven Integration - Enhanced with OpenCla
 - **Memento Protocol**: Persistent memory storage across sessions
 - **Lucy Protocol**: Context continuity with morning briefings
 - **Karpathy Protocol**: Autonomy slider (Copilot → Command → Agent)
+- **Agentic Design Patterns Layer**: 7 provider-agnostic patterns (Reflection, Planner, Coordinator, Goal Loop, Fallback, RAG, Guardrails) that boost the agent's reasoning, planning and safety — see [Intelligence Layer](#intelligence-layer-agentic-design-patterns)
 
 ### Multi-Provider LLM Support
 
@@ -36,6 +38,9 @@ Raymond-Lucy AI Agent for ERPNext with Raven Integration - Enhanced with OpenCla
 | **DeepSeek** | deepseek-chat, deepseek-reasoner | Cost-effective, reasoning mode |
 | **Claude** | claude-3-5-sonnet, claude-3-opus | Strong analysis |
 | **MiniMax** | abab6.5-chat, abab5.5-chat | Multilingual |
+| **Ollama** | llama3.x, qwen, mistral, etc. | On-prem / offline |
+
+All five providers transparently work with the **FallbackChain** pattern — if the primary provider fails or returns empty, the chain falls through to the next one in your configured order.
 
 ### Multi-Channel Gateway
 
@@ -305,32 +310,141 @@ audio = tts.text_to_speech("Hello!")
 ```
 raven_ai_agent/
 ├── api/
-│   ├── agent.py           # V1 API
-│   ├── agent_v2.py        # V2 API (Multi-provider)
-│   ├── workflows.py       # Business workflow automation
-│   └── command_router.py  # Command routing logic
+│   ├── agent.py             # V1 API (Raymond / Lucy / Memento)
+│   ├── agent_v2.py          # V2 API (multi-provider + intelligence layer)
+│   ├── workflows.py         # Business workflow automation
+│   ├── command_router.py    # Command routing logic
+│   ├── multi_agent_router.py  # Regex pipelines + Coordinator semantic fallback
+│   ├── intent_resolver.py   # NL → command
+│   └── memory_manager.py    # Persistent memory + vector search
+├── patterns/                # Agentic Design Patterns intelligence layer
+│   ├── reflection.py        # Producer / critic loop (Ch. 4)
+│   ├── planner.py           # JSON plan decomposition (Ch. 6)
+│   ├── coordinator.py       # Semantic multi-agent routing (Ch. 7)
+│   ├── goal_loop.py         # Goal + criteria iteration (Ch. 11)
+│   ├── fallback.py          # Provider / tool fallback chain (Ch. 12)
+│   ├── rag_retriever.py     # Retrieve-and-ground answers (Ch. 14)
+│   ├── guardrails.py        # Pre-mutation safety rules (Ch. 18)
+│   ├── intelligence.py      # IntelligenceLayer façade used by agent_v2
+│   └── tests/
+│       └── test_patterns_smoke.py  # 8 control-flow tests, no Frappe needed
+├── agents/                  # Specialist agents (workflow_orchestrator, task_validator, …)
 ├── handlers/
 │   └── quality_management.py  # QMS command handlers
-├── providers/             # LLM Providers
-│   ├── openai_provider.py
-│   ├── deepseek.py
-│   ├── claude.py
-│   └── minimax.py
-├── gateway/               # Multi-channel control
-│   ├── session_manager.py
-│   └── router.py
-├── channels/              # Channel adapters
-│   ├── whatsapp.py
-│   ├── telegram.py
-│   └── slack.py
-├── voice/                 # Voice integration
-│   └── elevenlabs.py
-├── skills/                # Extensible skills
-│   └── browser.py
+├── providers/               # LLM providers (OpenAI, DeepSeek, Claude, MiniMax, Ollama)
+├── gateway/                 # Multi-channel control (session_manager, router)
+├── channels/                # Channel adapters (whatsapp, telegram, slack)
+├── voice/                   # Voice integration (elevenlabs)
+├── skills/                  # Extensible skills (browser, …)
 └── utils/
     ├── memory.py
+    ├── vector_store.py      # Used by RAGRetriever
     └── cost_monitor.py
 ```
+
+## Intelligence Layer (Agentic Design Patterns)
+
+The `raven_ai_agent/patterns/` module brings seven patterns from
+[evoiz/Agentic-Design-Patterns](https://github.com/evoiz/Agentic-Design-Patterns)
+(Antonio Gulli's *Agentic Design Patterns* book) into the agent. The layer is
+**provider-agnostic**, **opt-in**, and only activated for queries flagged as
+complex — it never changes existing behaviour when disabled.
+
+### Patterns at a glance
+
+| Pattern | Module | Book ch. | Raven use case |
+|---|---|---:|---|
+| Reflection | `reflection.py` | 4 | Critic-revise BOMs, pipeline diagnosis answers |
+| Planner | `planner.py` | 6 | Decompose "QTN → paid invoice" into ordered command steps |
+| Coordinator | `coordinator.py` | 7 | Semantic agent routing when regex patterns miss |
+| Goal Loop | `goal_loop.py` | 11 | Iterate until ERPNext truth-checks pass (Raymond anti-hallucination) |
+| Fallback | `fallback.py` | 12 | Graceful provider degradation across all five LLM providers |
+| RAG Retriever | `rag_retriever.py` | 14 | Ground answers in `MemoryMixin.search_memories` with `[#n]` citations |
+| Guardrails | `guardrails.py` | 18 | Pre-mutation safety checks tied to the autonomy slider |
+
+### How it plugs into agent_v2
+
+During `process_query`, the agent consults the layer at four extension points:
+
+1. **Classify complexity** — rule-based, free, every query.
+2. **RAG short-circuit** — when complexity = `rag`, the answer is grounded in
+   AI Memories with `[#1]`, `[#2]` citations and tagged
+   `[CONFIDENCE: HIGH] [PATTERN: RAG]`.
+3. **Plan injection** — when complexity = `planning`, a numbered Plan is
+   prepended to the system prompt as the answer's backbone.
+4. **Post-LLM Reflection** — at autonomy ≥ Command, the draft is critic-revised
+   once against criteria like "no fabricated doc IDs / totals / dates".
+
+Responses now expose new `context_used` keys: `complexity`, `plan_preview`,
+`reflection_accepted`, and `pattern: rag` for retrieval-grounded replies.
+
+### Default Guardrail rules
+
+| Rule | Severity |
+|---|---|
+| `submit_requires_target` | High |
+| `payment_currency_match` | High |
+| `quotation_so_field_match` (CRITICAL_FIELDS divergence) | High |
+| `bulk_requires_ack` (≥ 25 docs without confirmation) | Medium |
+| `copilot_blocks_mutation` | High |
+
+Add custom rules with:
+```python
+from raven_ai_agent.patterns import Guardrails
+Guardrails().register(my_rule_fn)
+```
+
+### Enabling the layer
+
+Pick one:
+
+**Option A — environment flag (recommended for ops):**
+Add to **every** `[program:...]` block in `/etc/supervisor/conf.d/frappe-bench.conf`:
+```
+environment=RAVEN_INTELLIGENCE_LAYER="1"
+```
+Then:
+```bash
+sudo supervisorctl reread
+sudo supervisorctl update
+sudo supervisorctl restart frappe-bench-web: frappe-bench-workers:
+```
+
+**Option B — per-site setting:**
+In ERPNext UI → *AI Agent Settings* → check **Intelligence Layer Enabled**.
+
+Verify the env var actually reached a worker:
+```bash
+ps -ef | grep -E "/home/frappe/frappe-bench/env/bin/gunicorn.*127\.0\.0\.1:8000" | grep -v grep
+sudo cat /proc/<gunicorn-pid>/environ | tr '\0' '\n' | grep RAVEN
+# expect: RAVEN_INTELLIGENCE_LAYER=1
+```
+
+The activation log line confirms the layer is live:
+```
+[AI Agent V2] IntelligenceLayer activated
+```
+
+### Triggering each pattern from chat
+
+| Type this in Raven | Pattern triggered |
+|---|---|
+| `Take SAL-QTN-XXXX all the way to a paid invoice` | Planner |
+| `According to previous sessions, what was the last quotation we worked on` | RAG |
+| `Audit SO-XXXXX totals and verify nothing is fabricated` | Reflection (autonomy ≥ Command) |
+| `Diagnose and fix the pipeline gap on SO-XXXXX` | Coordinator semantic fallback |
+
+### Smoke tests
+
+The pattern module ships an 8-test smoke suite using a scripted `FakeProvider`
+— no Frappe, no API keys, no network needed:
+```bash
+cd ~/frappe-bench/apps/raven_ai_agent
+python -m raven_ai_agent.patterns.tests.test_patterns_smoke
+# All pattern smoke tests passed.
+```
+
+Full architecture and per-pattern reference: [`docs/AGENTIC_PATTERNS.md`](docs/AGENTIC_PATTERNS.md).
 
 ## Phase 4: Advanced Analytics & Reporting Module
 
@@ -394,6 +508,30 @@ Complete project documentation is available in `docs/project_formulation/`:
 | Sales Invoice creation failure | ✅ Fixed | Added mode_of_payment field to workflow |
 | Command routing for !prefix | ✅ Fixed | Updated command_router.py |
 | QMS Training Program field bug | ✅ Fixed | Field validation updates |
+| `bench --site all clear-cache` MariaDB access denied | ⚠️ Workaround | DB credentials in `sites/<site>/site_config.json` no longer match MariaDB. Patterns layer is unaffected; fix by updating `db_password` to match the actual DB user. |
+| Socketio `EADDRINUSE` after supervisor reload | ✅ Tooling | Run `./bench_socketio_doctor.sh --fix` (and `--restart-all` if needed) to free port 9000 and respawn. |
+
+## Operations cheat sheet
+
+```bash
+# Restart bench cleanly via supervisor (web + workers)
+sudo supervisorctl restart frappe-bench-web: frappe-bench-workers:
+
+# Heal socketio if it goes ERROR (spawn error)
+./bench_socketio_doctor.sh --fix
+
+# Confirm intelligence layer is live in a running worker
+ps -ef | grep -E "/home/frappe/frappe-bench/env/bin/gunicorn.*127\.0\.0\.1:8000" | grep -v grep
+sudo cat /proc/<pid>/environ | tr '\0' '\n' | grep RAVEN
+
+# Smoke-test the patterns module (no Frappe needed)
+cd ~/frappe-bench/apps/raven_ai_agent
+python -m raven_ai_agent.patterns.tests.test_patterns_smoke
+
+# Tail intelligence layer logs while testing
+cd ~/frappe-bench
+tail -f logs/web.log logs/worker.log 2>/dev/null | grep -i "intelligence\|AI Agent V2\|PATTERN"
+```
 
 ---
 
