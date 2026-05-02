@@ -18,6 +18,7 @@ import frappe
 import httpx
 from typing import Dict, List, Optional, Generator
 from .base import LLMProvider
+from ._secrets import resolve_secret
 
 
 class MiniMaxProvider(LLMProvider):
@@ -51,34 +52,44 @@ class MiniMaxProvider(LLMProvider):
     
     def __init__(self, settings: Dict):
         super().__init__(settings)
-        
-        # Try Coding Plan key first (sk-cp-...), then regular API key
-        # Support both lowercase (frappe style) and uppercase (env var style)
-        api_key = (settings.get("minimax_cp_key") or settings.get("MINIMAX_CP_KEY") or
-                   settings.get("minimax_api_key") or settings.get("MINIMAX_API_KEY"))
-        group_id = settings.get("minimax_group_id") or settings.get("MINIMAX_GROUP_ID")
-        
+
+        # Prefer Coding Plan key (sk-cp-...) when available; fall back to regular.
+        api_key = resolve_secret(
+            settings,
+            env_vars=(
+                "RAVEN_MINIMAX_CP_KEY", "MINIMAX_CP_KEY",
+                "RAVEN_MINIMAX_API_KEY", "MINIMAX_API_KEY",
+            ),
+            site_config_keys=(
+                "minimax_cp_key", "MINIMAX_CP_KEY",
+                "minimax_api_key", "MINIMAX_API_KEY",
+            ),
+            db_field="minimax_cp_key",
+            settings_keys=("minimax_cp_key", "minimax_api_key"),
+            label="MiniMax API key (CP or regular)",
+            required=False,
+        )
         if not api_key:
-            try:
-                agent_settings = frappe.get_single("AI Agent Settings")
-                # Prefer Coding Plan key
-                api_key = agent_settings.get_password("minimax_cp_key") or agent_settings.get_password("minimax_api_key")
-                group_id = getattr(agent_settings, "minimax_group_id", None)
-            except Exception:
-                pass
-        
-        # Also check frappe.conf for uppercase keys
-        if not api_key:
-            try:
-                api_key = frappe.conf.get("MINIMAX_CP_KEY") or frappe.conf.get("MINIMAX_API_KEY")
-            except Exception:
-                pass
-        
-        if not api_key:
-            raise ValueError("MiniMax API key not configured (set MINIMAX_CP_KEY or MINIMAX_API_KEY)")
-        
+            # Try the regular key field if the CP field is empty in DB.
+            api_key = resolve_secret(
+                settings,
+                env_vars=("RAVEN_MINIMAX_API_KEY", "MINIMAX_API_KEY"),
+                site_config_keys=("minimax_api_key", "MINIMAX_API_KEY"),
+                db_field="minimax_api_key",
+                settings_keys=("minimax_api_key",),
+                label="MiniMax API key",
+            )
+
+        # group_id is not encrypted, so it's safe to read from settings/conf directly.
+        group_id = (
+            settings.get("minimax_group_id")
+            or settings.get("MINIMAX_GROUP_ID")
+            or (frappe.conf.get("MINIMAX_GROUP_ID") if hasattr(frappe, "conf") else None)
+            or "0"
+        )
+
         self.api_key = api_key
-        self.group_id = group_id or "0"  # Default group
+        self.group_id = group_id
         # Use M2.1 for Coding Plan keys (sk-cp-), M2 for regular keys
         default = "MiniMax-M2.1" if api_key.startswith("sk-cp-") else "MiniMax-M2"
         self.default_model = settings.get("minimax_model") or default
