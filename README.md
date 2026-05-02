@@ -362,21 +362,36 @@ complex — it never changes existing behaviour when disabled.
 | RAG Retriever | `rag_retriever.py` | 14 | Ground answers in `MemoryMixin.search_memories` with `[#n]` citations |
 | Guardrails | `guardrails.py` | 18 | Pre-mutation safety checks tied to the autonomy slider |
 
-### How it plugs into agent_v2
+### How it plugs into the chat dispatch (Option C — Agent Supervisor)
 
-During `process_query`, the agent consults the layer at four extension points:
+The layer is **not** a new agent. It supervises the existing per-bot dispatch
+in `api/router.py`, so every bot (Manufacturing, Payment, Workflow Orchestrator,
+IoT, Executive, Sales-Order Validator, R&D, plus the V1 SkillRouter fallback)
+benefits without touching its code.
 
-1. **Classify complexity** — rule-based, free, every query.
-2. **RAG short-circuit** — when complexity = `rag`, the answer is grounded in
-   AI Memories with `[#1]`, `[#2]` citations and tagged
-   `[CONFIDENCE: HIGH] [PATTERN: RAG]`.
-3. **Plan injection** — when complexity = `planning`, a numbered Plan is
-   prepended to the system prompt as the answer's backbone.
-4. **Post-LLM Reflection** — at autonomy ≥ Command, the draft is critic-revised
-   once against criteria like "no fabricated doc IDs / totals / dates".
+Flow inside `handle_raven_message`:
 
-Responses now expose new `context_used` keys: `complexity`, `plan_preview`,
-`reflection_accepted`, and `pattern: rag` for retrieval-grounded replies.
+```
+@ai message  →  _detect_ai_intent  →  pre_supervise(query, user, bot_name)
+                                          │
+                                          ├─ Guardrails (block unsafe @ai !commands early)
+                                          ├─ RAG short-circuit (retrieval phrasings)
+                                          └─ Plan injection (multi-step phrasings)
+                                          ↓
+                                     bot dispatch (UNCHANGED)
+                                          ↓
+                                  supervise(result, query, ...)
+                                          ├─ Reflection critic-revise (autonomy ≥ Command)
+                                          └─ attach `supervisor` telemetry to response
+```
+
+When the env flag `RAVEN_INTELLIGENCE_LAYER` is unset, both `pre_supervise`
+and `supervise` are transparent passthroughs — every bot runs exactly as it
+does today.
+
+Responses gain a new `supervisor` block with: `complexity`, `applied`
+(list of patterns that fired, e.g. `["reflection"]`), `bot`, and — when a
+short-circuit happened — `pattern` and `sources`.
 
 ### Default Guardrail rules
 
@@ -445,6 +460,17 @@ python -m raven_ai_agent.patterns.tests.test_patterns_smoke
 ```
 
 Full architecture and per-pattern reference: [`docs/AGENTIC_PATTERNS.md`](docs/AGENTIC_PATTERNS.md).
+
+### Supervisor smoke tests
+
+The supervisor ships with a Frappe-stubbed test suite covering the
+introspection helpers and the passthrough behaviour when the layer is off:
+
+```bash
+cd ~/frappe-bench/apps/raven_ai_agent
+python -m raven_ai_agent.api.tests.test_agent_supervisor_helpers
+# All supervisor smoke tests passed.
+```
 
 ## Phase 4: Advanced Analytics & Reporting Module
 

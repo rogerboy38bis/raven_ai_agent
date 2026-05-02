@@ -16,6 +16,11 @@ from typing import Optional, Dict, List
 # Import response formatter for post-processing
 from raven_ai_agent.api.response_formatter import apply_post_processing
 
+
+class _SupervisorShortCircuit(Exception):
+    """Sentinel raised by the agent supervisor pre-hook to skip bot dispatch
+    while still executing the post-dispatch supervision step."""
+
 @frappe.whitelist()
 def process_message(message: str, conversation_history: str = None) -> Dict:
     """API endpoint for processing messages"""
@@ -324,6 +329,27 @@ def handle_raven_message(doc=None, method=None):
         original_ignore = frappe.flags.ignore_permissions
         try:
             frappe.flags.ignore_permissions = True
+
+            # === Agent Supervisor (Option C): pre-dispatch hooks ===
+            # Runs Guardrails, RAG short-circuit and Plan injection BEFORE the
+            # bot dispatch.  Transparent passthrough when intelligence layer is off.
+            try:
+                from raven_ai_agent.api.agent_supervisor import pre_supervise
+                _sup_pre = pre_supervise(query, user, bot_name)
+                if _sup_pre.get("short_circuit"):
+                    result = _sup_pre["short_circuit"]
+                    frappe.logger().info(
+                        f"[AI Agent] Supervisor short-circuit ({_sup_pre.get('complexity')})"
+                    )
+                    raise _SupervisorShortCircuit()
+                # Bots receive the (possibly enriched) query.
+                query = _sup_pre.get("enriched_query", query)
+                _sup_complexity = _sup_pre.get("complexity", "simple")
+            except _SupervisorShortCircuit:
+                pass  # falls through to post-processing below
+            except Exception as _sup_exc:  # never block dispatch on supervisor errors
+                frappe.logger().warning(f"[AI Agent] pre_supervise failed: {_sup_exc}")
+                _sup_complexity = "simple"
             
             # === Route to specialized agent based on bot_name ===
             
@@ -403,6 +429,17 @@ def handle_raven_message(doc=None, method=None):
                     frappe.logger().warning("[AI Agent] SkillRouter not available, using default agent")
                     agent = RaymondLucyAgent(user)
                     result = agent.process_query(query)
+
+            # === Agent Supervisor (Option C): post-dispatch hooks ===
+            # Reflection-revises NL responses and attaches telemetry.
+            try:
+                from raven_ai_agent.api.agent_supervisor import supervise
+                result = supervise(
+                    result, query, user, bot_name,
+                    complexity=locals().get("_sup_complexity", "simple"),
+                )
+            except Exception as _sup_exc:
+                frappe.logger().warning(f"[AI Agent] supervise failed: {_sup_exc}")
         finally:
             frappe.flags.ignore_permissions = original_ignore
         
