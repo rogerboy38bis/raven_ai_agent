@@ -23,7 +23,9 @@ except ImportError:  # pragma: no cover
     HAVE_REQUESTS = False
 
 
-_DEFAULT_APPS = ("raven_ai_agent", "amb_w_spc", "amb_w_tds", "amb_print")
+# Upstream repo names on rogerboy38.  Verified against the live account on
+# 2026-05-02: 'amb_print_app' is the canonical repo name (NOT 'amb_print').
+_DEFAULT_APPS = ("raven_ai_agent", "amb_w_spc", "amb_w_tds", "amb_print_app")
 _UPSTREAM_OWNER_DEFAULT = "rogerboy38"
 _FORK_OWNER_DEFAULT = "rogerboy38bis"
 _GITHUB_API = "https://api.github.com"
