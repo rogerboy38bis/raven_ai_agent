@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>AMB Weight Capture</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            min-height: 100vh;
+            padding: 10px;
+        }
+
+        .container {
+            max-width: 480px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: #2c3e50;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        header h1 {
+            font-size: 1.3rem;
+            margin-bottom: 5px;
+        }
+
+        header .subtitle {
+            font-size: 0.85rem;
+            opacity: 0.8;
+        }
+
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 8px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.9rem;
+            font-weight: 500;
+            margin-bottom: 6px;
+            color: #555;
+        }
+
+        input[type="text"],
+        input[type="number"] {
+            width: 100%;
+            padding: 14px;
+            font-size: 1.2rem;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input:focus {
+            border-color: #3498db;
+        }
+
+        input:disabled {
+            background: #f9f9f9;
+            color: #888;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 14px;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+            min-height: 48px;
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        button.primary {
+            background: #27ae60;
+            color: white;
+        }
+
+        button.primary:hover {
+            background: #219a52;
+        }
+
+        button.primary:disabled {
+            background: #95a5a6;
+            cursor: not-allowed;
+        }
+
+        button.secondary {
+            background: #95a5a6;
+            color: white;
+        }
+
+        button.secondary:hover {
+            background: #7f8c8d;
+        }
+
+        button.stub {
+            background: #f39c12;
+            color: white;
+        }
+
+        button.stub:hover {
+            background: #d68910;
+        }
+
+        .status-bar {
+            background: #ecf0f1;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 15px;
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 0.9rem;
+        }
+
+        .status-row .label {
+            color: #666;
+        }
+
+        .status-row .value {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .status-row .value.success {
+            color: #27ae60;
+        }
+
+        .status-row .value.warning {
+            color: #f39c12;
+        }
+
+        .status-row .value.error {
+            color: #e74c3c;
+        }
+
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        .history-table th {
+            background: #f8f9fa;
+            padding: 10px 8px;
+            text-align: left;
+            font-weight: 600;
+            color: #555;
+            border-bottom: 2px solid #eee;
+        }
+
+        .history-table td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .history-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .history-table .status {
+            font-weight: 600;
+        }
+
+        .history-table .status.success {
+            color: #27ae60;
+        }
+
+        .history-table .status.pending {
+            color: #f39c12;
+        }
+
+        .history-table .status.error {
+            color: #e74c3c;
+        }
+
+        .message {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 0.95rem;
+            display: none;
+        }
+
+        .message.show {
+            display: block;
+        }
+
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .message.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }
+
+        .current-entry {
+            background: #e8f4f8;
+            border: 2px solid #3498db;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 15px;
+            display: none;
+        }
+
+        .current-entry.show {
+            display: block;
+        }
+
+        .current-entry .serial {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .current-entry .weight {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #3498db;
+            text-align: center;
+            padding: 10px 0;
+        }
+
+        .current-entry .weight-unit {
+            font-size: 1rem;
+            color: #666;
+        }
+
+        footer {
+            text-align: center;
+            padding: 15px;
+            color: #888;
+            font-size: 0.8rem;
+        }
+
+        @media (max-width: 380px) {
+            .button-row {
+                flex-direction: column;
+            }
+
+            button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AMB Weight Capture</h1>
+            <div class="subtitle" id="deviceId">Device: SCALE-L01</div>
+        </header>
+
+        <div id="message" class="message"></div>
+
+        <div class="current-entry" id="currentEntry">
+            <div class="serial" id="currentSerial">-</div>
+            <div class="weight"><span id="currentWeight">-</span> <span class="weight-unit">kg</span></div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Batch Name</div>
+            <div class="form-group">
+                <input type="text" id="batchName" placeholder="LOTE-26-14-0002" autocomplete="off">
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Barrel Serial</div>
+            <div class="form-group">
+                <input type="text" id="barrelSerial" placeholder="JAR0001261-1-C1-001" autocomplete="off" autocapitalize="characters">
+            </div>
+            <div class="button-row">
+                <button class="stub" onclick="scanBarcode()">Scan Barcode</button>
+                <button class="secondary" onclick="validateBarrel()">Validate</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Weight (kg)</div>
+            <div class="form-group">
+                <input type="number" id="weight" placeholder="25.00" step="0.01" min="0" max="500">
+            </div>
+            <div class="button-row">
+                <button class="stub" onclick="readScale()">Read Scale</button>
+                <button class="secondary" onclick="clearWeight()">Clear</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <button class="primary" id="submitBtn" onclick="submitWeight()" style="width: 100%;">
+                Submit Weight
+            </button>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-row">
+                <span class="label">Connection:</span>
+                <span class="value success" id="connectionStatus">Connected</span>
+            </div>
+            <div class="status-row">
+                <span class="label">Last Submission:</span>
+                <span class="value" id="lastSubmission">-</span>
+            </div>
+            <div class="status-row">
+                <span class="label">Pending:</span>
+                <span class="value" id="pendingCount">0</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Recent History</div>
+            <table class="history-table">
+                <thead>
+                    <tr>
+                        <th>Serial</th>
+                        <th>Weight</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="historyBody">
+                    <tr>
+                        <td colspan="3" style="text-align: center; color: #888;">No submissions yet</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <footer>
+            <div>AMB Manufacturing Workflow</div>
+            <div id="version">v13.4.0</div>
+        </footer>
+    </div>
+
+    <script>
+        let currentSerial = '';
+        let currentWeight = null;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            updateStatus();
+            loadHistory();
+            setInterval(updateStatus, 30000);
+        });
+
+        function showMessage(text, type = 'success') {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.className = 'message show ' + type;
+            setTimeout(() => {
+                msg.className = 'message';
+            }, 5000);
+        }
+
+        function updateStatus() {
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('deviceId').textContent = 'Device: ' + data.device_id;
+                    document.getElementById('pendingCount').textContent = data.pending_count;
+
+                    const pendingEl = document.getElementById('pendingCount');
+                    if (data.pending_count > 0) {
+                        pendingEl.className = 'value warning';
+                    } else {
+                        pendingEl.className = 'value success';
+                    }
+
+                    if (data.last_submission) {
+                        document.getElementById('lastSubmission').textContent =
+                            data.last_submission.barrel_serial + ' = ' + data.last_submission.gross_weight + ' kg';
+                    }
+                })
+                .catch(err => {
+                    console.error('Status error:', err);
+                    document.getElementById('connectionStatus').textContent = 'Offline';
+                    document.getElementById('connectionStatus').className = 'value error';
+                });
+        }
+
+        function loadHistory() {
+            fetch('/api/history?limit=10')
+                .then(r => r.json())
+                .then(data => {
+                    const tbody = document.getElementById('historyBody');
+                    if (data.items && data.items.length > 0) {
+                        tbody.innerHTML = data.items.map(item => `
+                            <tr>
+                                <td>${item.barrel_serial}</td>
+                                <td>${item.gross_weight} kg</td>
+                                <td class="status ${item.status}">${item.status.toUpperCase()}</td>
+                            </tr>
+                        `).join('');
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #888;">No submissions yet</td></tr>';
+                    }
+                })
+                .catch(err => console.error('History error:', err));
+        }
+
+        function validateBarrel() {
+            const serial = document.getElementById('barrelSerial').value.trim().toUpperCase();
+            if (!batch) {
+                showMessage('Please enter a batch name', 'error');
+                return;
+            }
+
+            if (!serial) {
+                showMessage('Please enter a barrel serial', 'error');
+                return;
+            }
+
+            fetch('/api/barrels/' + encodeURIComponent(serial))
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        showMessage('Barrel validated: ' + serial, 'success');
+                        currentSerial = serial;
+                        updateCurrentEntry();
+                    } else {
+                        showMessage('Barrel not found: ' + serial, 'error');
+                        currentSerial = '';
+                        updateCurrentEntry();
+                    }
+                })
+                .catch(err => {
+                    showMessage('Validation error', 'error');
+                    currentSerial = serial;
+                    updateCurrentEntry();
+                });
+        }
+
+        function setWeight(weight) {
+            document.getElementById('weight').value = weight;
+            currentWeight = parseFloat(weight);
+            updateCurrentEntry();
+        }
+
+        function clearWeight() {
+            document.getElementById('weight').value = '';
+            currentWeight = null;
+            updateCurrentEntry();
+        }
+
+        function updateCurrentEntry() {
+            const entry = document.getElementById('currentEntry');
+            if (currentSerial && currentWeight) {
+                document.getElementById('currentSerial').textContent = currentSerial;
+                document.getElementById('currentWeight').textContent = currentWeight;
+                entry.classList.add('show');
+            } else {
+                entry.classList.remove('show');
+            }
+        }
+
+        function submitWeight() {
+            const batch = document.getElementById('batchName').value.trim();
+            const serial = currentSerial || document.getElementById('barrelSerial').value.trim().toUpperCase();
+            const weight = currentWeight || parseFloat(document.getElementById('weight').value);
+
+            if (!batch) {
+                showMessage('Please enter a batch name', 'error');
+                return;
+            }
+
+            if (!serial) {
+                showMessage('Please enter or validate a barrel serial', 'error');
+                return;
+            }
+
+            if (!weight || isNaN(weight)) {
+                showMessage('Please enter a valid weight', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true;
+            btn.textContent = 'Submitting...';
+
+            fetch('/api/submit-weight', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    batch_name: batch,
+                    barrel_serial: serial,
+                    gross_weight: weight
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    showMessage('Weight submitted: ' + serial + ' = ' + weight + ' kg', 'success');
+                    currentSerial = '';
+                    currentWeight = null;
+                    document.getElementById('barrelSerial').value = '';
+                    document.getElementById('weight').value = '';
+                    updateCurrentEntry();
+                    updateStatus();
+                    loadHistory();
+                } else {
+                    showMessage('Error: ' + (data.message || 'Unknown error'), 'warning');
+                    updateStatus();
+                }
+            })
+            .catch(err => {
+                showMessage('Submission failed', 'error');
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.textContent = 'Submit Weight';
+            });
+        }
+
+        function scanBarcode() {
+            alert('Camera scan coming in next version');
+        }
+
+        function readScale() {
+            alert('Scale reader coming in next version');
+        }
+    </script>
+</body>
+</html>
