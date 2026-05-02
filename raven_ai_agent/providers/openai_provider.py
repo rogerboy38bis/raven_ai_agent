@@ -6,6 +6,7 @@ import frappe
 from typing import Dict, List, Optional, Generator
 from openai import OpenAI
 from .base import LLMProvider
+from ._secrets import resolve_secret
 
 
 class OpenAIProvider(LLMProvider):
@@ -24,18 +25,16 @@ class OpenAIProvider(LLMProvider):
     
     def __init__(self, settings: Dict):
         super().__init__(settings)
-        
-        api_key = settings.get("openai_api_key")
-        if not api_key:
-            try:
-                agent_settings = frappe.get_single("AI Agent Settings")
-                api_key = agent_settings.get_password("openai_api_key")
-            except Exception:
-                pass
-        
-        if not api_key:
-            raise ValueError("OpenAI API key not configured")
-        
+
+        api_key = resolve_secret(
+            settings,
+            env_vars=("RAVEN_OPENAI_API_KEY", "OPENAI_API_KEY"),
+            site_config_keys=("openai_api_key", "OPENAI_API_KEY"),
+            db_field="openai_api_key",
+            settings_keys=("openai_api_key",),
+            label="OpenAI API key",
+        )
+        self.api_key = api_key
         self.client = OpenAI(api_key=api_key)
         self.default_model = settings.get("model", self.DEFAULT_MODEL)
     

@@ -11,6 +11,7 @@ Models:
 import frappe
 from typing import Dict, List, Optional, Generator
 from .base import LLMProvider
+from ._secrets import resolve_secret
 
 try:
     from anthropic import Anthropic
@@ -51,21 +52,19 @@ class ClaudeProvider(LLMProvider):
     
     def __init__(self, settings: Dict):
         super().__init__(settings)
-        
+
         if not ANTHROPIC_AVAILABLE:
             raise ImportError("anthropic package not installed. Run: pip install anthropic")
-        
-        api_key = settings.get("claude_api_key")
-        if not api_key:
-            try:
-                agent_settings = frappe.get_single("AI Agent Settings")
-                api_key = agent_settings.get_password("claude_api_key")
-            except Exception:
-                pass
-        
-        if not api_key:
-            raise ValueError("Claude API key not configured")
-        
+
+        api_key = resolve_secret(
+            settings,
+            env_vars=("RAVEN_CLAUDE_API_KEY", "CLAUDE_API_KEY", "ANTHROPIC_API_KEY"),
+            site_config_keys=("claude_api_key", "CLAUDE_API_KEY", "ANTHROPIC_API_KEY"),
+            db_field="claude_api_key",
+            settings_keys=("claude_api_key",),
+            label="Claude API key",
+        )
+        self.api_key = api_key
         self.client = Anthropic(api_key=api_key)
         self.default_model = settings.get("claude_model", self.DEFAULT_MODEL)
     

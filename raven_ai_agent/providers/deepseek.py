@@ -13,6 +13,7 @@ import frappe
 from typing import Dict, List, Optional, Generator
 from openai import OpenAI
 from .base import LLMProvider
+from ._secrets import resolve_secret
 
 
 class DeepSeekProvider(LLMProvider):
@@ -39,24 +40,21 @@ class DeepSeekProvider(LLMProvider):
     
     def __init__(self, settings: Dict):
         super().__init__(settings)
-        
-        # Get API key from settings
-        api_key = settings.get("deepseek_api_key")
-        if not api_key:
-            # Try to get from AI Agent Settings
-            try:
-                agent_settings = frappe.get_single("AI Agent Settings")
-                api_key = agent_settings.get_password("deepseek_api_key")
-            except Exception:
-                pass
-        
-        if not api_key:
-            raise ValueError("DeepSeek API key not configured. Set it in AI Agent Settings.")
-        
+
+        api_key = resolve_secret(
+            settings,
+            env_vars=("RAVEN_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"),
+            site_config_keys=("deepseek_api_key", "DEEPSEEK_API_KEY"),
+            db_field="deepseek_api_key",
+            settings_keys=("deepseek_api_key",),
+            label="DeepSeek API key",
+        )
+        self.api_key = api_key
+
         # Use OpenAI client with DeepSeek base URL
         self.client = OpenAI(
             api_key=api_key,
-            base_url=self.BASE_URL
+            base_url=self.BASE_URL,
         )
         
         self.default_model = settings.get("deepseek_model") or self.DEFAULT_MODEL
