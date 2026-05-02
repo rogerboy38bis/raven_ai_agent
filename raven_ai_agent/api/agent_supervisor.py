@@ -140,6 +140,25 @@ def pre_supervise(query: str, user: str, bot_name: Optional[str]) -> Dict[str, A
                     "guardrails": [v.__dict__ for v in report.violations],
                 },
             }
+            # Bug Reporter: a High guardrail block under autonomy=agent is
+            # exactly the kind of incident developers want to know about.
+            try:
+                from raven_ai_agent.bug_reporter import capture as _capture_bug
+                _capture_bug(
+                    severity="High",
+                    bot=bot_name,
+                    intent=bot_name,
+                    user=user,
+                    query=query,
+                    failure_class="guardrail_block",
+                    result_text=report.format(),
+                    supervisor_meta={
+                        "complexity": complexity,
+                        "guardrails": [v.__dict__ for v in report.violations],
+                    },
+                )
+            except Exception:
+                pass
             return base
     except Exception as exc:  # noqa: BLE001
         frappe.logger().debug(f"[AgentSupervisor] guardrails failed: {exc}")
@@ -230,6 +249,25 @@ def supervise(
             if refined and refined.final_answer and refined.final_answer.strip():
                 result["response"] = refined.final_answer
                 applied.append("reflection")
+            # Bug Reporter: critic rejected the answer (likely hallucination).
+            if refined and not refined.accepted:
+                try:
+                    from raven_ai_agent.bug_reporter import capture as _capture_bug
+                    _capture_bug(
+                        severity="Medium",
+                        bot=bot_name,
+                        intent=bot_name,
+                        user=user,
+                        query=query,
+                        failure_class="reflection_rejected",
+                        result_text=(refined.final_answer or "")[:1500],
+                        supervisor_meta={
+                            "complexity": complexity,
+                            "iterations": refined.iterations,
+                        },
+                    )
+                except Exception:
+                    pass
         except Exception as exc:  # noqa: BLE001
             frappe.logger().debug(f"[AgentSupervisor] reflection failed: {exc}")
 

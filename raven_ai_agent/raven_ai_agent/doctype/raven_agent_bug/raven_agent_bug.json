@@ -1,0 +1,195 @@
+{
+ "actions": [],
+ "autoname": "field:fingerprint",
+ "creation": "2026-05-02 00:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "section_identity",
+  "fingerprint",
+  "severity",
+  "environment",
+  "app",
+  "col_break_id",
+  "bot",
+  "intent",
+  "failure_class",
+  "section_status",
+  "occurrence_count",
+  "first_seen_at",
+  "last_seen_at",
+  "col_break_status",
+  "autonomy_paused",
+  "autonomy_paused_at",
+  "alarm1_sent",
+  "alarm2_sent",
+  "alarm3_sent",
+  "section_summary",
+  "summary",
+  "section_destinations",
+  "helpdesk_url",
+  "github_url",
+  "section_occurrences",
+  "occurrences"
+ ],
+ "fields": [
+  {"fieldname": "section_identity", "fieldtype": "Section Break", "label": "Identity"},
+  {
+   "fieldname": "fingerprint",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Fingerprint",
+   "reqd": 1,
+   "unique": 1,
+   "length": 16
+  },
+  {
+   "default": "Medium",
+   "fieldname": "severity",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Severity",
+   "options": "Low\nMedium\nHigh"
+  },
+  {
+   "fieldname": "environment",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Environment"
+  },
+  {
+   "fieldname": "app",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "App"
+  },
+  {"fieldname": "col_break_id", "fieldtype": "Column Break"},
+  {
+   "fieldname": "bot",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Bot"
+  },
+  {
+   "fieldname": "intent",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Intent"
+  },
+  {
+   "fieldname": "failure_class",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Failure Class"
+  },
+
+  {"fieldname": "section_status", "fieldtype": "Section Break", "label": "Status"},
+  {
+   "default": "1",
+   "fieldname": "occurrence_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Occurrence Count"
+  },
+  {
+   "fieldname": "first_seen_at",
+   "fieldtype": "Datetime",
+   "label": "First Seen At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_seen_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Last Seen At"
+  },
+  {"fieldname": "col_break_status", "fieldtype": "Column Break"},
+  {
+   "default": "0",
+   "fieldname": "autonomy_paused",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Autonomy Paused"
+  },
+  {
+   "fieldname": "autonomy_paused_at",
+   "fieldtype": "Datetime",
+   "label": "Autonomy Paused At"
+  },
+  {
+   "default": "0",
+   "fieldname": "alarm1_sent",
+   "fieldtype": "Check",
+   "label": "Alarm 1 Sent"
+  },
+  {
+   "default": "0",
+   "fieldname": "alarm2_sent",
+   "fieldtype": "Check",
+   "label": "Alarm 2 Sent"
+  },
+  {
+   "default": "0",
+   "fieldname": "alarm3_sent",
+   "fieldtype": "Check",
+   "label": "Alarm 3 Sent"
+  },
+
+  {"fieldname": "section_summary", "fieldtype": "Section Break", "label": "Summary"},
+  {
+   "fieldname": "summary",
+   "fieldtype": "Long Text",
+   "label": "Summary"
+  },
+
+  {"fieldname": "section_destinations", "fieldtype": "Section Break", "label": "Destinations"},
+  {
+   "fieldname": "helpdesk_url",
+   "fieldtype": "Data",
+   "label": "Help Desk URL"
+  },
+  {
+   "fieldname": "github_url",
+   "fieldtype": "Data",
+   "label": "GitHub Issue URL"
+  },
+
+  {"fieldname": "section_occurrences", "fieldtype": "Section Break", "label": "Occurrences"},
+  {
+   "fieldname": "occurrences",
+   "fieldtype": "Table",
+   "label": "Occurrences",
+   "options": "Raven Agent Bug Occurrence"
+  }
+ ],
+ "links": [],
+ "modified": "2026-05-02 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Raven Ai Agent",
+ "name": "Raven Agent Bug",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "last_seen_at",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}
