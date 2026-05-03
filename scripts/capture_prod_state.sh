@@ -53,7 +53,30 @@ for app_path in "$APPS_DIR"/*/; do
 
   pushd "$app_path" >/dev/null
 
-  remote=$(git config --get remote.origin.url 2>/dev/null || echo "")
+  # Pick a remote in priority order:
+  #   1. origin             (default Frappe convention)
+  #   2. upstream           (some bench transport flows use this)
+  #   3. first listed       (anything else)
+  # We also record the remote name we used so the syncer can ignore apps with
+  # NO remote at all (no upstream owner can be inferred).
+  remote=""
+  remote_name=""
+  for candidate in origin upstream; do
+    url=$(git config --get "remote.$candidate.url" 2>/dev/null || echo "")
+    if [ -n "$url" ]; then
+      remote="$url"
+      remote_name="$candidate"
+      break
+    fi
+  done
+  if [ -z "$remote" ]; then
+    first=$(git remote 2>/dev/null | head -n 1)
+    if [ -n "$first" ]; then
+      remote=$(git config --get "remote.$first.url" 2>/dev/null || echo "")
+      remote_name="$first"
+    fi
+  fi
+
   branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "DETACHED")
   sha=$(git rev-parse HEAD 2>/dev/null || echo "")
   short_sha=$(git rev-parse --short=8 HEAD 2>/dev/null || echo "")
@@ -89,6 +112,7 @@ for app_path in "$APPS_DIR"/*/; do
     {
       "app": "$app",
       "remote": "$remote",
+      "remote_name": "$remote_name",
       "upstream_owner": "$upstream_owner",
       "upstream_repo": "$upstream_repo",
       "branch": "$branch",
