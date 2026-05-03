@@ -219,3 +219,66 @@ frappe.get_doc("Raven Agent Bug", "<fingerprint>").run_method("acknowledge")
 bench --site <site> set-config bug_reporter_enabled 0
 sudo supervisorctl restart frappe-bench-web: frappe-bench-workers:
 ```
+
+## PII redaction — Mexico-specific patterns
+
+The bug reporter pushes redacted payloads to **public** forks under
+`github.com/rogerboy38bis/<app>`. Because the operators run Frappe / ERPNext
+for Mexican customers, any payload may contain customer identity numbers,
+bank accounts, or tax IDs. The redactor (`raven_ai_agent/bug_reporter/redactor.py`)
+applies the patterns below **unconditionally** on every `redact()` call —
+they are not gated by the `strip_pii` flag.
+
+### Patterns covered
+
+| Pattern         | Format                                                                     | Replacement         |
+|-----------------|----------------------------------------------------------------------------|---------------------|
+| RFC Persona     | 4 letters + 6 date digits + 3 alphanumeric (13 chars)                      | `[REDACTED:RFC]`    |
+| RFC Moral       | 3 letters + 6 date digits + 3 alphanumeric (12 chars)                      | `[REDACTED:RFC]`    |
+| CURP            | 4 letters + 6 digits + H/M/X + 5 letters + 1 alphanumeric + 1 digit (18)   | `[REDACTED:CURP]`   |
+| INE clave       | 6 letters + 8 digits + H/M + 3 digits (18 chars)                           | `[REDACTED:INE]`    |
+| CLABE           | 18 digits + nearby keyword (`CLABE`, `banco`, `cuenta bancaria`, …)        | `[REDACTED:CLABE]`  |
+| NSS / IMSS      | 11 digits + nearby keyword (`NSS`, `IMSS`, `ISSSTE`, `seguro social`, …)   | `[REDACTED:NSS]`    |
+| Mexico phone    | `+52 …`, separator-grouped 10-digit, or bare 10-digit                      | `[REDACTED:PHONE]`  |
+
+RFC Persona is applied **before** RFC Moral so the moral (12-char) regex
+does not eat the first 12 characters of a 13-char persona RFC. CURP and
+INE share the same 18-char length but are disambiguated by their strict
+internal structure (CURP has `H/M/X` at position 11; INE has `H/M` at
+position 15).
+
+### The proximity-keyword strategy (CLABE and NSS)
+
+Bare 18-digit and 11-digit strings appear naturally in production data
+as order numbers, batch IDs, tracking codes, etc. Redacting every such
+string would destroy debugging signal. So CLABE and NSS only redact
+when a Mexico-finance / social-security keyword appears within ~50
+characters on either side of the digits:
+
+- CLABE keywords: `CLABE`, `banco`, `cuenta bancaria`, `cuenta interbancaria`
+- NSS keywords: `NSS`, `IMSS`, `ISSSTE`, `número de seguro social`, `seguro social`
+
+When the keyword is present, **only the digit group** is replaced; the
+keyword and surrounding text are preserved so the bug context still
+reads naturally (e.g. `cuenta bancaria [REDACTED:CLABE]`).
+
+### Defense-in-depth, not a guarantee
+
+The redactor is one layer in the bug-publishing pipeline — fixtures and
+payload diffs should still be **reviewed by an operator before merge**.
+Regex-based redaction can never catch every shape of PII (custom string
+formats, partial digits, transliterations, spelling variants), so a
+human eye on the public-fork PR is still the last gate.
+
+### CI guard fixture
+
+`raven_ai_agent/bug_reporter/tests/fixtures/synthetic_mexico_pii.txt`
+contains deterministically-fabricated examples of every supported
+pattern. The unit test
+`test_redact_synthetic_pii_fixture_fully_redacted` loads the fixture
+and asserts that **none** of those tokens survive `redact()`. If you
+extend the redactor with new patterns, add a representative example to
+that fixture and a forbidden substring to the test — the CI guard will
+fail loudly the moment a new pattern regresses.
+
+

@@ -1,0 +1,16 @@
+# SYNTHETIC PII FIXTURE — DO NOT REPLACE WITH REAL DATA.
+#
+# Every value below is deterministically fabricated for the redactor test
+# suite. They pass format validation (correct length / character classes
+# per SAT, RENAPO, INE, IMSS, banking specs) but do NOT belong to any
+# real person or entity. This file is the CI guard: the redactor must
+# strip every one of these tokens.
+
+RFC persona: GOMJ850215AB3
+RFC moral: ABC120524P76
+CURP: HEGG560427MVZRRL04
+INE clave: PTCSLN12345678H001
+CLABE: cuenta bancaria 012180001234567890
+NSS: NSS 12345678901
+Phone: +52 55 1234 5678
+Phone simple: 5551234567

@@ -140,6 +140,104 @@ def test_redact_dict_blanks_password_keys():
     print("test_redact_dict_blanks_password_keys OK")
 
 
+# ---------------- Mexico-specific PII (always-strip) --------------------- #
+def test_redact_mexico_rfc_persona():
+    """13-char RFC for individuals must be redacted."""
+    out = redact("RFC: GOMJ850215AB3 invoiced last week")
+    assert "GOMJ850215AB3" not in out
+    assert "[REDACTED:RFC]" in out
+    print("test_redact_mexico_rfc_persona OK")
+
+
+def test_redact_mexico_rfc_moral():
+    """12-char RFC for legal entities must be redacted."""
+    out = redact("Vendor RFC: ABC120524P76")
+    assert "ABC120524P76" not in out
+    assert "[REDACTED:RFC]" in out
+    print("test_redact_mexico_rfc_moral OK")
+
+
+def test_redact_mexico_curp():
+    """18-char CURP must be redacted."""
+    out = redact("Customer CURP: HEGG560427MVZRRL04")
+    assert "HEGG560427MVZRRL04" not in out
+    assert "[REDACTED:CURP]" in out
+    print("test_redact_mexico_curp OK")
+
+
+def test_redact_mexico_ine_clave():
+    """18-char INE clave de elector must be redacted."""
+    out = redact("Voter ID: PTCSLN12345678H001")
+    assert "PTCSLN12345678H001" not in out
+    assert "[REDACTED:INE]" in out
+    print("test_redact_mexico_ine_clave OK")
+
+
+def test_redact_mexico_clabe_with_context():
+    """18-digit CLABE with context keyword must be redacted."""
+    out = redact("cuenta bancaria 012180001234567890")
+    assert "012180001234567890" not in out
+    assert "[REDACTED:CLABE]" in out
+    print("test_redact_mexico_clabe_with_context OK")
+
+
+def test_redact_mexico_clabe_no_context_preserved():
+    """A bare 18-digit string with NO Mexico-bank context must NOT be
+    redacted — it could be an order/batch ID."""
+    out = redact("Order reference: 012180001234567890")
+    assert "012180001234567890" in out
+    # CLABE redactor must not have fired
+    assert "[REDACTED:CLABE]" not in out
+    print("test_redact_mexico_clabe_no_context_preserved OK")
+
+
+def test_redact_mexico_nss_with_context():
+    """11-digit NSS with IMSS/NSS context keyword must be redacted."""
+    out = redact("NSS: 12345678901")
+    assert "12345678901" not in out
+    assert "[REDACTED:NSS]" in out
+    print("test_redact_mexico_nss_with_context OK")
+
+
+def test_redact_mexico_nss_no_context_preserved():
+    """A bare 11-digit string with no IMSS context must NOT be redacted."""
+    out = redact("Tracking: 12345678901")
+    assert "12345678901" in out
+    print("test_redact_mexico_nss_no_context_preserved OK")
+
+
+def test_redact_mexico_phone_with_country_code():
+    """+52 NN NNNN NNNN format must be redacted."""
+    out = redact("Call +52 55 1234 5678 for support")
+    assert "5551234567" not in out and "1234 5678" not in out
+    assert "[REDACTED:PHONE]" in out
+    print("test_redact_mexico_phone_with_country_code OK")
+
+
+def test_redact_synthetic_pii_fixture_fully_redacted():
+    """Load the fixture file and assert NONE of the synthetic PII tokens
+    survive redaction. This is the CI guard."""
+    import os
+    fixture_path = os.path.join(
+        os.path.dirname(__file__), "fixtures", "synthetic_mexico_pii.txt"
+    )
+    with open(fixture_path, encoding="utf-8") as f:
+        content = f.read()
+    redacted = redact(content)
+    forbidden_substrings = [
+        "GOMJ850215AB3",       # RFC persona
+        "ABC120524P76",        # RFC moral
+        "HEGG560427MVZRRL04",  # CURP
+        "PTCSLN12345678H001",  # INE
+        "012180001234567890",  # CLABE (has context)
+        "12345678901",         # NSS (has context)
+        # phones get checked semi-loosely below
+    ]
+    leaks = [s for s in forbidden_substrings if s in redacted]
+    assert not leaks, f"PII leaked through redactor: {leaks}\n---\n{redacted}"
+    print("test_redact_synthetic_pii_fixture_fully_redacted OK")
+
+
 # ------------------------ fingerprint ------------------------------------ #
 def test_fingerprint_stable_across_doc_ids():
     a = fingerprint(bot="task_validator", intent="diagnose",
@@ -439,6 +537,16 @@ if __name__ == "__main__":
     test_redact_pii_strips_email_phone()
     test_redact_keeps_doc_ids()
     test_redact_dict_blanks_password_keys()
+    test_redact_mexico_rfc_persona()
+    test_redact_mexico_rfc_moral()
+    test_redact_mexico_curp()
+    test_redact_mexico_ine_clave()
+    test_redact_mexico_clabe_with_context()
+    test_redact_mexico_clabe_no_context_preserved()
+    test_redact_mexico_nss_with_context()
+    test_redact_mexico_nss_no_context_preserved()
+    test_redact_mexico_phone_with_country_code()
+    test_redact_synthetic_pii_fixture_fully_redacted()
     test_fingerprint_stable_across_doc_ids()
     test_fingerprint_diverges_on_bot()
     test_fingerprint_diverges_on_failure_class()

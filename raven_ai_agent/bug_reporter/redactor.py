@@ -19,6 +19,17 @@ Two layers:
    - Phone numbers
    - Long digit sequences likely to be national IDs (RFC, CURP, VAT, etc.)
 
+3. Mexico-specific high-risk PII (always-strip):
+   - RFC (Mexican tax ID — both Persona Física [13] and Moral [12])
+   - CURP (population registry — 18 chars with strict structure)
+   - INE clave de elector (18 chars with strict structure)
+   - CLABE (18-digit interbank account, requires keyword proximity)
+   - NSS / IMSS social-security number (11 digits, requires keyword proximity)
+   - Mexico phone numbers (+52 country-code aware)
+
+   These are applied unconditionally because they are high-risk customer PII
+   that should never reach a public fork, even when ``strip_pii=False``.
+
 Document IDs (SO-..., SAL-QTN-..., MFG-WO-..., SINV-..., etc.) are NEVER
 redacted — they are essential for reproducing bugs and contain no PII.
 """
@@ -52,6 +63,122 @@ _SECRET_PATTERNS = [
     # AWS access key id (legacy)
     (re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"), "<REDACTED:AWS_KEY>"),
 ]
+
+# ---- Mexico-specific high-risk PII (always-strip) ------------------------ #
+# These are applied unconditionally on every redact() call because they
+# encode customer/citizen identity. Order matters — more-specific patterns
+# run first so they win the substring race against generic ones.
+
+# A) RFC Persona Física: 4 letters + 6 date digits + 3 alphanumeric (13 chars)
+RE_RFC_PERSONA = re.compile(
+    r"\b[A-ZÑ&]{4}\d{6}[A-Z0-9]{3}\b",
+    re.IGNORECASE,
+)
+
+# B) CURP: 18 chars, very strict structure (positions 11=H/M/X, 12-13=state).
+RE_CURP = re.compile(
+    r"\b[A-Z]{4}\d{6}[HMX][A-Z]{5}[A-Z0-9]\d\b",
+    re.IGNORECASE,
+)
+
+# C) INE clave de elector: 6 letters + 8 digits + H/M + 3 digits (18 chars).
+RE_INE_CLAVE = re.compile(
+    r"\b[A-Z]{6}\d{8}[HM]\d{3}\b",
+    re.IGNORECASE,
+)
+
+# D) RFC Persona Moral: 3 letters + 6 date digits + 3 alphanumeric (12 chars).
+# Apply AFTER RE_RFC_PERSONA so we don't eat the first 12 chars of a 13-char
+# persona RFC.
+RE_RFC_MORAL = re.compile(
+    r"\b[A-ZÑ&]{3}\d{6}[A-Z0-9]{3}\b",
+    re.IGNORECASE,
+)
+
+# E) CLABE — 18 digits, REQUIRES context keyword within 50 chars (either side).
+# Bare 18-digit strings could be order numbers, batch IDs, etc., so we only
+# redact when a Mexico-bank context keyword is nearby.
+_CLABE_CONTEXT = r"(?:\bCLABE\b|\bbanco\b|\bcuenta\s+(?:bancaria|interbancaria)\b)"
+RE_CLABE_WITH_CONTEXT = re.compile(
+    rf"({_CLABE_CONTEXT}[^\n\r]{{0,50}}?)\b(\d{{18}})\b",
+    re.IGNORECASE | re.DOTALL,
+)
+RE_CLABE_REVERSE = re.compile(
+    rf"\b(\d{{18}})\b([^\n\r]{{0,50}}?{_CLABE_CONTEXT})",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# F) NSS / IMSS — 11 digits, same proximity strategy as CLABE.
+_NSS_CONTEXT = (
+    r"(?:\bNSS\b|\bIMSS\b|\bISSSTE\b|"
+    r"\bn[úu]mero\s+de\s+seguro\s+social\b|"
+    r"\bseguro\s+social\b)"
+)
+RE_NSS_WITH_CONTEXT = re.compile(
+    rf"({_NSS_CONTEXT}[^\n\r]{{0,50}}?)\b(\d{{11}})\b",
+    re.IGNORECASE | re.DOTALL,
+)
+RE_NSS_REVERSE = re.compile(
+    rf"\b(\d{{11}})\b([^\n\r]{{0,50}}?{_NSS_CONTEXT})",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# G) Mexico phone — covers +52 with optional area code, separator-bearing
+# 10-digit forms, and bare 10-digit numbers. Bounded so 11+ contiguous
+# digits (e.g. NSS without context) do NOT get phone-redacted.
+# Over-redaction is safer than under-redaction in a bug payload, but we
+# still need to leave 11-digit NSS-without-context strings alone.
+RE_MX_PHONE = re.compile(
+    r"(?:"
+    # Form 1: +52 with optional separators and area code (any spacing).
+    r"\+?52[\s\-]?(?:\(?\d{2,3}\)?[\s\-]?)?\d{3,4}[\s\-]?\d{4}"
+    r"|"
+    # Form 2: 10-digit grouped with separators (e.g. 555-123-4567).
+    r"\b\d{2,3}[\s\-]\d{3,4}[\s\-]\d{4}\b"
+    r"|"
+    # Form 3: exactly 10 contiguous digits, not preceded or followed by
+    # another digit (so 11-digit strings do not match).
+    r"(?<!\d)\d{10}(?!\d)"
+    r")"
+)
+
+# Ordered list of (pattern, replacement) — applied in sequence.
+# Specific Mexico PII patterns FIRST so they precede the generic patterns.
+_MX_PII_PATTERNS = [
+    (RE_RFC_PERSONA, "[REDACTED:RFC]"),
+    (RE_CURP, "[REDACTED:CURP]"),
+    (RE_INE_CLAVE, "[REDACTED:INE]"),
+    (RE_RFC_MORAL, "[REDACTED:RFC]"),
+    # CLABE / NSS substitutions preserve the keyword and surrounding text;
+    # only the digit-group is replaced. Handled via lambda below.
+]
+
+
+def _redact_mx_pii(text: str) -> str:
+    """Apply Mexico-specific high-risk PII redactions.
+
+    These run unconditionally on every redact() call — they cover identity
+    data that should never leave the trusted environment.
+    """
+    out = text
+    for pattern, repl in _MX_PII_PATTERNS:
+        out = pattern.sub(repl, out)
+
+    # CLABE: keyword-then-digits
+    out = RE_CLABE_WITH_CONTEXT.sub(lambda m: m.group(1) + "[REDACTED:CLABE]", out)
+    # CLABE: digits-then-keyword
+    out = RE_CLABE_REVERSE.sub(lambda m: "[REDACTED:CLABE]" + m.group(2), out)
+    # NSS: keyword-then-digits
+    out = RE_NSS_WITH_CONTEXT.sub(lambda m: m.group(1) + "[REDACTED:NSS]", out)
+    # NSS: digits-then-keyword
+    out = RE_NSS_REVERSE.sub(lambda m: "[REDACTED:NSS]" + m.group(2), out)
+
+    # Mexico phone (also handles bare 10-digit). Applied last so the digit-
+    # context patterns (CLABE/NSS) get first crack at their keyword-bearing
+    # neighbourhoods.
+    out = RE_MX_PHONE.sub("[REDACTED:PHONE]", out)
+    return out
+
 
 # ---- PII patterns (configurable) ----------------------------------------- #
 # IMPORTANT: We MUST NOT match the digit-tail of ERPNext doc IDs like
@@ -94,8 +221,12 @@ def redact_pii(text: str) -> str:
 
 
 def redact(text: str, *, strip_pii: bool = False) -> str:
-    """Convenience: always strip secrets; optionally strip PII."""
+    """Convenience: always strip secrets + Mexico high-risk PII; optionally
+    strip the broader PII set (email / generic phone / generic RFC)."""
+    if not text or not isinstance(text, str):
+        return text
     out = redact_secrets(text)
+    out = _redact_mx_pii(out)
     if strip_pii:
         out = redact_pii(out)
     return out
