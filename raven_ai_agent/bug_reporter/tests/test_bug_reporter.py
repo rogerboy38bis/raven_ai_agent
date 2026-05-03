@@ -277,7 +277,7 @@ def test_sync_fork_uses_upstream_default_branch():
     def fake_get(url, headers=None, timeout=None):
         if "/repos/rogerboy38/amb_print_app" in url and "/git/" not in url:
             return _FakeResponse(200, {"default_branch": "V13.5.0"})
-        if "/git/ref/heads/V13.5.0" in url:
+        if "/git/refs/heads/V13.5.0" in url:
             return _FakeResponse(200, {"object": {"sha": "old_sha"}})
         raise AssertionError(f"unexpected GET: {url}")
 
@@ -303,8 +303,8 @@ def test_sync_fork_uses_upstream_default_branch():
 
     assert out["default_branch"] == "V13.5.0", out
     assert out["main_sync"] == "fast_forward", out
-    assert any("/git/ref/heads/V13.5.0" in u for u in captured_patch_urls), captured_patch_urls
-    assert not any("/git/ref/heads/main" in u for u in captured_patch_urls), captured_patch_urls
+    assert any("/git/refs/heads/V13.5.0" in u for u in captured_patch_urls), captured_patch_urls
+    assert not any("/git/refs/heads/main" in u for u in captured_patch_urls), captured_patch_urls
     print("test_sync_fork_uses_upstream_default_branch OK")
 
 
@@ -383,6 +383,54 @@ def test_fork_readiness_poll_exhaustion_returns_created_pending():
     print("test_fork_readiness_poll_exhaustion_returns_created_pending OK")
 
 
+def test_sync_fork_uses_plural_git_refs_url():
+    """Regression: GitHub's PATCH on /git/ref/heads/ (singular) returns 404.
+    The correct write endpoint is /git/refs/heads/ (plural). This test
+    asserts every git-refs URL constructed by _sync_fork_to_sha uses
+    the plural form."""
+    captured_urls = []
+
+    def fake_get(url, headers=None, timeout=None):
+        captured_urls.append(("GET", url))
+        if "/repos/rogerboy38/raven_ai_agent" in url and "/git/" not in url:
+            return _FakeResponse(200, {"default_branch": "V13.5.0"})
+        if "/git/refs/heads/" in url:
+            return _FakeResponse(200, {"object": {"sha": "old_sha"}})
+        raise AssertionError(f"unexpected GET: {url}")
+
+    patch_urls = []
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        captured_urls.append(("PATCH", url))
+        patch_urls.append(url)
+        return _FakeResponse(200, {"object": {"sha": json.get("sha")}})
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured_urls.append(("POST", url))
+        return _FakeResponse(201, {})
+
+    with mock.patch.object(setup_mod.requests, "get", side_effect=fake_get), \
+         mock.patch.object(setup_mod.requests, "patch", side_effect=fake_patch), \
+         mock.patch.object(setup_mod.requests, "post", side_effect=fake_post):
+        setup_mod._sync_fork_to_sha(
+            fork_owner="rogerboy38bis",
+            repo="raven_ai_agent",
+            upstream_owner="rogerboy38",
+            sha="newsha",
+            snapshot_branch="prod-snapshot-test-abcd1234",
+            headers={},
+        )
+
+    git_ref_urls = [u for _, u in captured_urls if "/git/ref" in u]
+    assert git_ref_urls, "expected at least one /git/ref* URL"
+    for u in git_ref_urls:
+        assert "/git/ref/heads/" not in u, f"singular /git/ref/heads/ URL leaked: {u}"
+    assert patch_urls, "expected at least one PATCH"
+    for u in patch_urls:
+        assert "/git/refs/heads/" in u, f"PATCH must use plural /git/refs/heads/: {u}"
+    print("test_sync_fork_uses_plural_git_refs_url OK")
+
+
 # --------------------------- main ---------------------------------------- #
 if __name__ == "__main__":
     test_redact_secrets_strips_openai_key()
@@ -401,4 +449,5 @@ if __name__ == "__main__":
     test_sync_fork_uses_upstream_default_branch()
     test_visibility_422_is_soft_warning()
     test_fork_readiness_poll_exhaustion_returns_created_pending()
+    test_sync_fork_uses_plural_git_refs_url()
     print("\nAll bug reporter smoke tests passed.")

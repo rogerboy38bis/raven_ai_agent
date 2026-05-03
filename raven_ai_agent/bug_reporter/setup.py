@@ -217,7 +217,7 @@ def _sync_fork_to_sha(
         out["default_branch"] = default_branch
 
         # 1. Read the current default-branch SHA on the fork.
-        ref_url = f"{_GITHUB_API}/repos/{fork_owner}/{repo}/git/ref/heads/{default_branch}"
+        ref_url = f"{_GITHUB_API}/repos/{fork_owner}/{repo}/git/refs/heads/{default_branch}"
         cur = requests.get(ref_url, headers=headers, timeout=10)
         out["current_default_sha"] = (
             (cur.json() or {}).get("object", {}).get("sha")
