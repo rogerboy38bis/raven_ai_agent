@@ -12,9 +12,13 @@ private when the fork is currently public.
 from __future__ import annotations
 
 import json
+import logging
+import time
 from typing import Iterable, List
 
 import frappe
+
+_log = logging.getLogger(__name__)
 
 try:
     import requests
@@ -177,6 +181,21 @@ def _load_state(state_path: str) -> dict:
         return {"error": f"invalid JSON: {exc}"}
 
 
+def _get_upstream_default_branch(
+    upstream_owner: str, repo: str, headers: dict
+) -> str | None:
+    """Fetch the upstream repo's default_branch via GET /repos/{owner}/{repo}.
+
+    Different upstream repos use different default branch names (e.g. V13.5.0,
+    version-16, main). Hardcoding 'main' produces a 404 on merge-upstream.
+    """
+    url = f"{_GITHUB_API}/repos/{upstream_owner}/{repo}"
+    r = requests.get(url, headers=headers, timeout=10)
+    if r.status_code != 200:
+        return None
+    return (r.json() or {}).get("default_branch") or None
+
+
 def _sync_fork_to_sha(
     fork_owner: str,
     repo: str,
@@ -185,33 +204,43 @@ def _sync_fork_to_sha(
     snapshot_branch: str,
     headers: dict,
 ) -> dict:
-    """Update fork's main ref to point at the upstream SHA, and create a
+    """Update fork's default branch to point at the upstream SHA, and create a
     snapshot branch at the same SHA.  Idempotent.
     """
     out: dict = {}
 
-    # 1. Read the current main SHA on the fork.
-    main_ref_url = f"{_GITHUB_API}/repos/{fork_owner}/{repo}/git/ref/heads/main"
-    cur = requests.get(main_ref_url, headers=headers, timeout=10)
-    out["current_main_sha"] = (cur.json() or {}).get("object", {}).get("sha") if cur.status_code == 200 else None
-
-    # 2. If different, fast-forward (force=False first, then force=True if needed).
-    if out["current_main_sha"] != sha:
-        body = {"sha": sha, "force": False}
-        ff = requests.patch(main_ref_url, headers=headers, json=body, timeout=10)
-        if ff.status_code in (200, 201):
-            out["main_sync"] = "fast_forward"
-        else:
-            # Try forced update.
-            body["force"] = True
-            fz = requests.patch(main_ref_url, headers=headers, json=body, timeout=10)
-            out["main_sync"] = (
-                "forced" if fz.status_code in (200, 201) else f"failed_{fz.status_code}"
-            )
-            if fz.status_code not in (200, 201):
-                out["main_sync_body"] = fz.text[:200]
+    default_branch = _get_upstream_default_branch(upstream_owner, repo, headers)
+    if not default_branch:
+        out["main_sync"] = "failed_no_default_branch"
+        out["default_branch"] = None
     else:
-        out["main_sync"] = "already_in_sync"
+        out["default_branch"] = default_branch
+
+        # 1. Read the current default-branch SHA on the fork.
+        ref_url = f"{_GITHUB_API}/repos/{fork_owner}/{repo}/git/ref/heads/{default_branch}"
+        cur = requests.get(ref_url, headers=headers, timeout=10)
+        out["current_default_sha"] = (
+            (cur.json() or {}).get("object", {}).get("sha")
+            if cur.status_code == 200
+            else None
+        )
+
+        # 2. If different, fast-forward (force=False first, then force=True if needed).
+        if out["current_default_sha"] != sha:
+            body = {"sha": sha, "force": False}
+            ff = requests.patch(ref_url, headers=headers, json=body, timeout=10)
+            if ff.status_code in (200, 201):
+                out["main_sync"] = "fast_forward"
+            else:
+                body["force"] = True
+                fz = requests.patch(ref_url, headers=headers, json=body, timeout=10)
+                out["main_sync"] = (
+                    "forced" if fz.status_code in (200, 201) else f"failed_{fz.status_code}"
+                )
+                if fz.status_code not in (200, 201):
+                    out["main_sync_body"] = fz.text[:200]
+        else:
+            out["main_sync"] = "already_in_sync"
 
     # 3. Create the snapshot branch (skip if it already exists).
     snap_url = f"{_GITHUB_API}/repos/{fork_owner}/{repo}/git/refs"
@@ -230,6 +259,57 @@ def _sync_fork_to_sha(
 
 
 # ---- internals ----------------------------------------------------------- #
+_FORK_READY_POLL_INTERVAL_SEC = 2
+_FORK_READY_MAX_ATTEMPTS = 30
+
+
+def _classify_visibility_patch(status_code: int) -> str:
+    """Map the visibility-patch HTTP status to a stable semantic string.
+
+    422 is GitHub's "you can't make a fork private when its parent is public on
+    this account tier". This is structural, not a bug, so we surface it as a
+    soft warning instead of a failure.
+    """
+    if status_code in (200, 204):
+        return "patched_to_private"
+    if status_code == 404:
+        return "already_set"
+    if status_code == 422:
+        _log.info(
+            "GitHub does not allow private forks of public parent repos via "
+            "API on this account tier; fork remains public. This is structural, "
+            "not a bug."
+        )
+        return "skipped_public_parent_policy"
+    return f"unexpected_{status_code}"
+
+
+def wait_for_fork_ready(
+    fork_owner: str,
+    repo: str,
+    default_branch: str,
+    headers: dict,
+    max_attempts: int = _FORK_READY_MAX_ATTEMPTS,
+    poll_interval: float = _FORK_READY_POLL_INTERVAL_SEC,
+) -> bool:
+    """Poll ``GET /repos/{fork_owner}/{repo}/branches/{default_branch}`` until
+    GitHub finishes initializing the fork's refs.
+
+    Returns True if the branch resolves with HTTP 200 within the budget,
+    False otherwise. Default budget: 30 attempts * 2s = 60s.
+    """
+    url = f"{_GITHUB_API}/repos/{fork_owner}/{repo}/branches/{default_branch}"
+    for _ in range(max_attempts):
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(poll_interval)
+    return False
+
+
 def _ensure_fork(repo: str, upstream_owner: str, fork_owner: str, headers: dict) -> dict:
     """Ensure ``<fork_owner>/<repo>`` exists as a private fork of
     ``<upstream_owner>/<repo>``.  ``repo`` is the GitHub repo name (which
@@ -244,7 +324,9 @@ def _ensure_fork(repo: str, upstream_owner: str, fork_owner: str, headers: dict)
         # Make private if currently public.
         if r.json().get("private") is False:
             r2 = requests.patch(fork_url, headers=headers, json={"private": True}, timeout=10)
-            result["visibility_patch_status"] = r2.status_code
+            result["visibility"] = _classify_visibility_patch(r2.status_code)
+        else:
+            result["visibility"] = "already_set"
         return result
 
     if r.status_code != 404:
@@ -259,14 +341,33 @@ def _ensure_fork(repo: str, upstream_owner: str, fork_owner: str, headers: dict)
     if r3.status_code not in (201, 202):
         return {"action": "fork_failed", "status_code": r3.status_code, "body": r3.text[:200]}
 
-    new_url = (r3.json() or {}).get("html_url")
+    new_payload = r3.json() or {}
+    new_url = new_payload.get("html_url")
+    default_branch = (
+        new_payload.get("default_branch")
+        or _get_upstream_default_branch(upstream_owner, repo, headers)
+    )
+
+    # Wait for GitHub to finish initializing the fork's refs before any caller
+    # tries to read or update the default branch.
+    ready = False
+    if default_branch:
+        ready = wait_for_fork_ready(fork_owner, repo, default_branch, headers)
+
+    if not ready:
+        return {
+            "action": "created_pending",
+            "url": new_url,
+            "default_branch": default_branch,
+        }
 
     # Forks are public by default; flip to private.
     r4 = requests.patch(fork_url, headers=headers, json={"private": True}, timeout=10)
     return {
         "action": "forked",
         "url": new_url,
-        "visibility_patch_status": r4.status_code,
+        "default_branch": default_branch,
+        "visibility": _classify_visibility_patch(r4.status_code),
     }
 
 

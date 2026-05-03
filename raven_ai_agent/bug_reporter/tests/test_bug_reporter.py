@@ -18,6 +18,13 @@ def _install_stubs():
         fake.conf = {}
         fake.flags = types.SimpleNamespace()
 
+        def _whitelist(*dargs, **dkw):
+            def _wrap(fn):
+                return fn
+            return _wrap
+
+        fake.whitelist = _whitelist
+
         def _logger():
             return types.SimpleNamespace(
                 info=lambda *a, **k: None,
@@ -82,6 +89,8 @@ from raven_ai_agent.bug_reporter.redactor import (  # noqa: E402
     redact, redact_secrets, redact_pii, redact_dict,
 )
 from raven_ai_agent.bug_reporter import collector  # noqa: E402
+from raven_ai_agent.bug_reporter import setup as setup_mod  # noqa: E402
+from unittest import mock  # noqa: E402
 
 
 # -------------------------- redactor ------------------------------------- #
@@ -233,6 +242,147 @@ def test_capture_strips_secrets_in_payload():
     print("test_capture_strips_secrets_in_payload OK")
 
 
+# ---------------------- setup / fork syncer ------------------------------ #
+class _FakeResponse:
+    def __init__(self, status_code, json_body=None, text=""):
+        self.status_code = status_code
+        self._json = json_body or {}
+        self.text = text
+
+    def json(self):
+        return self._json
+
+
+def _make_router(routes):
+    """routes is a list of (method, url_substring, response). The first matching
+    entry pops off the queue (FIFO per match), so call order is enforced.
+    """
+    queue = list(routes)
+
+    def _route(method, url, **kwargs):
+        for i, (m, sub, resp) in enumerate(queue):
+            if m == method and sub in url:
+                queue.pop(i)
+                return resp
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    return _route
+
+
+def test_sync_fork_uses_upstream_default_branch():
+    """When upstream default_branch is V13.5.0, the ref-update PATCH must
+    target V13.5.0 — not the hardcoded 'main'."""
+    captured_patch_urls = []
+
+    def fake_get(url, headers=None, timeout=None):
+        if "/repos/rogerboy38/amb_print_app" in url and "/git/" not in url:
+            return _FakeResponse(200, {"default_branch": "V13.5.0"})
+        if "/git/ref/heads/V13.5.0" in url:
+            return _FakeResponse(200, {"object": {"sha": "old_sha"}})
+        raise AssertionError(f"unexpected GET: {url}")
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        captured_patch_urls.append(url)
+        return _FakeResponse(200, {"object": {"sha": json.get("sha")}})
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        # snapshot branch creation
+        return _FakeResponse(201, {})
+
+    with mock.patch.object(setup_mod.requests, "get", side_effect=fake_get), \
+         mock.patch.object(setup_mod.requests, "patch", side_effect=fake_patch), \
+         mock.patch.object(setup_mod.requests, "post", side_effect=fake_post):
+        out = setup_mod._sync_fork_to_sha(
+            fork_owner="rogerboy38bis",
+            repo="amb_print_app",
+            upstream_owner="rogerboy38",
+            sha="new_sha_1234",
+            snapshot_branch="prod-snapshot-2026-05-02-abcdef12",
+            headers={"Authorization": "Bearer x"},
+        )
+
+    assert out["default_branch"] == "V13.5.0", out
+    assert out["main_sync"] == "fast_forward", out
+    assert any("/git/ref/heads/V13.5.0" in u for u in captured_patch_urls), captured_patch_urls
+    assert not any("/git/ref/heads/main" in u for u in captured_patch_urls), captured_patch_urls
+    print("test_sync_fork_uses_upstream_default_branch OK")
+
+
+def test_visibility_422_is_soft_warning():
+    """A 422 from the visibility PATCH must surface as
+    visibility='skipped_public_parent_policy' and must NOT raise."""
+
+    def fake_get(url, headers=None, timeout=None):
+        # fork lookup: exists, currently public
+        if "/repos/rogerboy38bis/amb_print_app" in url:
+            return _FakeResponse(
+                200,
+                {"html_url": "https://github.com/rogerboy38bis/amb_print_app",
+                 "private": False},
+            )
+        raise AssertionError(f"unexpected GET: {url}")
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        return _FakeResponse(422, text="cannot make fork private")
+
+    with mock.patch.object(setup_mod.requests, "get", side_effect=fake_get), \
+         mock.patch.object(setup_mod.requests, "patch", side_effect=fake_patch):
+        result = setup_mod._ensure_fork(
+            "amb_print_app", "rogerboy38", "rogerboy38bis",
+            headers={"Authorization": "Bearer x"},
+        )
+
+    assert result["action"] == "exists", result
+    assert result["visibility"] == "skipped_public_parent_policy", result
+    assert "visibility_patch_status" not in result, result
+    print("test_visibility_422_is_soft_warning OK")
+
+
+def test_fork_readiness_poll_exhaustion_returns_created_pending():
+    """When wait_for_fork_ready never sees a 200, _ensure_fork returns
+    action='created_pending'."""
+
+    get_calls = {"n": 0}
+
+    def fake_get(url, headers=None, timeout=None):
+        # First call: fork lookup -> 404 (does not exist yet)
+        # All branch-readiness polls -> 404
+        # The upstream-default-branch fallback (if invoked) -> 200
+        if "/branches/V13.5.0" in url:
+            get_calls["n"] += 1
+            return _FakeResponse(404, text="branch not yet created")
+        if url.endswith("/repos/rogerboy38/amb_print_app"):
+            return _FakeResponse(200, {"default_branch": "V13.5.0"})
+        if url.endswith("/repos/rogerboy38bis/amb_print_app"):
+            return _FakeResponse(404, text="not found")
+        raise AssertionError(f"unexpected GET: {url}")
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        # Fork-create call
+        return _FakeResponse(
+            202,
+            {"html_url": "https://github.com/rogerboy38bis/amb_print_app",
+             "default_branch": "V13.5.0"},
+        )
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        raise AssertionError("PATCH should not be called when fork not ready")
+
+    with mock.patch.object(setup_mod.requests, "get", side_effect=fake_get), \
+         mock.patch.object(setup_mod.requests, "post", side_effect=fake_post), \
+         mock.patch.object(setup_mod.requests, "patch", side_effect=fake_patch), \
+         mock.patch.object(setup_mod.time, "sleep", lambda *_a, **_k: None):
+        result = setup_mod._ensure_fork(
+            "amb_print_app", "rogerboy38", "rogerboy38bis",
+            headers={"Authorization": "Bearer x"},
+        )
+
+    assert result["action"] == "created_pending", result
+    assert result["default_branch"] == "V13.5.0", result
+    assert get_calls["n"] == setup_mod._FORK_READY_MAX_ATTEMPTS, get_calls
+    print("test_fork_readiness_poll_exhaustion_returns_created_pending OK")
+
+
 # --------------------------- main ---------------------------------------- #
 if __name__ == "__main__":
     test_redact_secrets_strips_openai_key()
@@ -248,4 +398,7 @@ if __name__ == "__main__":
     test_capture_disabled_returns_none()
     test_capture_enabled_logs_and_enqueues()
     test_capture_strips_secrets_in_payload()
+    test_sync_fork_uses_upstream_default_branch()
+    test_visibility_422_is_soft_warning()
+    test_fork_readiness_poll_exhaustion_returns_created_pending()
     print("\nAll bug reporter smoke tests passed.")
