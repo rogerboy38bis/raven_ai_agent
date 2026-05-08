@@ -1,0 +1,22 @@
+NOTICE — Third-party dependencies and inspirations
+
+This software depends on, but does not vendor or modify, the following projects:
+
+- Raven (https://github.com/The-Commit-Company/Raven) — AGPL-3.0
+  raven_ai_agent requires Raven to be installed on the same Frappe site.
+  No Raven source code is included or modified in this repository.
+
+This software draws design inspiration (patterns and concepts only, no code)
+from the following permissively-licensed projects:
+
+- KorucuTech/kai (https://github.com/KorucuTech/kai) — MIT
+  Persona-triad design pattern (role, goal, backstory).
+- sanjay-kumar001/ai_chatbot (https://github.com/sanjay-kumar001/ai_chatbot) — MIT
+  Token cost tracking concept.
+- OpenTelemetry trace data model (https://opentelemetry.io/docs/specs/otel/trace/api/) — Apache-2.0
+  Audit log shape (trace_id, span_id, attributes, status).
+
+Optional runtime integrations (deployed alongside but not vendored):
+
+- frappe/mcp (https://github.com/frappe/mcp) — MIT
+- rakeshgangwar/erpnext-mcp-server (https://github.com/rakeshgangwar/erpnext-mcp-server) — MIT
