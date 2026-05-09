@@ -5,6 +5,7 @@ Routes incoming messages to appropriate skills based on triggers and patterns.
 """
 
 import re
+import frappe
 from typing import Dict, List, Optional, Any
 
 
@@ -37,6 +38,14 @@ class SkillRouter:
             self.skills[skill.name] = skill
         except Exception as e:
             print(f"Warning: Could not load DataQualityScannerSkill: {e}")
+
+        # Load IoT Sensor Manager (handles temperature/humidity/motion/light + L01-L30 bots)
+        try:
+            from raven_ai_agent.skills.iot_sensor_manager.skill import IoTSensorManagerSkill
+            skill = IoTSensorManagerSkill()
+            self.skills[skill.name] = skill
+        except Exception as e:
+            print(f"Warning: Could not load IoTSensorManagerSkill: {e}")
     
     def register_skill(self, skill):
         """Manually register a skill."""
