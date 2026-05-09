@@ -1,0 +1,133 @@
+{
+ "actions": [],
+ "creation": "2026-05-08 18:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "request_id",
+  "source_channel",
+  "routing_status",
+  "column_break_1",
+  "resolved_intent",
+  "selected_bot_persona",
+  "selected_skill",
+  "section_break_2",
+  "raw_input",
+  "section_break_3",
+  "latency_ms",
+  "error_text",
+  "section_break_4",
+  "reference_doctype",
+  "reference_name"
+ ],
+ "fields": [
+  {
+   "fieldname": "request_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Request ID",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_channel",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Source Channel"
+  },
+  {
+   "fieldname": "routing_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Routing Status",
+   "options": "Draft\nRouted\nExecuted\nFailed\nRejected"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "resolved_intent",
+   "fieldtype": "Data",
+   "label": "Resolved Intent"
+  },
+  {
+   "fieldname": "selected_bot_persona",
+   "fieldtype": "Link",
+   "label": "Selected Bot Persona",
+   "options": "AI Bot Persona"
+  },
+  {
+   "fieldname": "selected_skill",
+   "fieldtype": "Link",
+   "label": "Selected Skill",
+   "options": "AI Skill Registry"
+  },
+  {
+   "fieldname": "section_break_2",
+   "fieldtype": "Section Break",
+   "label": "Input"
+  },
+  {
+   "fieldname": "raw_input",
+   "fieldtype": "Long Text",
+   "label": "Raw Input"
+  },
+  {
+   "fieldname": "section_break_3",
+   "fieldtype": "Section Break",
+   "label": "Performance"
+  },
+  {
+   "fieldname": "latency_ms",
+   "fieldtype": "Int",
+   "label": "Latency (ms)"
+  },
+  {
+   "fieldname": "error_text",
+   "fieldtype": "Small Text",
+   "label": "Error Text"
+  },
+  {
+   "fieldname": "section_break_4",
+   "fieldtype": "Section Break",
+   "label": "Reference"
+  },
+  {
+   "fieldname": "reference_doctype",
+   "fieldtype": "Link",
+   "label": "Reference DocType",
+   "options": "DocType"
+  },
+  {
+   "fieldname": "reference_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Reference Name",
+   "options": "reference_doctype"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-05-08 18:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "AI Orchestrator",
+ "name": "AI Routing Audit Log",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
