@@ -18,7 +18,9 @@
   "error_text",
   "section_break_4",
   "reference_doctype",
-  "reference_name"
+  "reference_name",
+  "section_break_5",
+  "auto_purge_days"
  ],
  "fields": [
   {
@@ -103,6 +105,18 @@
    "fieldtype": "Dynamic Link",
    "label": "Reference Name",
    "options": "reference_doctype"
+  },
+  {
+   "fieldname": "section_break_5",
+   "fieldtype": "Section Break",
+   "label": "Retention"
+  },
+  {
+   "default": "0",
+   "description": "0 = never purge; future rotation hook reads this. Per-row TTL in days.",
+   "fieldname": "auto_purge_days",
+   "fieldtype": "Int",
+   "label": "Auto-Purge Days"
   }
  ],
  "index_web_pages_for_search": 1,
